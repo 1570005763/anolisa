@@ -809,6 +809,23 @@ export default {
   // ============================================================================
   'Resume a previous session': 'Resume a previous session',
 
+  // Commands - Rename
+  // ============================================================================
+  'Rename the current session': 'Rename the current session',
+  'No active session available.': 'No active session available.',
+  'Session name set to: {{name}}': 'Session name set to: {{name}}',
+
+  // Session Picker - Rename & Preview
+  'Press Ctrl+R to rename · Ctrl+V to preview': 'Press Ctrl+R to rename · Ctrl+V to preview',
+  'Enter new session name:': 'Enter new session name:',
+  'Session renamed.': 'Session renamed.',
+  'Failed to rename session.': 'Failed to rename session.',
+  '(empty prompt)': '(empty prompt)',
+  'to rename': 'to rename',
+  'to preview': 'to preview',
+  'Loading preview...': 'Loading preview...',
+  'No messages to preview.': 'No messages to preview.',
+
   // ============================================================================
   // Commands - Clear
   // ============================================================================

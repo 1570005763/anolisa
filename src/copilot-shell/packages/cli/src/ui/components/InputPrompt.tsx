@@ -896,6 +896,32 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
                     {showCursor ? chalk.inverse(' ') + '\u200B' : ' \u200B'}
                   </Text>,
                 );
+
+                // Ghost hint for /rename command
+                if (
+                  isOnCursorLine &&
+                  !reverseSearchActive &&
+                  !commandSearchActive
+                ) {
+                  const text = buffer.text;
+                  const ghostHint =
+                    text === '/rename'
+                      ? ' [name]'
+                      : text === '/name'
+                        ? ' [name]'
+                        : null;
+                  if (ghostHint) {
+                    renderedLine.push(
+                      <Text
+                        key="ghost-hint"
+                        color={theme.text.secondary}
+                        dimColor
+                      >
+                        {ghostHint}
+                      </Text>,
+                    );
+                  }
+                }
               }
 
               return (

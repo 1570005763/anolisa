@@ -766,6 +766,23 @@ export default {
   // ============================================================================
   'Resume a previous session': '恢复之前的会话',
 
+  // Commands - Rename
+  // ============================================================================
+  'Rename the current session': '重命名当前会话',
+  'No active session available.': '当前没有活跃会话。',
+  'Session name set to: {{name}}': '会话名称已设为：{{name}}',
+
+  // Session Picker - Rename & Preview
+  'Press Ctrl+R to rename · Ctrl+V to preview': '按 Ctrl+R 重命名 · Ctrl+V 预览',
+  'Enter new session name:': '输入新的会话名称：',
+  'Session renamed.': '会话已重命名。',
+  'Failed to rename session.': '重命名会话失败。',
+  '(empty prompt)': '(空对话)',
+  'to rename': '重命名',
+  'to preview': '预览',
+  'Loading preview...': '加载预览中...',
+  'No messages to preview.': '没有可预览的消息。',
+
   // ============================================================================
   // Commands - Clear
   // ============================================================================

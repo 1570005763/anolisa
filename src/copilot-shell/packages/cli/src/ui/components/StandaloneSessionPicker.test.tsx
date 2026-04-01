@@ -545,7 +545,8 @@ describe('SessionPicker', () => {
 
       const output = lastFrame();
       expect(output).toContain('B');
-      expect(output).toContain('toggle branch');
+      expect(output).toContain('toggle');
+      expect(output).toContain('branch');
     });
 
     it('should truncate long prompts', async () => {

@@ -57,3 +57,13 @@ export function filterSessions(
 export function formatMessageCount(count: number): string {
   return count === 1 ? '1 message' : `${count} messages`;
 }
+
+/**
+ * Truncates a conversation summary text for preview display.
+ */
+export function truncateSummaryText(text: string, maxWidth: number): string {
+  const firstLine = text.split(/\r?\n/, 1)[0];
+  if (firstLine.length <= maxWidth) return firstLine;
+  if (maxWidth <= 3) return firstLine.slice(0, maxWidth);
+  return firstLine.slice(0, maxWidth - 3) + '...';
+}

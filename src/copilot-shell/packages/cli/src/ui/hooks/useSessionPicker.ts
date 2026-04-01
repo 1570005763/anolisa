@@ -54,6 +54,14 @@ export interface UseSessionPickerResult {
   showScrollUp: boolean;
   showScrollDown: boolean;
   loadMoreSessions: () => Promise<void>;
+  renameIndex: number | null;
+  renameValue: string;
+  previewIndex: number | null;
+  previewData: Array<{ role: 'user' | 'assistant'; text: string }>;
+  isLoadingPreview: boolean;
+  onRenameConfirm: () => Promise<void>;
+  onRenameCancel: () => void;
+  onRenameChange: (value: string) => void;
 }
 
 export function useSessionPicker({
@@ -78,6 +86,14 @@ export function useSessionPicker({
   const [followScrollOffset, setFollowScrollOffset] = useState(0);
 
   const isLoadingMoreRef = useRef(false);
+
+  const [renameIndex, setRenameIndex] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [previewData, setPreviewData] = useState<
+    Array<{ role: 'user' | 'assistant'; text: string }>
+  >([]);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   const filteredSessions = useMemo(
     () => filterSessions(sessionState.sessions, filterByBranch, currentBranch),
@@ -201,10 +217,64 @@ export function useSessionPicker({
     sessionState.hasMore,
   ]);
 
+  const onRenameConfirm = useCallback(async () => {
+    if (renameIndex === null || !sessionService) return;
+    const session = filteredSessions[renameIndex];
+    if (session && renameValue.trim()) {
+      await sessionService.renameSession(session.sessionId, renameValue.trim());
+    }
+    setRenameIndex(null);
+    setRenameValue('');
+    // Reload sessions to reflect the change
+    try {
+      const result: ListSessionsResult = await sessionService.listSessions({
+        size: SESSION_PAGE_SIZE,
+      });
+      setSessionState({
+        sessions: result.items,
+        hasMore: result.hasMore,
+        nextCursor: result.nextCursor,
+      });
+    } catch {
+      // Ignore reload errors
+    }
+  }, [renameIndex, renameValue, sessionService, filteredSessions]);
+
+  const onRenameCancel = useCallback(() => {
+    setRenameIndex(null);
+    setRenameValue('');
+  }, []);
+
+  const onRenameChange = useCallback((value: string) => {
+    setRenameValue(value);
+  }, []);
+
   // Key handling (KeypressContext)
   useKeypress(
     (key) => {
       const { name, sequence, ctrl } = key;
+
+      // If in rename mode, handle text input
+      if (renameIndex !== null) {
+        if (name === 'escape') {
+          onRenameCancel();
+          return;
+        }
+        if (name === 'return') {
+          void onRenameConfirm();
+          return;
+        }
+        if (name === 'backspace') {
+          setRenameValue((prev) => prev.slice(0, -1));
+          return;
+        }
+        // Printable characters
+        if (sequence && sequence.length === 1 && !ctrl) {
+          setRenameValue((prev) => prev + sequence);
+          return;
+        }
+        return; // Ignore other keys while renaming
+      }
 
       if (name === 'escape' || (ctrl && name === 'c')) {
         onCancel();
@@ -255,6 +325,37 @@ export function useSessionPicker({
         return;
       }
 
+      // Ctrl+R: inline rename
+      if (ctrl && name === 'r') {
+        const session = filteredSessions[selectedIndex];
+        if (session) {
+          setRenameIndex(selectedIndex);
+          setRenameValue(session.name || session.prompt || '');
+        }
+        return;
+      }
+
+      // Ctrl+V: toggle preview
+      if (ctrl && name === 'v') {
+        if (previewIndex === selectedIndex) {
+          setPreviewIndex(null);
+          setPreviewData([]);
+        } else {
+          setPreviewIndex(selectedIndex);
+          setIsLoadingPreview(true);
+          const session = filteredSessions[selectedIndex];
+          if (session && sessionService) {
+            void sessionService
+              .getSessionSummary(session.sessionId)
+              .then((data) => {
+                setPreviewData(data);
+                setIsLoadingPreview(false);
+              });
+          }
+        }
+        return;
+      }
+
       if (sequence === 'b' || sequence === 'B') {
         if (currentBranch) {
           setFilterByBranch((prev) => !prev);
@@ -275,5 +376,13 @@ export function useSessionPicker({
     showScrollUp,
     showScrollDown,
     loadMoreSessions,
+    renameIndex,
+    renameValue,
+    previewIndex,
+    previewData,
+    isLoadingPreview,
+    onRenameConfirm,
+    onRenameCancel,
+    onRenameChange,
   };
 }

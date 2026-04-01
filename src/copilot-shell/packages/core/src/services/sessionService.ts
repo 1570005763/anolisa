@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { randomUUID } from 'node:crypto';
 import { Storage } from '../config/storage.js';
 import { getProjectHash } from '../utils/paths.js';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import * as jsonl from '../utils/jsonl-utils.js';
 import type {
   ChatCompressionRecordPayload,
   ChatRecord,
+  SessionNameRecordPayload,
   UiTelemetryRecordPayload,
 } from './chatRecordingService.js';
 import { uiTelemetryService } from '../telemetry/uiTelemetry.js';
@@ -33,6 +35,8 @@ export interface SessionListItem {
   mtime: number;
   /** First user prompt text (truncated for display) */
   prompt: string;
+  /** Custom session name (from latest session_name system record), if set */
+  name?: string;
   /** Git branch at session start, if available */
   gitBranch?: string;
   /** Full path to the session file */
@@ -166,11 +170,17 @@ export class SessionService {
   }
 
   /**
-   * Counts unique message UUIDs in a session file.
-   * This gives the number of logical messages in the session.
+   * Scans a session file to count messages and extract the latest session name.
+   * Reads the file once and returns both values efficiently.
    */
-  private async countSessionMessages(filePath: string): Promise<number> {
+  private async scanSessionFile(filePath: string): Promise<{
+    messageCount: number;
+    name?: string;
+  }> {
     const uniqueUuids = new Set<string>();
+    let latestName: string | undefined;
+    let latestNameTimestamp = '';
+
     try {
       const fileStream = fs.createReadStream(filePath);
       const rl = readline.createInterface({
@@ -186,15 +196,27 @@ export class SessionService {
           if (record.type === 'user' || record.type === 'assistant') {
             uniqueUuids.add(record.uuid);
           }
+          if (
+            record.type === 'system' &&
+            record.subtype === 'session_name' &&
+            record.timestamp >= latestNameTimestamp
+          ) {
+            const payload = record.systemPayload as
+              | SessionNameRecordPayload
+              | undefined;
+            if (payload?.sessionName) {
+              latestName = payload.sessionName;
+              latestNameTimestamp = record.timestamp;
+            }
+          }
         } catch {
-          // Ignore malformed lines
           continue;
         }
       }
 
-      return uniqueUuids.size;
+      return { messageCount: uniqueUuids.size, name: latestName };
     } catch {
-      return 0;
+      return { messageCount: 0 };
     }
   }
 
@@ -285,8 +307,8 @@ export class SessionService {
       const recordProjectHash = getProjectHash(firstRecord.cwd);
       if (recordProjectHash !== this.projectHash) continue;
 
-      // Count messages for this session
-      const messageCount = await this.countSessionMessages(filePath);
+      // Scan file for message count and session name
+      const { messageCount, name } = await this.scanSessionFile(filePath);
 
       const prompt = this.extractFirstPromptFromRecords(records);
 
@@ -296,6 +318,7 @@ export class SessionService {
         startTime: firstRecord.timestamp,
         mtime: file.mtime,
         prompt,
+        name,
         gitBranch: firstRecord.gitBranch,
         filePath,
         messageCount,
@@ -502,6 +525,95 @@ export class SessionService {
         return false;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Renames a session by appending a session_name system record.
+   *
+   * @param sessionId The session ID to rename
+   * @param name The new name for the session
+   * @returns true if renamed, false if session not found
+   */
+  async renameSession(sessionId: string, name: string): Promise<boolean> {
+    const chatsDir = this.getChatsDir();
+    const filePath = path.join(chatsDir, `${sessionId}.jsonl`);
+
+    try {
+      const records = await jsonl.readLines<ChatRecord>(filePath, 1);
+      if (records.length === 0) {
+        return false;
+      }
+
+      const recordProjectHash = getProjectHash(records[0].cwd);
+      if (recordProjectHash !== this.projectHash) {
+        return false;
+      }
+
+      // Append a session_name system record
+      const nameRecord: ChatRecord = {
+        uuid: randomUUID(),
+        parentUuid: null,
+        sessionId,
+        timestamp: new Date().toISOString(),
+        type: 'system',
+        subtype: 'session_name',
+        systemPayload: { sessionName: name },
+        cwd: records[0].cwd,
+        version: records[0].version,
+      };
+
+      await jsonl.writeLine(filePath, nameRecord);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Extracts the last N user/assistant text messages for preview.
+   *
+   * @param sessionId The session ID to summarize
+   * @param count Number of recent messages to return (default 5)
+   * @returns Array of summary items with role and text
+   */
+  async getSessionSummary(
+    sessionId: string,
+    count = 5,
+  ): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {
+    const chatsDir = this.getChatsDir();
+    const filePath = path.join(chatsDir, `${sessionId}.jsonl`);
+
+    try {
+      const records = await jsonl.read<ChatRecord>(filePath);
+      const messages: Array<{ role: 'user' | 'assistant'; text: string }> = [];
+
+      // Walk from end to start, collecting user/assistant text
+      for (let i = records.length - 1; i >= 0 && messages.length < count; i--) {
+        const record = records[i];
+        if (record.type !== 'user' && record.type !== 'assistant') continue;
+        if (!record.message?.parts) continue;
+
+        let text = '';
+        for (const part of record.message.parts as Part[]) {
+          if ('text' in part && !('thought' in part)) {
+            text += (part as { text: string }).text;
+          }
+        }
+        if (text) {
+          messages.unshift({
+            role: record.type as 'user' | 'assistant',
+            text: text.length > 150 ? `${text.slice(0, 150)}...` : text,
+          });
+        }
+      }
+
+      return messages;
+    } catch {
+      return [];
     }
   }
 

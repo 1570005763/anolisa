@@ -50,7 +50,7 @@ export interface ChatRecord {
    */
   type: 'user' | 'assistant' | 'tool_result' | 'system';
   /** Optional system subtype for distinguishing system behaviors */
-  subtype?: 'chat_compression' | 'slash_command' | 'ui_telemetry';
+  subtype?: 'chat_compression' | 'slash_command' | 'ui_telemetry' | 'session_name';
   /** Working directory at time of message */
   cwd: string;
   /** CLI version for compatibility tracking */
@@ -87,7 +87,8 @@ export interface ChatRecord {
   systemPayload?:
     | ChatCompressionRecordPayload
     | SlashCommandRecordPayload
-    | UiTelemetryRecordPayload;
+    | UiTelemetryRecordPayload
+    | SessionNameRecordPayload;
 }
 
 /**
@@ -122,6 +123,10 @@ export interface SlashCommandRecordPayload {
  */
 export interface UiTelemetryRecordPayload {
   uiEvent: UiEvent;
+}
+
+export interface SessionNameRecordPayload {
+  sessionName: string;
 }
 
 /**
@@ -403,6 +408,25 @@ export class ChatRecordingService {
       this.appendRecord(record);
     } catch (error) {
       console.error('Error saving ui telemetry record:', error);
+    }
+  }
+
+  /**
+   * Records a session name change as a system record.
+   * The latest session_name record in the file is the current name.
+   */
+  recordSessionName(name: string): void {
+    try {
+      const record: ChatRecord = {
+        ...this.createBaseRecord('system'),
+        type: 'system',
+        subtype: 'session_name',
+        systemPayload: { sessionName: name },
+      };
+
+      this.appendRecord(record);
+    } catch (error) {
+      console.error('Error saving session name:', error);
     }
   }
 }

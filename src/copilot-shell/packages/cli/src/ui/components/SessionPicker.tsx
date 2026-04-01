@@ -54,6 +54,8 @@ interface SessionListItemViewProps {
     normal: string;
   };
   boldSelectedPrefix?: boolean;
+  isRenaming?: boolean;
+  renameValue?: string;
 }
 
 function SessionListItemView({
@@ -66,6 +68,8 @@ function SessionListItemView({
   maxPromptWidth,
   prefixChars = PREFIX_CHARS,
   boldSelectedPrefix = true,
+  isRenaming = false,
+  renameValue = '',
 }: SessionListItemViewProps): React.JSX.Element {
   const timeAgo = formatRelativeTime(session.mtime);
   const messageText = formatMessageCount(session.messageCount);
@@ -81,8 +85,8 @@ function SessionListItemView({
         ? prefixChars.scrollDown
         : prefixChars.normal;
 
-  const promptText = session.prompt || '(empty prompt)';
-  const truncatedPrompt = truncateText(promptText, maxPromptWidth);
+  const displayName = session.name || session.prompt || t('(empty prompt)');
+  const truncatedPrompt = truncateText(displayName, maxPromptWidth);
 
   return (
     <Box flexDirection="column" marginBottom={isLast ? 0 : 1}>
@@ -99,12 +103,26 @@ function SessionListItemView({
         >
           {prefix}
         </Text>
-        <Text
-          color={isSelected ? theme.text.accent : theme.text.primary}
-          bold={isSelected}
-        >
-          {truncatedPrompt}
-        </Text>
+        {isRenaming ? (
+          <>
+            <Text color={theme.text.accent}>{renameValue}</Text>
+            <Text color={theme.text.secondary}>{'_'}</Text>
+          </>
+        ) : (
+          <>
+            {session.name && (
+              <Text color={isSelected ? theme.text.accent : theme.text.secondary}>
+                {'* '}
+              </Text>
+            )}
+            <Text
+              color={isSelected ? theme.text.accent : theme.text.primary}
+              bold={isSelected}
+            >
+              {truncatedPrompt}
+            </Text>
+          </>
+        )}
       </Box>
       <Box paddingLeft={2}>
         <Text color={theme.text.secondary}>
@@ -112,6 +130,51 @@ function SessionListItemView({
           {session.gitBranch && ` · ${session.gitBranch}`}
         </Text>
       </Box>
+    </Box>
+  );
+}
+
+interface PreviewPanelProps {
+  items: Array<{ role: 'user' | 'assistant'; text: string }>;
+  isLoading: boolean;
+  maxWidth: number;
+}
+
+function PreviewPanel({ items, isLoading, maxWidth }: PreviewPanelProps) {
+  if (isLoading) {
+    return (
+      <Box paddingLeft={4}>
+        <Text color={theme.text.secondary}>{t('Loading preview...')}</Text>
+      </Box>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <Box paddingLeft={4}>
+        <Text color={theme.text.secondary}>
+          {t('No messages to preview.')}
+        </Text>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column" paddingLeft={4}>
+      {items.map((item, i) => (
+        <Box key={i}>
+          <Text color={theme.text.secondary}>
+            {item.role === 'user' ? '> ' : '< '}
+          </Text>
+          <Text
+            color={
+              item.role === 'user' ? theme.text.primary : theme.text.secondary
+            }
+          >
+            {truncateText(item.text, maxWidth - 4)}
+          </Text>
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -203,19 +266,32 @@ export function SessionPicker(props: SessionPickerProps) {
           ) : (
             picker.visibleSessions.map((session, visibleIndex) => {
               const actualIndex = picker.scrollOffset + visibleIndex;
+              const isRenaming = picker.renameIndex === actualIndex;
+              const isPreviewing = picker.previewIndex === actualIndex;
+
               return (
-                <SessionListItemView
-                  key={session.sessionId}
-                  session={session}
-                  isSelected={actualIndex === picker.selectedIndex}
-                  isFirst={visibleIndex === 0}
-                  isLast={visibleIndex === picker.visibleSessions.length - 1}
-                  showScrollUp={picker.showScrollUp}
-                  showScrollDown={picker.showScrollDown}
-                  maxPromptWidth={boxWidth - 6}
-                  prefixChars={PREFIX_CHARS}
-                  boldSelectedPrefix={false}
-                />
+                <Box key={session.sessionId} flexDirection="column">
+                  <SessionListItemView
+                    session={session}
+                    isSelected={actualIndex === picker.selectedIndex}
+                    isFirst={visibleIndex === 0}
+                    isLast={visibleIndex === picker.visibleSessions.length - 1 && !isPreviewing}
+                    showScrollUp={picker.showScrollUp}
+                    showScrollDown={picker.showScrollDown}
+                    maxPromptWidth={boxWidth - 6}
+                    prefixChars={PREFIX_CHARS}
+                    boldSelectedPrefix={false}
+                    isRenaming={isRenaming}
+                    renameValue={picker.renameValue}
+                  />
+                  {isPreviewing && (
+                    <PreviewPanel
+                      items={picker.previewData}
+                      isLoading={picker.isLoadingPreview}
+                      maxWidth={boxWidth - 6}
+                    />
+                  )}
+                </Box>
               );
             })
           )}
@@ -237,11 +313,12 @@ export function SessionPicker(props: SessionPickerProps) {
                 >
                   B
                 </Text>
-                {t(' to toggle branch')} ·
+                {t(' to toggle branch')} ·{' '}
               </Text>
             )}
             <Text color={theme.text.secondary}>
-              {t('↑↓ to navigate · Esc to cancel')}
+              <Text bold>Ctrl+R</Text> {t('to rename')} · <Text bold>Ctrl+V</Text>{' '}
+              {t('to preview')} · {t('↑↓ to navigate · Esc to cancel')}
             </Text>
           </Box>
         </Box>
