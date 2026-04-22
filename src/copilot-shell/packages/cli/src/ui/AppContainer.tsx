@@ -99,6 +99,7 @@ import {
 import { ShellFocusContext } from './contexts/ShellFocusContext.js';
 import { t } from '../i18n/index.js';
 import { useWelcomeBack } from './hooks/useWelcomeBack.js';
+import { CompactModeProvider } from './contexts/CompactModeContext.js';
 import { useDialogClose } from './hooks/useDialogClose.js';
 import { useInitializationAuthError } from './hooks/useInitializationAuthError.js';
 import { type VisionSwitchOutcome } from './components/ModelSwitchDialog.js';
@@ -163,6 +164,13 @@ export const AppContainer = (props: AppContainerProps) => {
     initializationResult.geminiMdFileCount,
   );
   const [shellModeActive, setShellModeActive] = useState(false);
+  const [compactMode, setCompactMode] = useState<boolean>(
+    settings.merged.ui?.compactMode ?? false,
+  );
+  const [frozenSnapshot, setFrozenSnapshot] = useState<
+    HistoryItemWithoutId[] | null
+  >(null);
+
   const [modelSwitchedFromQuotaError, setModelSwitchedFromQuotaError] =
     useState<boolean>(false);
   const [historyRemountKey, setHistoryRemountKey] = useState(0);
@@ -771,11 +779,11 @@ export const AppContainer = (props: AppContainerProps) => {
   } = useWelcomeBack(config, handleFinalSubmit, buffer, settings.merged);
 
   cancelHandlerRef.current = useCallback(() => {
-    const pendingHistoryItems = [
+    const pendingToolHistoryItems = [
       ...pendingSlashCommandHistoryItems,
       ...pendingGeminiHistoryItems,
     ];
-    if (isToolExecuting(pendingHistoryItems)) {
+    if (isToolExecuting(pendingToolHistoryItems)) {
       buffer.setText(''); // Just clear the prompt
       return;
     }
@@ -937,6 +945,26 @@ export const AppContainer = (props: AppContainerProps) => {
   const [showErrorDetails, setShowErrorDetails] = useState<boolean>(false);
   const [showToolDescriptions, setShowToolDescriptions] =
     useState<boolean>(false);
+
+  // Migration logic to handle old verboseMode setting
+  useEffect(() => {
+    // Access raw settings object to check for verboseMode
+    const uiSettings = settings.merged.ui as Record<string, unknown>;
+    if (
+      uiSettings &&
+      Object.prototype.hasOwnProperty.call(uiSettings, 'verboseMode') &&
+      !Object.prototype.hasOwnProperty.call(uiSettings, 'compactMode')
+    ) {
+      // If verboseMode exists but compactMode doesn't, set compactMode to the opposite of verboseMode
+      const verboseModeValue = uiSettings['verboseMode'] as boolean;
+      const compactModeValue = !verboseModeValue;
+      void settings.setValue(
+        SettingScope.User,
+        'ui.compactMode',
+        compactModeValue,
+      );
+    }
+  }, [settings]);
 
   const [ctrlCPressedOnce, setCtrlCPressedOnce] = useState(false);
   const ctrlCTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1210,6 +1238,11 @@ export const AppContainer = (props: AppContainerProps) => {
     ],
   );
 
+  const pendingHistoryItems = useMemo(
+    () => [...pendingSlashCommandHistoryItems, ...pendingGeminiHistoryItems],
+    [pendingSlashCommandHistoryItems, pendingGeminiHistoryItems],
+  );
+
   const handleGlobalKeypress = useCallback(
     (key: Key) => {
       // Debug log keystrokes if enabled
@@ -1248,7 +1281,17 @@ export const AppContainer = (props: AppContainerProps) => {
         setConstrainHeight(true);
       }
 
-      if (keyMatchers[Command.SHOW_ERROR_DETAILS](key)) {
+      if (keyMatchers[Command.TOGGLE_COMPACT_MODE]?.(key)) {
+        const newValue = !compactMode;
+        setCompactMode(newValue);
+        void settings.setValue(SettingScope.User, 'ui.compactMode', newValue);
+        refreshStatic();
+        if (newValue && streamingState !== StreamingState.Idle) {
+          setFrozenSnapshot([...pendingHistoryItems]);
+        } else {
+          setFrozenSnapshot(null);
+        }
+      } else if (keyMatchers[Command.SHOW_ERROR_DETAILS](key)) {
         setShowErrorDetails((prev) => !prev);
       } else if (keyMatchers[Command.TOGGLE_TOOL_DESCRIPTIONS](key)) {
         const newValue = !showToolDescriptions;
@@ -1281,6 +1324,11 @@ export const AppContainer = (props: AppContainerProps) => {
       setShowErrorDetails,
       showToolDescriptions,
       setShowToolDescriptions,
+      compactMode,
+      setCompactMode,
+      setFrozenSnapshot,
+      pendingHistoryItems,
+      refreshStatic,
       config,
       ideContextState,
       handleExit,
@@ -1294,8 +1342,9 @@ export const AppContainer = (props: AppContainerProps) => {
       handleSlashCommand,
       activePtyId,
       embeddedShellFocused,
-      settings.merged.general?.debugKeystrokeLogging,
+      settings,
       isAuthenticating,
+      streamingState,
     ],
   );
 
@@ -1394,11 +1443,6 @@ export const AppContainer = (props: AppContainerProps) => {
     history: historyManager.history,
     sessionStats,
   });
-
-  const pendingHistoryItems = useMemo(
-    () => [...pendingSlashCommandHistoryItems, ...pendingGeminiHistoryItems],
-    [pendingSlashCommandHistoryItems, pendingGeminiHistoryItems],
-  );
 
   const uiState: UIState = useMemo(
     () => ({
@@ -1558,6 +1602,7 @@ export const AppContainer = (props: AppContainerProps) => {
       historyRemountKey,
       messageQueue,
       showAutoAcceptIndicator,
+      currentModel,
       contextFileNames,
       errorCount,
       availableTerminalHeight,
@@ -1577,7 +1622,6 @@ export const AppContainer = (props: AppContainerProps) => {
       showIdeRestartPrompt,
       ideTrustRestartReason,
       isRestarting,
-      currentModel,
       extensionsUpdateState,
       activePtyId,
       historyManager,
@@ -1685,6 +1729,17 @@ export const AppContainer = (props: AppContainerProps) => {
     ],
   );
 
+  const compactModeValue = useMemo(
+    () => ({ compactMode, setCompactMode, frozenSnapshot, setFrozenSnapshot }),
+    [compactMode, setCompactMode, frozenSnapshot, setFrozenSnapshot],
+  );
+
+  useEffect(() => {
+    if (streamingState === StreamingState.Idle) {
+      setFrozenSnapshot(null);
+    }
+  }, [streamingState]);
+
   return (
     <UIStateContext.Provider value={uiState}>
       <UIActionsContext.Provider value={uiActions}>
@@ -1697,9 +1752,11 @@ export const AppContainer = (props: AppContainerProps) => {
               featureTips: props.featureTips || [],
             }}
           >
-            <ShellFocusContext.Provider value={isFocused}>
-              <App />
-            </ShellFocusContext.Provider>
+            <CompactModeProvider value={compactModeValue}>
+              <ShellFocusContext.Provider value={isFocused}>
+                <App />
+              </ShellFocusContext.Provider>
+            </CompactModeProvider>
           </AppContext.Provider>
         </ConfigContext.Provider>
       </UIActionsContext.Provider>
