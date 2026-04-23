@@ -181,24 +181,22 @@ build_agent_sec_core() {
         return 1
     fi
 
-    # Version from env or Cargo.toml
+    # Version: prefer $VERSION env (set by nightly CI), fallback to pyproject.toml
     local version="${VERSION:-}"
     if [ -z "$version" ]; then
-        version=$(grep -m1 '^version' "${SEC_DIR}/linux-sandbox/Cargo.toml" | sed 's/version = "\(.*\)"/\1/' 2>/dev/null || true)
+        version=$(grep -m1 '^version' "${SEC_DIR}/agent-sec-cli/pyproject.toml" | sed 's/.*"\(.*\)"/\1/')
     fi
     if [ -z "$version" ]; then
-        version=$(grep -m1 -oE '[0-9]+\.[0-9]+\.[0-9]+' "$spec_in" | head -1)
-    fi
-    if [ -z "$version" ]; then
-        version="0.0.1"
-        warn "No version specified for agent-sec-core, using default: ${version}"
+        err "Cannot determine agent-sec-core version. Set VERSION env or ensure pyproject.toml exists."
+        return 1
     fi
 
     local pkg_name
     pkg_name=$(parse_spec_name "$spec_in")
     local tarball_name="${pkg_name}-${version}.tar.gz"
 
-    # Step 1: Process spec template
+    # Step 1: Process spec template (@VERSION@ -> actual version)
+    log "Step 1/3: Preparing spec file..."
     local spec_file
     spec_file=$(process_spec_template "$spec_in" "$version")
 
@@ -210,7 +208,7 @@ build_agent_sec_core() {
     log "Step 2/3: Creating source tarball ${tarball_name}..."
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    local pkg_dir="${tmp_dir}/${pkg_name}-${pkg_version}"
+    local pkg_dir="${tmp_dir}/${pkg_name}-${version}"
     mkdir -p "$pkg_dir"/{skills,linux-sandbox,agent-sec-cli,cosh_hooks,openclaw-plugin}
 
     # skills: use cp -rp dir/. to include hidden files/directories
@@ -238,7 +236,7 @@ build_agent_sec_core() {
         --exclude='.pytest_cache' \
         agent-sec-cli/ | tar -xf - -C "$pkg_dir/"
 
-    tar -czf "${BUILD_DIR}/SOURCES/${tarball_name}" -C "$tmp_dir" "${pkg_name}-${pkg_version}"
+    tar -czf "${BUILD_DIR}/SOURCES/${tarball_name}" -C "$tmp_dir" "${pkg_name}-${version}"
     rm -rf "$tmp_dir"
 
     # Step 3: rpmbuild (--nodeps: BuildRequires are handled by yum-builddep in CI)
