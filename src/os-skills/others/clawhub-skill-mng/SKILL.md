@@ -1,6 +1,6 @@
 ---
 name: clawhub-skill-mng
-description: Search, install, uninstall, update and manage agent skills. Use when the user asks to find/search/install/uninstall/update/list/explore skills, asks "how do I do X" or "find a skill for X", or wants to extend agent capabilities in a specific domain. CRITICAL: before running ANY clawhub command, you MUST read the full content of this skill file first; never execute clawhub commands based on the description alone or from memory.
+description: Search, install, uninstall, update and manage agent skills. Use when the user asks to find/search/install/uninstall/update/list/explore skills, asks "how do I do X" or "find a skill for X", or wants to extend agent capabilities in a specific domain.
 ---
 
 # Clawhub Skill 管理
