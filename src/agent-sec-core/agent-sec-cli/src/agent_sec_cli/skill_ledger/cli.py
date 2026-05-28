@@ -10,6 +10,7 @@ import os
 from typing import Optional
 
 import typer
+
 from agent_sec_cli.security_middleware import invoke
 from agent_sec_cli.security_middleware.result import ActionResult
 
@@ -22,8 +23,9 @@ app = typer.Typer(
         "  2. scan      Run built-in scanners and sign the manifest\n"
         "  3. check     Verify a skill's integrity status\n"
         "  4. certify   Import external findings and sign the manifest\n"
-        "  5. status    Show overall ledger health overview\n"
-        "  6. audit     Deep-verify the full version history\n\n"
+        "  5. resolve   Decide which version a runtime should expose\n"
+        "  6. status    Show overall ledger health overview\n"
+        "  7. audit     Deep-verify the full version history\n\n"
         "Integrity statuses:\n\n"
         "  pass      Files unchanged, signature valid, scan clean\n"
         "  none      Never scanned — baseline will be created on first check\n"
@@ -247,6 +249,30 @@ def cmd_scan(
         all_skills=all_skills,
         force=force,
         scanner_names=_parse_scanner_names(scanners),
+    )
+    _forward(result)
+
+
+# ---------------------------------------------------------------------------
+# resolve
+# ---------------------------------------------------------------------------
+
+
+@app.command("resolve")
+def cmd_resolve(
+    skill_dir: str = typer.Argument(..., help="Path to the skill directory"),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON. This is the default output format.",
+    ),
+) -> None:
+    """Resolve the runtime exposure decision for SkillFS-style consumers."""
+    result = invoke(
+        "skill_ledger",
+        command="resolve",
+        skill_dir=skill_dir,
+        json_output=json_output,
     )
     _forward(result)
 

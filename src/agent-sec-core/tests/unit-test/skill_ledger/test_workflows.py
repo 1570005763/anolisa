@@ -27,6 +27,7 @@ from agent_sec_cli.skill_ledger.core.file_hasher import (
     compute_file_hashes,
     diff_file_hashes,
 )
+from agent_sec_cli.skill_ledger.core.resolver import resolve_activation
 from agent_sec_cli.skill_ledger.errors import SignatureInvalidError
 from agent_sec_cli.skill_ledger.signing.base import SigningBackend
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -457,6 +458,219 @@ class TestCertifyWorkflow(SkillDirTestCase):
 
         latest = os.path.join(self.skill_dir, ".skill-meta", "latest.json")
         self.assertFalse(os.path.exists(latest))
+
+
+# ---------------------------------------------------------------------------
+# Resolve activation
+# ---------------------------------------------------------------------------
+
+
+class TestResolveActivation(SkillDirTestCase):
+    """Tests for SkillFS-facing activation decisions."""
+
+    def assert_resolve_contract(self, result, *, fallback: bool = False):
+        self.assertEqual(result["schemaVersion"], 1)
+        if fallback:
+            self.assertEqual(result["targetKind"], "relative_to_skill_dir")
+            self.assertTrue(result["target"].startswith(".skill-meta/versions/"))
+        else:
+            self.assertNotIn("targetKind", result)
+
+    def test_no_manifest_hidden(self):
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result)
+        self.assertEqual(result["status"], "none")
+        self.assertEqual(result["decision"], "hidden")
+        self.assertIsNone(result["trustedVersion"])
+        self.assertIsNone(result["target"])
+
+    def test_pass_serves_current(self):
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["currentVersion"], "v000001")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["decision"], "current")
+        self.assertEqual(result["target"], ".")
+
+    def test_warn_falls_back_to_latest_pass_snapshot(self):
+        pass_findings = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        self._write_file("run.sh", "#!/bin/bash\necho changed\n")
+        warn_findings = self._write_findings(
+            [{"rule": "r2", "level": "warn", "message": "caution"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=warn_findings)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "warn")
+        self.assertEqual(result["currentVersion"], "v000002")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["target"], ".skill-meta/versions/v000001.snapshot")
+        self.assertEqual(result["findingsSummary"], {"high": 0, "medium": 1, "low": 0})
+
+    def test_deny_falls_back_to_latest_pass_snapshot(self):
+        pass_findings = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        self._write_file("run.sh", "#!/bin/bash\necho risky\n")
+        deny_findings = self._write_findings(
+            [{"rule": "r2", "level": "deny", "message": "bad"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=deny_findings)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "deny")
+        self.assertEqual(result["currentVersion"], "v000002")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["target"], ".skill-meta/versions/v000001.snapshot")
+        self.assertEqual(result["findingsSummary"], {"high": 1, "medium": 0, "low": 0})
+
+    def test_consecutive_deny_versions_fall_back_to_latest_pass_snapshot(self):
+        pass_findings = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        deny_findings = self._write_findings(
+            [{"rule": "r2", "level": "deny", "message": "bad"}]
+        )
+        self._write_file("run.sh", "#!/bin/bash\necho risky-v2\n")
+        certify(self.skill_dir, self.backend, findings_path=deny_findings)
+        self._write_file("run.sh", "#!/bin/bash\necho risky-v3\n")
+        certify(self.skill_dir, self.backend, findings_path=deny_findings)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "deny")
+        self.assertEqual(result["currentVersion"], "v000003")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["target"], ".skill-meta/versions/v000001.snapshot")
+
+    def test_broken_latest_pass_snapshot_falls_back_to_older_pass_snapshot(self):
+        pass_findings = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        self._write_file("run.sh", "#!/bin/bash\necho pass-v2\n")
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        shutil.rmtree(
+            os.path.join(
+                self.skill_dir,
+                ".skill-meta",
+                "versions",
+                "v000002.snapshot",
+            )
+        )
+        deny_findings = self._write_findings(
+            [{"rule": "r2", "level": "deny", "message": "bad"}]
+        )
+        self._write_file("run.sh", "#!/bin/bash\necho risky-v3\n")
+        certify(self.skill_dir, self.backend, findings_path=deny_findings)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "deny")
+        self.assertEqual(result["currentVersion"], "v000003")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["target"], ".skill-meta/versions/v000001.snapshot")
+
+    def test_deny_with_only_broken_pass_snapshot_is_hidden(self):
+        pass_findings = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=pass_findings)
+        shutil.rmtree(
+            os.path.join(
+                self.skill_dir,
+                ".skill-meta",
+                "versions",
+                "v000001.snapshot",
+            )
+        )
+        deny_findings = self._write_findings(
+            [{"rule": "r2", "level": "deny", "message": "bad"}]
+        )
+        self._write_file("run.sh", "#!/bin/bash\necho risky-v2\n")
+        certify(self.skill_dir, self.backend, findings_path=deny_findings)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result)
+        self.assertEqual(result["status"], "deny")
+        self.assertEqual(result["currentVersion"], "v000002")
+        self.assertEqual(result["trustedVersion"], None)
+        self.assertEqual(result["decision"], "hidden")
+        self.assertIsNone(result["target"])
+
+    def test_deny_without_trusted_version_hidden(self):
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "deny", "message": "bad"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result)
+        self.assertEqual(result["status"], "deny")
+        self.assertEqual(result["decision"], "hidden")
+        self.assertIsNone(result["trustedVersion"])
+        self.assertIsNone(result["target"])
+
+    def test_drifted_falls_back_and_reports_diff(self):
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+        self._write_file("run.sh", "#!/bin/bash\necho drifted\n")
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "drifted")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertIn("run.sh", result["diffSummary"]["modified"])
+
+    def test_tampered_latest_falls_back_to_signed_version_snapshot(self):
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+
+        latest = os.path.join(self.skill_dir, ".skill-meta", "latest.json")
+        with open(latest, "r") as f:
+            data = json.load(f)
+        data["scanStatus"] = "deny"
+        with open(latest, "w") as f:
+            json.dump(data, f)
+
+        result = resolve_activation(self.skill_dir, self.backend)
+
+        self.assert_resolve_contract(result, fallback=True)
+        self.assertEqual(result["status"], "tampered")
+        self.assertEqual(result["decision"], "fallback")
+        self.assertEqual(result["trustedVersion"], "v000001")
+        self.assertEqual(result["target"], ".skill-meta/versions/v000001.snapshot")
 
 
 # ---------------------------------------------------------------------------

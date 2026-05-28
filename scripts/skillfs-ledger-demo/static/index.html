@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SkillFS + Skill Ledger Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f4;
+        --ink: #17211d;
+        --muted: #65716a;
+        --line: #d7ddd3;
+        --panel: #ffffff;
+        --soft: #f9faf7;
+        --current: #1f7a5c;
+        --fallback: #b15f14;
+        --hidden: #7d4040;
+        --pending: #315f86;
+        --warn: #9b5d11;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 20px 26px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 21px;
+        font-weight: 720;
+      }
+
+      .title {
+        display: grid;
+        gap: 4px;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--current);
+      }
+
+      main {
+        display: grid;
+        gap: 16px;
+        padding: 16px;
+      }
+
+      .driver {
+        display: grid;
+        grid-template-columns: minmax(310px, 0.95fr) minmax(360px, 1.05fr);
+        gap: 16px;
+      }
+
+      .boards {
+        display: grid;
+        grid-template-columns: minmax(320px, 1fr) minmax(380px, 1fr);
+        gap: 16px;
+      }
+
+      section {
+        min-width: 0;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 13px;
+        letter-spacing: 0;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: 132px;
+        overflow: hidden;
+      }
+
+      .box {
+        padding: 14px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .actions {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(110px, 1fr));
+        gap: 8px;
+      }
+
+      .command {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 40px;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .command:hover:not(:disabled) {
+        border-color: #86ad9c;
+        background: #f0f6f2;
+      }
+
+      .command:disabled {
+        cursor: default;
+        opacity: 0.52;
+      }
+
+      .command .num {
+        display: grid;
+        place-items: center;
+        width: 21px;
+        height: 21px;
+        border-radius: 50%;
+        background: #e5ece7;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 760;
+        flex: 0 0 auto;
+      }
+
+      .command.ready .num {
+        background: var(--current);
+        color: #fff;
+      }
+
+      .reset {
+        width: fit-content;
+        justify-self: end;
+        border-style: dashed;
+        color: var(--muted);
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 8px;
+      }
+
+      .stat {
+        min-width: 0;
+        padding: 10px 11px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+      }
+
+      .label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .value {
+        margin-top: 5px;
+        font-size: 13px;
+        font-weight: 720;
+        overflow-wrap: anywhere;
+      }
+
+      .path {
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .prompt {
+        margin: 0;
+        padding: 11px 12px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #111816;
+        color: #dce9de;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+
+      .prompt-tools {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .prompt-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .copy {
+        width: fit-content;
+        min-height: 31px;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+
+      .badge {
+        display: inline-flex;
+        width: fit-content;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 9px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .badge.current {
+        background: var(--current);
+      }
+
+      .badge.fallback {
+        background: var(--fallback);
+      }
+
+      .badge.hidden {
+        background: var(--hidden);
+      }
+
+      .badge.pending {
+        background: var(--pending);
+      }
+
+      .timeline {
+        display: grid;
+      }
+
+      .event {
+        display: grid;
+        grid-template-columns: 58px 1fr;
+        gap: 12px;
+        padding: 13px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .event:last-child {
+        border-bottom: 0;
+      }
+
+      .time {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .message {
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .meta {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .chain {
+        display: grid;
+      }
+
+      .chain-row {
+        display: grid;
+        grid-template-columns: 1fr 1.1fr 1fr;
+        gap: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .chain-row:last-child {
+        border-bottom: 0;
+      }
+
+      .chain-cell {
+        min-width: 0;
+        padding: 12px;
+        border-right: 1px solid var(--line);
+        font-size: 13px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .chain-cell:last-child {
+        border-right: 0;
+      }
+
+      .chain-head {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 760;
+        text-transform: uppercase;
+      }
+
+      .hook {
+        color: var(--pending);
+        font-weight: 700;
+      }
+
+      .error {
+        min-height: 18px;
+        color: #9c2f2f;
+        font-size: 12px;
+      }
+
+      a {
+        color: var(--pending);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      @media (max-width: 1080px) {
+        .driver,
+        .boards {
+          grid-template-columns: 1fr;
+        }
+
+        .actions,
+        .stats {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      @media (max-width: 640px) {
+        header {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .actions,
+        .stats {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <h1>SkillFS + Skill Ledger Demo</h1>
+        <div class="subtitle">Skill lifecycle simulator — OpenClaw dashboard runs separately.</div>
+      </div>
+      <div class="status"><span class="dot"></span><span id="updated">Waiting for events</span></div>
+    </header>
+    <main>
+      <div class="driver">
+        <section>
+          <h2>Demo Driver</h2>
+          <div class="panel box">
+            <div id="actions" class="actions"></div>
+            <button id="reset" class="command reset" type="button">Reset Demo</button>
+            <div id="error" class="error"></div>
+            <div class="prompt-tools">
+              <div class="prompt-label">Suggested OpenClaw Prompt</div>
+              <button id="copyPrompt" class="command copy" type="button">Copy Prompt</button>
+            </div>
+            <pre id="prompt" class="prompt">请在 OpenClaw dashboard 中按步骤执行建议 prompt。</pre>
+          </div>
+        </section>
+        <section>
+          <h2>Runtime State</h2>
+          <div class="panel box">
+            <div class="stats">
+              <div class="stat">
+                <div class="label">Decision</div>
+                <div class="value"><span id="decision" class="badge hidden">hidden</span></div>
+              </div>
+              <div class="stat">
+                <div class="label">Source Version</div>
+                <div id="sourceVersion" class="value">none</div>
+              </div>
+              <div class="stat">
+                <div class="label">Agent sees</div>
+                <div id="visibleVersion" class="value">none</div>
+              </div>
+              <div class="stat">
+                <div class="label">Trusted Version</div>
+                <div id="trustedVersion" class="value">none</div>
+              </div>
+            </div>
+            <div>
+              <div class="label">OpenClaw Dashboard</div>
+              <div id="openclawUrl" class="path">open separately</div>
+            </div>
+            <div>
+              <div class="label">Agent Skill Entry</div>
+              <div id="agentPath" class="path"></div>
+            </div>
+            <div>
+              <div class="label">Actual Target</div>
+              <div id="targetPath" class="path">not exposed</div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="boards">
+        <section>
+          <h2>Lifecycle Board</h2>
+          <div id="timeline" class="panel timeline"></div>
+        </section>
+        <section>
+          <h2>Event Chain</h2>
+          <div class="panel chain">
+            <div class="chain-row chain-head">
+              <div class="chain-cell">FS Hook</div>
+              <div class="chain-cell">Ledger Action</div>
+              <div class="chain-cell">SkillFS Decision</div>
+            </div>
+            <div id="chain"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      const decisionEl = document.getElementById("decision");
+      const sourceVersionEl = document.getElementById("sourceVersion");
+      const visibleVersionEl = document.getElementById("visibleVersion");
+      const trustedVersionEl = document.getElementById("trustedVersion");
+      const openclawUrlEl = document.getElementById("openclawUrl");
+      const agentPathEl = document.getElementById("agentPath");
+      const targetPathEl = document.getElementById("targetPath");
+      const promptEl = document.getElementById("prompt");
+      const timelineEl = document.getElementById("timeline");
+      const chainEl = document.getElementById("chain");
+      const updatedEl = document.getElementById("updated");
+      const actionsEl = document.getElementById("actions");
+      const resetEl = document.getElementById("reset");
+      const copyPromptEl = document.getElementById("copyPrompt");
+      const errorEl = document.getElementById("error");
+      let currentState = {};
+      let busy = false;
+
+      function esc(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function clsForDecision(value) {
+        if ((value || "").includes("fallback")) return "fallback";
+        if ((value || "").includes("current")) return "current";
+        if ((value || "").includes("pending")) return "pending";
+        return "hidden";
+      }
+
+      function contentVersion(value, exists) {
+        if (value) return value;
+        return exists ? "original download" : "none";
+      }
+
+      function renderState(state) {
+        currentState = state;
+        const active = (state.active || {})[state.skillName] || {};
+        const decision = active.decision || "hidden";
+        decisionEl.className = `badge ${clsForDecision(decision)}`;
+        decisionEl.textContent = decision;
+        sourceVersionEl.textContent = contentVersion(state.sourceVersion, state.sourceSkillContent);
+        visibleVersionEl.textContent = contentVersion(state.visibleVersion, state.agentSkillExists);
+        trustedVersionEl.textContent = active.trustedVersion || state.trustedVersion || "none";
+        const url = state.openclawUrl;
+        openclawUrlEl.innerHTML = url
+          ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(url)}</a>`
+          : "open separately";
+        agentPathEl.textContent = state.agentPath || "";
+        targetPathEl.textContent = active.targetPath || "not exposed";
+        promptEl.textContent = state.suggestedPrompt || state.lastPrompt || "Demo flow complete.";
+        renderActions(state);
+      }
+
+      function renderActions(state) {
+        const nextStep = state.nextStep;
+        const currentIndex = (state.steps || []).findIndex((item) => item.id === nextStep);
+        actionsEl.innerHTML = (state.steps || [])
+          .map((step, index) => {
+            const ready = step.id === nextStep;
+            const done = nextStep === null || (currentIndex > -1 && index < currentIndex);
+            return `
+              <button
+                class="command ${ready ? "ready" : ""}"
+                data-step="${esc(step.id)}"
+                type="button"
+                title="${esc(step.prompt)}"
+                ${ready && !busy ? "" : "disabled"}
+              >
+                <span class="num">${done ? "✓" : index + 1}</span>
+                <span>${esc(step.label)}</span>
+              </button>
+            `;
+          })
+          .join("");
+      }
+
+      function renderEvents(events) {
+        timelineEl.innerHTML = events.length
+          ? events
+              .map(
+                (event) => `
+                  <div class="event">
+                    <div class="time">${esc(event.time)}</div>
+                    <div>
+                      <div class="message">${esc(event.message)}</div>
+                      <div class="meta">${esc(event.ledgerResult)} · ${esc(event.skillfsDecision)}</div>
+                      ${event.suggestedPrompt ? `<div class="meta">Prompt: ${esc(event.suggestedPrompt)}</div>` : ""}
+                    </div>
+                  </div>
+                `,
+              )
+              .join("")
+          : `<div class="event"><div class="time">--:--</div><div><div class="message">No lifecycle events yet.</div></div></div>`;
+        chainEl.innerHTML = events
+          .map(
+            (event) => `
+              <div class="chain-row">
+                <div class="chain-cell hook">${esc(event.fsHook)}</div>
+                <div class="chain-cell">${esc(event.ledgerAction)}</div>
+                <div class="chain-cell">${esc(event.skillfsDecision)}</div>
+              </div>
+            `,
+          )
+          .join("");
+        if (events.length > 0) {
+          updatedEl.textContent = `Updated ${events[events.length - 1].time}`;
+        }
+      }
+
+      async function postJson(path) {
+        busy = true;
+        errorEl.textContent = "";
+        renderActions(currentState);
+        try {
+          const response = await fetch(path, { method: "POST" });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || `Request failed: ${response.status}`);
+          }
+          renderState(data.state);
+          renderEvents(data.events);
+        } catch (error) {
+          errorEl.textContent = error.message;
+        } finally {
+          busy = false;
+          await refresh();
+        }
+      }
+
+      async function refresh() {
+        const [state, events] = await Promise.all([
+          fetch("/state").then((r) => r.json()),
+          fetch("/events").then((r) => r.json()),
+        ]);
+        renderState(state);
+        renderEvents(events);
+      }
+
+      actionsEl.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-step]");
+        if (!button || button.disabled) return;
+        postJson(`/api/step/${button.dataset.step}`);
+      });
+
+      resetEl.addEventListener("click", () => {
+        postJson("/api/reset");
+      });
+
+      copyPromptEl.addEventListener("click", async () => {
+        const text = promptEl.textContent || "";
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          copyPromptEl.textContent = "Copied";
+          setTimeout(() => {
+            copyPromptEl.textContent = "Copy Prompt";
+          }, 1200);
+        } catch (error) {
+          errorEl.textContent = "Copy failed; select the prompt text manually.";
+        }
+      });
+
+      refresh();
+      setInterval(refresh, 1200);
+    </script>
+  </body>
+</html>

@@ -19,6 +19,7 @@ from agent_sec_cli.skill_ledger.core.certifier import (
     scan_skill,
 )
 from agent_sec_cli.skill_ledger.core.checker import check, check_batch
+from agent_sec_cli.skill_ledger.core.resolver import resolve_activation
 from agent_sec_cli.skill_ledger.core.status import ledger_status
 from agent_sec_cli.skill_ledger.scanner.registry import ScannerRegistry
 from agent_sec_cli.skill_ledger.signing.ed25519 import NativeEd25519Backend
@@ -388,6 +389,33 @@ class SkillLedgerBackend(BaseBackend):
             )
         except Exception as exc:
             return ActionResult(success=False, error=str(exc), exit_code=1)
+
+    def _do_resolve(
+        self,
+        ctx: RequestContext,
+        *,
+        skill_dir: str | None = None,
+        **kw: Any,
+    ) -> ActionResult:
+        if skill_dir is None:
+            return ActionResult(
+                success=False,
+                error="skill_dir is required",
+                exit_code=1,
+            )
+
+        backend = NativeEd25519Backend()
+        try:
+            result = resolve_activation(skill_dir, backend)
+        except Exception as exc:
+            return ActionResult(success=False, error=str(exc), exit_code=1)
+
+        data = {"command": "resolve", **result}
+        return ActionResult(
+            success=True,
+            stdout=json.dumps(result, ensure_ascii=False) + "\n",
+            data=data,
+        )
 
     def _do_audit(
         self,
