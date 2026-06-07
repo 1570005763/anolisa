@@ -119,10 +119,102 @@
         gap: 12px;
       }
 
-      .actions {
+      .prompts {
         display: grid;
-        grid-template-columns: repeat(5, minmax(110px, 1fr));
         gap: 8px;
+      }
+
+      .prompt-queue {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+      }
+
+      .prompt-queue summary {
+        cursor: pointer;
+        padding: 10px 12px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+        text-transform: uppercase;
+      }
+
+      .prompt-queue summary:hover {
+        color: var(--ink);
+      }
+
+      .prompt-queue .prompts {
+        padding: 0 10px 10px;
+      }
+
+      .prompt-card {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+      }
+
+      .prompt-card.active {
+        border-color: #86ad9c;
+        background: #f0f6f2;
+      }
+
+      .prompt-card.done {
+        opacity: 0.72;
+      }
+
+      .prompt-card .num {
+        display: grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: #e5ece7;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 760;
+      }
+
+      .prompt-card.active .num {
+        background: var(--current);
+        color: #fff;
+      }
+
+      .prompt-title {
+        font-size: 13px;
+        font-weight: 760;
+      }
+
+      .prompt-snippet {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .prompt-note {
+        margin-top: 5px;
+        padding: 7px 9px;
+        border-left: 3px solid #9ab6a8;
+        background: #f4f8f5;
+        color: #5c6a61;
+        font-size: 12px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .note-tag {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--current);
+        font-size: 10px;
+        font-weight: 760;
+        text-transform: uppercase;
       }
 
       .command {
@@ -167,13 +259,6 @@
       .command.ready .num {
         background: var(--current);
         color: #fff;
-      }
-
-      .reset {
-        width: fit-content;
-        justify-self: end;
-        border-style: dashed;
-        color: var(--muted);
       }
 
       .stats {
@@ -226,6 +311,46 @@
         white-space: pre-wrap;
       }
 
+      .current-note {
+        display: none;
+        margin: -4px 0 0;
+        padding: 8px 10px;
+        border-left: 3px solid #9ab6a8;
+        border-radius: 0 6px 6px 0;
+        background: #f4f8f5;
+        color: #5c6a61;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .bash-fallback {
+        display: none;
+        gap: 8px;
+        margin-top: -4px;
+        padding: 9px 10px;
+        border-left: 3px solid var(--warn);
+        border-radius: 0 6px 6px 0;
+        background: #fff7ed;
+      }
+
+      .bash-fallback .note-tag {
+        color: var(--warn);
+      }
+
+      .bash-command {
+        margin: 0;
+        padding: 9px 10px;
+        border: 1px solid #e5c49b;
+        border-radius: 6px;
+        background: #18130e;
+        color: #f4e9d9;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
       .prompt-tools {
         display: flex;
         align-items: center;
@@ -238,6 +363,17 @@
         font-size: 12px;
         font-weight: 700;
         text-transform: uppercase;
+      }
+
+      .prompt-heading {
+        display: grid;
+        gap: 3px;
+      }
+
+      .prompt-step {
+        color: var(--current);
+        font-size: 12px;
+        font-weight: 760;
       }
 
       .copy {
@@ -272,6 +408,110 @@
 
       .badge.pending {
         background: var(--pending);
+      }
+
+      .badge.pass {
+        background: var(--current);
+      }
+
+      .badge.warn {
+        background: var(--warn);
+      }
+
+      .badge.deny,
+      .badge.error {
+        background: var(--hidden);
+      }
+
+      .badge.none {
+        background: var(--muted);
+      }
+
+      .scan-card {
+        display: grid;
+        gap: 10px;
+        padding: 11px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--soft);
+      }
+
+      .scan-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .scan-summary {
+        margin-top: 4px;
+        color: var(--ink);
+        font-size: 13px;
+        font-weight: 720;
+        overflow-wrap: anywhere;
+      }
+
+      .scanner-summary {
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .finding-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .finding-empty {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .finding {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .finding .severity {
+        border-radius: 999px;
+        padding: 3px 7px;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 760;
+        text-transform: uppercase;
+      }
+
+      .finding .severity.warn {
+        background: var(--warn);
+      }
+
+      .finding .severity.deny {
+        background: var(--hidden);
+      }
+
+      .finding-title {
+        font-size: 12px;
+        font-weight: 760;
+        overflow-wrap: anywhere;
+      }
+
+      .finding-message,
+      .finding-evidence {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+      }
+
+      .finding-evidence {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
 
       .timeline {
@@ -314,7 +554,7 @@
 
       .chain-row {
         display: grid;
-        grid-template-columns: 1fr 1.1fr 1fr;
+        grid-template-columns: 76px 1fr 1.1fr 1fr;
         gap: 0;
         border-bottom: 1px solid var(--line);
       }
@@ -369,9 +609,9 @@
           grid-template-columns: 1fr;
         }
 
-        .actions,
+        .prompts,
         .stats {
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: 1fr;
         }
       }
 
@@ -381,7 +621,7 @@
           flex-direction: column;
         }
 
-        .actions,
+        .prompts,
         .stats {
           grid-template-columns: 1fr;
         }
@@ -399,16 +639,27 @@
     <main>
       <div class="driver">
         <section>
-          <h2>Demo Driver</h2>
+          <h2>OpenClaw Prompts</h2>
           <div class="panel box">
-            <div id="actions" class="actions"></div>
-            <button id="reset" class="command reset" type="button">Reset Demo</button>
             <div id="error" class="error"></div>
             <div class="prompt-tools">
-              <div class="prompt-label">Suggested OpenClaw Prompt</div>
+              <div class="prompt-heading">
+                <div class="prompt-label">Current Prompt</div>
+                <div id="currentStep" class="prompt-step"></div>
+              </div>
               <button id="copyPrompt" class="command copy" type="button">Copy Prompt</button>
             </div>
-            <pre id="prompt" class="prompt">请在 OpenClaw dashboard 中按步骤执行建议 prompt。</pre>
+            <pre id="prompt" class="prompt">请复制 prompt 到 OpenClaw dashboard 执行；本页只展示状态。</pre>
+            <div id="promptNote" class="current-note"></div>
+            <div id="bashFallback" class="bash-fallback">
+              <span class="note-tag">Bash fallback（聊天模式拒绝时使用）</span>
+              <pre id="bashCommand" class="bash-command"></pre>
+              <button id="copyBash" class="command copy" type="button">Copy Bash Command</button>
+            </div>
+            <details class="prompt-queue">
+              <summary>Demo Steps</summary>
+              <div id="promptList" class="prompts"></div>
+            </details>
           </div>
         </section>
         <section>
@@ -433,16 +684,23 @@
               </div>
             </div>
             <div>
-              <div class="label">OpenClaw Dashboard</div>
-              <div id="openclawUrl" class="path">open separately</div>
-            </div>
-            <div>
-              <div class="label">Agent Skill Entry</div>
+              <div class="label">OpenClaw Skill Entry</div>
               <div id="agentPath" class="path"></div>
             </div>
             <div>
-              <div class="label">Actual Target</div>
+              <div class="label">Serving Target</div>
               <div id="targetPath" class="path">not exposed</div>
+            </div>
+            <div class="scan-card">
+              <div class="scan-head">
+                <div>
+                  <div class="label">Latest Scan</div>
+                  <div id="scanSummary" class="scan-summary">No scan yet</div>
+                  <div id="scannerSummary" class="scanner-summary"></div>
+                </div>
+                <span id="scanStatus" class="badge none">none</span>
+              </div>
+              <div id="scanFindings" class="finding-list"></div>
             </div>
           </div>
         </section>
@@ -456,6 +714,7 @@
           <h2>Event Chain</h2>
           <div class="panel chain">
             <div class="chain-row chain-head">
+              <div class="chain-cell">Time</div>
               <div class="chain-cell">FS Hook</div>
               <div class="chain-cell">Ledger Action</div>
               <div class="chain-cell">SkillFS Decision</div>
@@ -470,19 +729,25 @@
       const sourceVersionEl = document.getElementById("sourceVersion");
       const visibleVersionEl = document.getElementById("visibleVersion");
       const trustedVersionEl = document.getElementById("trustedVersion");
-      const openclawUrlEl = document.getElementById("openclawUrl");
       const agentPathEl = document.getElementById("agentPath");
       const targetPathEl = document.getElementById("targetPath");
+      const scanStatusEl = document.getElementById("scanStatus");
+      const scanSummaryEl = document.getElementById("scanSummary");
+      const scannerSummaryEl = document.getElementById("scannerSummary");
+      const scanFindingsEl = document.getElementById("scanFindings");
       const promptEl = document.getElementById("prompt");
+      const currentStepEl = document.getElementById("currentStep");
+      const promptNoteEl = document.getElementById("promptNote");
+      const bashFallbackEl = document.getElementById("bashFallback");
+      const bashCommandEl = document.getElementById("bashCommand");
+      const copyBashEl = document.getElementById("copyBash");
       const timelineEl = document.getElementById("timeline");
       const chainEl = document.getElementById("chain");
       const updatedEl = document.getElementById("updated");
-      const actionsEl = document.getElementById("actions");
-      const resetEl = document.getElementById("reset");
+      const promptListEl = document.getElementById("promptList");
       const copyPromptEl = document.getElementById("copyPrompt");
       const errorEl = document.getElementById("error");
       let currentState = {};
-      let busy = false;
 
       function esc(value) {
         return String(value ?? "")
@@ -500,9 +765,43 @@
         return "hidden";
       }
 
+      function clsForScanStatus(value) {
+        const status = String(value || "none").toLowerCase();
+        if (["pass", "warn", "deny", "error"].includes(status)) return status;
+        return "none";
+      }
+
       function contentVersion(value, exists) {
         if (value) return value;
         return exists ? "original download" : "none";
+      }
+
+      function formatLocation(finding) {
+        const file = finding.file || "skill package";
+        return finding.line ? `${file}:${finding.line}` : file;
+      }
+
+      function eventKey(event) {
+        const ledgerResult = event.ledgerResult || event.ledgerStatus || "";
+        return [
+          event.skill,
+          event.fsHook,
+          event.ledgerAction,
+          ledgerResult,
+          event.skillfsDecision,
+        ].join("\u001f");
+      }
+
+      function collapseEvents(events) {
+        const compact = [];
+        let last = "";
+        for (const event of events || []) {
+          const key = eventKey(event);
+          if (key === last) continue;
+          compact.push(event);
+          last = key;
+        }
+        return compact;
       }
 
       function renderState(state) {
@@ -514,60 +813,141 @@
         sourceVersionEl.textContent = contentVersion(state.sourceVersion, state.sourceSkillContent);
         visibleVersionEl.textContent = contentVersion(state.visibleVersion, state.agentSkillExists);
         trustedVersionEl.textContent = active.trustedVersion || state.trustedVersion || "none";
-        const url = state.openclawUrl;
-        openclawUrlEl.innerHTML = url
-          ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">${esc(url)}</a>`
-          : "open separately";
         agentPathEl.textContent = state.agentPath || "";
         targetPathEl.textContent = active.targetPath || "not exposed";
+        renderLatestScan(state.latestScan || {});
+        renderCurrentStep(state);
         promptEl.textContent = state.suggestedPrompt || state.lastPrompt || "Demo flow complete.";
-        renderActions(state);
+        promptNoteEl.innerHTML = state.promptNote
+          ? `<span class="note-tag">演示说明（不复制）</span>${esc(state.promptNote)}`
+          : "";
+        promptNoteEl.style.display = state.promptNote ? "block" : "none";
+        bashCommandEl.textContent = state.bashFallbackCommand || "";
+        bashFallbackEl.style.display = state.bashFallbackCommand ? "grid" : "none";
+        renderPrompts(state);
       }
 
-      function renderActions(state) {
+      function renderCurrentStep(state) {
+        const steps = state.steps || [];
+        const nextStep = state.nextStep;
+        if (!nextStep) {
+          currentStepEl.textContent = "Complete";
+          return;
+        }
+        const index = steps.findIndex((item) => item.id === nextStep);
+        const step = steps[index] || {};
+        currentStepEl.textContent =
+          index >= 0 ? `Step ${index + 1}/${steps.length} · ${step.label || nextStep}` : "";
+      }
+
+      function renderLatestScan(scan) {
+        const status = scan.scanStatus || "none";
+        scanStatusEl.className = `badge ${clsForScanStatus(status)}`;
+        scanStatusEl.textContent = status;
+
+        if (status === "none") {
+          scanSummaryEl.textContent = "No scan has been recorded for the source skill.";
+          scannerSummaryEl.textContent = "";
+          scanFindingsEl.innerHTML = "";
+          return;
+        }
+
+        if (status === "error") {
+          scanSummaryEl.textContent = scan.error || "Could not read latest scan manifest.";
+          scannerSummaryEl.textContent = "";
+          scanFindingsEl.innerHTML = "";
+          return;
+        }
+
+        const version = scan.versionId || "unknown version";
+        const threatCount = Number(scan.threatCount || 0);
+        const totalFindings = Number(scan.findingCount || 0);
+        scanSummaryEl.textContent = `${version} · ${status} · ${threatCount} threat finding${threatCount === 1 ? "" : "s"}`;
+
+        const scannerText = (scan.scannerStatuses || [])
+          .map((item) => `${item.scanner}:${item.status} (${item.threatCount || 0}/${item.findingCount || 0})`)
+          .join(" · ");
+        scannerSummaryEl.textContent = scannerText || `${totalFindings} total finding${totalFindings === 1 ? "" : "s"}`;
+
+        const findings = scan.findings || [];
+        scanFindingsEl.innerHTML = findings.length
+          ? findings
+              .map(
+                (finding) => `
+                  <div class="finding">
+                    <span class="severity ${esc(finding.level)}">${esc(finding.level)}</span>
+                    <div>
+                      <div class="finding-title">${esc(finding.rule)} · ${esc(formatLocation(finding))}</div>
+                      <div class="finding-message">${esc(finding.message || "No message")}</div>
+                      ${
+                        finding.evidence
+                          ? `<div class="finding-evidence">${esc(finding.evidence)}</div>`
+                          : ""
+                      }
+                    </div>
+                  </div>
+                `,
+              )
+              .join("")
+          : `<div class="finding-empty">No warn/deny findings in the latest scan.</div>`;
+      }
+
+      function renderPrompts(state) {
         const nextStep = state.nextStep;
         const currentIndex = (state.steps || []).findIndex((item) => item.id === nextStep);
-        actionsEl.innerHTML = (state.steps || [])
+        promptListEl.innerHTML = (state.steps || [])
           .map((step, index) => {
             const ready = step.id === nextStep;
             const done = nextStep === null || (currentIndex > -1 && index < currentIndex);
             return `
-              <button
-                class="command ${ready ? "ready" : ""}"
-                data-step="${esc(step.id)}"
-                type="button"
-                title="${esc(step.prompt)}"
-                ${ready && !busy ? "" : "disabled"}
-              >
+              <div class="prompt-card ${ready ? "active" : ""} ${done ? "done" : ""}">
                 <span class="num">${done ? "✓" : index + 1}</span>
-                <span>${esc(step.label)}</span>
-              </button>
+                <div>
+                  <div class="prompt-title">${esc(step.label)}</div>
+                  <div class="prompt-snippet">${esc(step.prompt)}</div>
+                  ${
+                    step.note
+                      ? `<div class="prompt-note"><span class="note-tag">演示说明（不复制）</span>${esc(step.note)}</div>`
+                      : ""
+                  }
+                  ${
+                    step.bashCommand
+                      ? `<div class="prompt-note"><span class="note-tag">Bash fallback</span><code>${esc(step.bashCommand)}</code></div>`
+                      : ""
+                  }
+                </div>
+                <button class="command copy" data-copy-prompt="${esc(step.prompt)}" type="button">Copy</button>
+              </div>
             `;
           })
           .join("");
       }
 
       function renderEvents(events) {
-        timelineEl.innerHTML = events.length
-          ? events
+        const compactEvents = collapseEvents(events);
+        timelineEl.innerHTML = compactEvents.length
+          ? compactEvents
               .map(
-                (event) => `
+                (event) => {
+                  const ledgerResult = event.ledgerResult || event.ledgerStatus || "";
+                  return `
                   <div class="event">
                     <div class="time">${esc(event.time)}</div>
                     <div>
                       <div class="message">${esc(event.message)}</div>
-                      <div class="meta">${esc(event.ledgerResult)} · ${esc(event.skillfsDecision)}</div>
-                      ${event.suggestedPrompt ? `<div class="meta">Prompt: ${esc(event.suggestedPrompt)}</div>` : ""}
+                      <div class="meta">${esc(ledgerResult)} · ${esc(event.skillfsDecision)}</div>
                     </div>
                   </div>
-                `,
+                `;
+                },
               )
               .join("")
           : `<div class="event"><div class="time">--:--</div><div><div class="message">No lifecycle events yet.</div></div></div>`;
-        chainEl.innerHTML = events
+        chainEl.innerHTML = compactEvents
           .map(
             (event) => `
               <div class="chain-row">
+                <div class="chain-cell time">${esc(event.time)}</div>
                 <div class="chain-cell hook">${esc(event.fsHook)}</div>
                 <div class="chain-cell">${esc(event.ledgerAction)}</div>
                 <div class="chain-cell">${esc(event.skillfsDecision)}</div>
@@ -575,28 +955,8 @@
             `,
           )
           .join("");
-        if (events.length > 0) {
-          updatedEl.textContent = `Updated ${events[events.length - 1].time}`;
-        }
-      }
-
-      async function postJson(path) {
-        busy = true;
-        errorEl.textContent = "";
-        renderActions(currentState);
-        try {
-          const response = await fetch(path, { method: "POST" });
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || `Request failed: ${response.status}`);
-          }
-          renderState(data.state);
-          renderEvents(data.events);
-        } catch (error) {
-          errorEl.textContent = error.message;
-        } finally {
-          busy = false;
-          await refresh();
+        if (compactEvents.length > 0) {
+          updatedEl.textContent = `Updated ${compactEvents[compactEvents.length - 1].time}`;
         }
       }
 
@@ -609,28 +969,57 @@
         renderEvents(events);
       }
 
-      actionsEl.addEventListener("click", (event) => {
-        const button = event.target.closest("button[data-step]");
-        if (!button || button.disabled) return;
-        postJson(`/api/step/${button.dataset.step}`);
-      });
+      async function copyText(text, button) {
+        if (!text) return;
+        errorEl.textContent = "";
+        const old = button.textContent;
+        try {
+          if (!navigator.clipboard || !window.isSecureContext) {
+            throw new Error("Clipboard API unavailable");
+          }
+          await navigator.clipboard.writeText(text);
+          button.textContent = "Copied";
+          setTimeout(() => {
+            button.textContent = old;
+          }, 1200);
+        } catch (error) {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.setAttribute("readonly", "");
+          textarea.style.position = "fixed";
+          textarea.style.top = "-1000px";
+          textarea.style.left = "-1000px";
+          document.body.appendChild(textarea);
+          textarea.focus();
+          textarea.select();
+          try {
+            const copied = document.execCommand("copy");
+            if (!copied) throw new Error("execCommand returned false");
+            button.textContent = "Copied";
+            setTimeout(() => {
+              button.textContent = old;
+            }, 1200);
+          } catch (fallbackError) {
+            promptEl.focus();
+            errorEl.textContent = "Copy failed; prompt text is selected above.";
+          } finally {
+            textarea.remove();
+          }
+        }
+      }
 
-      resetEl.addEventListener("click", () => {
-        postJson("/api/reset");
+      promptListEl.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-copy-prompt]");
+        if (!button) return;
+        copyText(button.dataset.copyPrompt || "", button);
       });
 
       copyPromptEl.addEventListener("click", async () => {
-        const text = promptEl.textContent || "";
-        if (!text) return;
-        try {
-          await navigator.clipboard.writeText(text);
-          copyPromptEl.textContent = "Copied";
-          setTimeout(() => {
-            copyPromptEl.textContent = "Copy Prompt";
-          }, 1200);
-        } catch (error) {
-          errorEl.textContent = "Copy failed; select the prompt text manually.";
-        }
+        copyText(promptEl.textContent || "", copyPromptEl);
+      });
+
+      copyBashEl.addEventListener("click", async () => {
+        copyText(bashCommandEl.textContent || "", copyBashEl);
       });
 
       refresh();

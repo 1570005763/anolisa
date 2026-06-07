@@ -22,6 +22,11 @@ SCANNER_SOURCE = "cisco-skill-scanner-static-only"
 
 _SKILL_MANIFEST = "SKILL.md"
 _DEFAULT_MAX_FILE_BYTES = 1_000_000
+_TRUSTED_METADATA_FILES = frozenset(
+    {
+        (".clawhub", "origin.json"),
+    }
+)
 _SKIP_DIRS = frozenset(
     {
         ".git",
@@ -152,6 +157,8 @@ def scan_skill(
     text_files: list[_TextFile] = []
     for path in _walk_skill_files(root, findings):
         rel_path = str(path.relative_to(root))
+        if _is_trusted_metadata_file(Path(rel_path)):
+            continue
         _scan_path_metadata(path, rel_path, findings)
         text = _read_optional_text(path, rel_path, max_file_bytes, findings)
         if text is not None:
@@ -656,6 +663,11 @@ def _slash_comment_start(line: str) -> int:
 def _is_skipped(rel_path: Path) -> bool:
     """Return whether a relative path is under a skipped directory."""
     return any(part in _SKIP_DIRS for part in rel_path.parts)
+
+
+def _is_trusted_metadata_file(rel_path: Path) -> bool:
+    """Return whether a file is known package-manager metadata."""
+    return rel_path.parts in _TRUSTED_METADATA_FILES
 
 
 def _is_code_file(path: Path, text: str) -> bool:

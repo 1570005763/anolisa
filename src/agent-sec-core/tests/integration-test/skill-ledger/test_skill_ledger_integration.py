@@ -965,6 +965,45 @@ def test_scan_auto_invoke_default_scanners(ws):
     assert scans["code-scanner"]["findings"] == []
 
 
+def test_scan_allows_clawhub_origin_metadata(ws):
+    """ClawHub origin metadata should not make an otherwise clean skill warn."""
+    skill = make_skill(
+        ws.skills_dir,
+        "scan-clawhub-origin",
+        {
+            ".clawhub/origin.json": (
+                '{"registry":"https://clawhub.example","skill":"weather"}\n'
+            ),
+        },
+    )
+    env = ws.env()
+
+    r = run_skill_ledger(["scan", str(skill)], env_extra=env)
+    assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
+    out = parse_json_output(r.stdout)
+    assert out["scanStatus"] == "pass"
+
+    manifest = read_latest_manifest(skill)
+    static_scan = next(
+        scan for scan in manifest["scans"] if scan["scanner"] == "static-scanner"
+    )
+    assert static_scan["status"] == "pass"
+    assert static_scan["findings"] == []
+
+
+def test_scan_accepts_json_flag_for_skillfs_decision_command(ws):
+    """scan accepts --json for SkillFS decision-command compatibility."""
+    skill = make_skill(ws.skills_dir, "scan-json-flag", {"f.txt": "f"})
+    env = ws.env()
+
+    r = run_skill_ledger(["scan", str(skill), "--json"], env_extra=env)
+    assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
+    out = parse_json_output(r.stdout)
+    assert out["status"] == "scanned"
+    assert out["scanStatus"] == "pass"
+    assert out["versionId"] == "v000001"
+
+
 def test_scan_second_run_noop_when_scanners_present(ws):
     """A second fill-in scan skips existing scanner results when files are unchanged."""
     skill = make_skill(ws.skills_dir, "scan-noop", {"f.txt": "f"})

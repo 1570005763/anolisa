@@ -233,8 +233,17 @@ def cmd_scan(
         "--scanners",
         help="Comma-separated built-in scanner names (default: code-scanner,static-scanner).",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help=(
+            "Emit machine-readable JSON. scan already emits JSON by default; "
+            "this flag is accepted for SkillFS decision-command compatibility."
+        ),
+    ),
 ) -> None:
     """Run built-in scanners and record signed scan results."""
+    _ = json_output
     if all_skills and skill_dir is not None:
         typer.echo(
             "Error: --all and skill_dir are mutually exclusive.",

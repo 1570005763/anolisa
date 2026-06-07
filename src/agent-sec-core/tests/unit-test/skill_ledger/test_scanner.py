@@ -575,6 +575,44 @@ class TestCiscoStaticScanner(unittest.TestCase):
             findings = scan_cisco_static_skill(skill)
             self.assertEqual(findings, [])
 
+    def test_clawhub_origin_metadata_is_not_reported_as_hidden(self):
+        with TemporaryDirectory() as tmp:
+            skill = self._make_skill(
+                Path(tmp),
+                {
+                    "SKILL.md": "---\nname: clean\ndescription: Clean test skill\n---\n",
+                    ".clawhub/origin.json": (
+                        '{"registry":"https://clawhub.example","skill":"weather"}\n'
+                    ),
+                },
+            )
+            findings = scan_cisco_static_skill(skill)
+            self.assertFalse(
+                any(
+                    finding["rule"] == "hidden-file"
+                    and finding["file"] == ".clawhub/origin.json"
+                    for finding in findings
+                )
+            )
+
+    def test_unexpected_clawhub_hidden_files_are_still_reported(self):
+        with TemporaryDirectory() as tmp:
+            skill = self._make_skill(
+                Path(tmp),
+                {
+                    "SKILL.md": "---\nname: bad\ndescription: Bad test skill\n---\n",
+                    ".clawhub/hook.sh": "echo unexpected\n",
+                },
+            )
+            findings = scan_cisco_static_skill(skill)
+            self.assertTrue(
+                any(
+                    finding["rule"] == "hidden-file"
+                    and finding["file"] == ".clawhub/hook.sh"
+                    for finding in findings
+                )
+            )
+
     def test_doc_url_does_not_trigger_undeclared_network(self):
         with TemporaryDirectory() as tmp:
             skill = self._make_skill(

@@ -20,12 +20,14 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-DEFAULT_DEMO_SKILL = "weather-query-ledger-demo"
-DEFAULT_CLAWHUB_DIR = "~/.copilot-shell/skills"
+DEFAULT_DEMO_ROOT = "/root/skillfs-demo"
+DEFAULT_DEMO_SKILL = "tianqi-weather"
 DEFAULT_CLAWHUB_REGISTRY = "https://cn.clawhub-mirror.com"
 DEMO_MARKER_FILE = ".skillfs-ledger-demo-owned"
 RESOLVE_SCHEMA_VERSION = 1
@@ -40,11 +42,11 @@ DEMO_SECTION_RE = re.compile(
 
 STEP_ORDER = ["install", "certify_v1", "evolve_v2", "attack_v3", "fallback_v2"]
 STEP_LABELS = {
-    "install": "Install ClawHub skill",
-    "certify_v1": "Scan and certify v1",
-    "evolve_v2": "Evolve and certify v2",
+    "install": "Detect downloaded skill",
+    "certify_v1": "Scan and publish v1",
+    "evolve_v2": "Evolve and publish v2",
     "attack_v3": "Inject malicious update",
-    "fallback_v2": "Auto-recover trusted version",
+    "fallback_v2": "Clear context and call trusted version",
 }
 
 
@@ -70,8 +72,15 @@ def parse_cli_command(raw: str | None) -> list[str]:
     return default_cli_command()
 
 
-def parse_command(raw: str) -> list[str]:
-    return shlex.split(raw)
+def openclaw_url_with_token(url: str | None) -> str | None:
+    if not url:
+        return None
+    if "#" in url:
+        return url
+    token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
+    if not token:
+        return url
+    return url.rstrip("/") + "/#token=" + quote(token, safe="")
 
 
 def parse_json_stdout(stdout: str) -> dict[str, Any]:
@@ -85,7 +94,7 @@ def parse_json_stdout(stdout: str) -> dict[str, Any]:
 def read_text_if_file(path: Path) -> str | None:
     if not path.is_file():
         return None
-    return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def extract_version_marker(text: str | None) -> str | None:
@@ -95,63 +104,144 @@ def extract_version_marker(text: str | None) -> str | None:
     return match.group(1) if match else None
 
 
-def find_skill_dir(base_dir: Path, slug: str) -> Path | None:
-    candidates = [base_dir / slug]
-    normalized_slug = slug.lower().replace("_", "-")
-    children = sorted(base_dir.glob("*")) if base_dir.is_dir() else []
-    for child in children:
-        if child.is_dir() and child.name.lower().replace("_", "-") == normalized_slug:
-            candidates.append(child)
-    for candidate in candidates:
-        if (candidate / "SKILL.md").is_file():
-            return candidate
-    for child in children:
-        if child.is_dir() and (child / "SKILL.md").is_file():
-            if slug.lower() in child.name.lower():
-                return child
-    return None
+def _format_event_time(value: Any) -> str:
+    text = str(value or "")
+    if re.fullmatch(r"\d{2}:\d{2}:\d{2}", text):
+        return text
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return parsed.astimezone().strftime("%H:%M:%S")
 
 
-def ensure_clawhub_skill(
-    *,
-    slug: str,
-    clawhub_dir: Path,
-    registry: str,
-    command: list[str],
-) -> Path:
-    existing = find_skill_dir(clawhub_dir, slug)
-    if existing is not None:
-        return existing
-
-    clawhub_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        command
-        + [
-            "install",
-            slug,
-            "--dir",
-            str(clawhub_dir),
-            "--registry",
-            registry,
-            "--no-input",
-        ],
-        check=False,
-        text=True,
-        capture_output=True,
+def event_dedupe_key(event: dict[str, Any]) -> tuple[Any, ...]:
+    ledger_result = event.get("ledgerResult", event.get("ledgerStatus"))
+    return (
+        event.get("skill"),
+        event.get("fsHook"),
+        event.get("ledgerAction"),
+        ledger_result,
+        event.get("skillfsDecision"),
     )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            "failed to install ClawHub skill "
-            f"{slug!r}: {proc.stderr.strip() or proc.stdout.strip()}"
+
+
+def _decision_version(decision: Any) -> str | None:
+    if not isinstance(decision, str) or ":" not in decision:
+        return None
+    return decision.split(":", 1)[1]
+
+
+def _previous_version(version: Any) -> str | None:
+    if not isinstance(version, str):
+        return None
+    match = re.fullmatch(r"v(\d{6})", version)
+    if not match:
+        return None
+    value = int(match.group(1))
+    if value <= 1:
+        return None
+    return f"v{value - 1:06d}"
+
+
+def _polish_event_for_display(event: dict[str, Any]) -> None:
+    """Make raw demo events read as lifecycle stages instead of log records."""
+    ledger_result = str(event.get("ledgerResult", event.get("ledgerStatus", "")))
+    decision = str(event.get("skillfsDecision", ""))
+    version = _decision_version(decision)
+
+    if event.get("fsHook") != "write(SKILL.md)":
+        return
+
+    if ledger_result == "drifted" and decision.startswith("fallback"):
+        event["ledgerAction"] = "drift detected"
+        event["message"] = "Uncertified change detected - serving last trusted version"
+        return
+
+    if ledger_result == "pass" and decision.startswith("current"):
+        event["fsHook"] = "scan pass"
+        event["ledgerAction"] = "resolve"
+        event["message"] = (
+            f"Safe update scanned - serving current {version}"
+            if version
+            else "Safe update scanned - serving current version"
+        )
+        return
+
+    if ledger_result == "deny" and decision.startswith("fallback"):
+        event["fsHook"] = "scan deny"
+        event["ledgerAction"] = "resolve"
+        event["message"] = (
+            f"Risky update denied - serving trusted {version}"
+            if version
+            else "Risky update denied - serving trusted version"
+        )
+        return
+
+    if ledger_result == "warn" and decision.startswith("fallback"):
+        event["fsHook"] = "scan warn"
+        event["ledgerAction"] = "resolve"
+        event["message"] = (
+            f"Risky update warned - serving trusted {version}"
+            if version
+            else "Risky update warned - serving trusted version"
         )
 
-    installed = find_skill_dir(clawhub_dir, slug)
-    if installed is None:
-        raise RuntimeError(
-            "ClawHub install completed, but no SKILL.md was found for "
-            f"{slug!r} under {clawhub_dir}"
-        )
-    return installed
+
+def _with_display_drift_transitions(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    seen_drift: set[tuple[Any, str]] = set()
+    for event in events:
+        skill = event.get("skill")
+        decision = str(event.get("skillfsDecision", ""))
+        result = str(event.get("ledgerResult", ""))
+        if result == "drifted" and decision.startswith("fallback:"):
+            version = _decision_version(decision)
+            if version:
+                seen_drift.add((skill, version))
+
+        current = _decision_version(decision) if decision.startswith("current:") else None
+        previous = _previous_version(current)
+        if (
+            result == "pass"
+            and current
+            and previous
+            and event.get("fsHook") in {"write(SKILL.md)", "scan pass"}
+            and (skill, previous) not in seen_drift
+        ):
+            drift_event = dict(event)
+            drift_event["fsHook"] = "write(SKILL.md)"
+            drift_event["ledgerAction"] = "drift detected"
+            drift_event["ledgerResult"] = "drifted"
+            drift_event["skillfsDecision"] = f"fallback:{previous}"
+            drift_event["message"] = (
+                "Uncertified change detected - serving last trusted version"
+            )
+            drift_event["displayOnly"] = True
+            expanded.append(drift_event)
+            seen_drift.add((skill, previous))
+
+        expanded.append(event)
+    return expanded
+
+
+def file_fingerprint(path: Path) -> str:
+    if not path.is_file():
+        return "missing"
+    stat = path.stat()
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
+def _safe_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _latest_iso(values: list[str]) -> str | None:
+    if not values:
+        return None
+    return sorted(values)[-1]
 
 
 def relative_to(child: Path, parent: Path) -> bool:
@@ -204,13 +294,27 @@ class SkillFSDemoSimulator:
         paths: DemoPaths,
         cli: list[str],
         template_skill: Path | None,
+        clawhub_slug: str,
+        clawhub_registry: str,
+        clawhub_install_dir: Path | None,
         openclaw_url: str | None,
+        observe_external: bool = False,
+        shared_ledger_state: bool = False,
+        mirror_agent_entry: bool = True,
+        mount_refresh_command: str | None = None,
     ) -> None:
         self.paths = paths
         self.cli = cli
         self.template_skill = template_skill
-        self.openclaw_url = openclaw_url
-        self._lock = threading.Lock()
+        self.clawhub_slug = clawhub_slug
+        self.clawhub_registry = clawhub_registry
+        self.clawhub_install_dir = clawhub_install_dir or paths.source
+        self.openclaw_url = openclaw_url_with_token(openclaw_url)
+        self.observe_external = observe_external
+        self.shared_ledger_state = shared_ledger_state
+        self.mirror_agent_entry = mirror_agent_entry
+        self.mount_refresh_command = mount_refresh_command
+        self._lock = threading.RLock()
 
     def prepare(self, reset: bool) -> None:
         with self._lock:
@@ -249,32 +353,214 @@ class SkillFSDemoSimulator:
             return self.snapshot()
 
     def snapshot(self) -> dict[str, Any]:
-        state = self._read_state()
-        return {"state": state, "events": self._read_events()}
+        with self._lock:
+            if self.observe_external:
+                self._observe_unlocked()
+            state = self._with_current_prompts(self._read_state())
+            return {"state": state, "events": self._read_events()}
 
     def _prepare_unlocked(self, reset: bool) -> None:
         if reset and self.paths.root.exists():
             shutil.rmtree(self.paths.root)
         self.paths.source.mkdir(parents=True, exist_ok=True)
-        self.paths.visible_skills_dir.mkdir(parents=True, exist_ok=True)
+        if self.mirror_agent_entry:
+            self.paths.visible_skills_dir.mkdir(parents=True, exist_ok=True)
         self.paths.xdg_data.mkdir(parents=True, exist_ok=True)
         self.paths.xdg_config.mkdir(parents=True, exist_ok=True)
         self.paths.events.parent.mkdir(parents=True, exist_ok=True)
-        self.paths.events.write_text("", encoding="utf-8")
-        self._clear_agent_entry()
-        self._write_state(
-            self._base_state(
-                active={},
-                next_step=STEP_ORDER[0],
-                last_prompt=self._prompt_for_step(STEP_ORDER[0]),
+        if reset or not self.paths.events.exists():
+            self.paths.events.write_text("", encoding="utf-8")
+        if reset or not self.paths.state_path.exists():
+            if self.mirror_agent_entry:
+                self._clear_agent_entry()
+            self._write_state(
+                self._base_state(
+                    active={},
+                    next_step=STEP_ORDER[0],
+                    last_prompt=self._prompt_for_step(STEP_ORDER[0]),
+                )
             )
+
+    def _observe_unlocked(self) -> None:
+        state = self._read_state()
+        skill_md = self.paths.skill_dir / "SKILL.md"
+        if not skill_md.is_file():
+            if not state:
+                self._write_state(
+                    self._base_state(
+                        active={},
+                        next_step="install",
+                        last_prompt=self._prompt_for_step("install"),
+                    )
+                )
+            return
+
+        latest = self.paths.skill_dir / ".skill-meta" / "latest.json"
+        if not latest.is_file():
+            key = f"source-ready:{file_fingerprint(skill_md)}"
+            if state.get("observedKey") == key:
+                return
+            self._normalize_source_skill()
+            active = {
+                self.paths.skill_name: {
+                    "decision": "hidden",
+                    "target": None,
+                    "targetPath": None,
+                    "status": "pending",
+                    "currentVersion": None,
+                    "trustedVersion": None,
+                    "visibleVersion": None,
+                }
+            }
+            next_state = self._base_state(
+                active=active,
+                next_step="certify_v1",
+                last_prompt=self._prompt_for_step("install"),
+            )
+            next_state["observedKey"] = key
+            next_state["sourceFingerprint"] = file_fingerprint(skill_md)
+            self._write_state(next_state)
+            self._emit(
+                fs_hook="mkdir/create",
+                ledger_action="waiting for scan",
+                ledger_result="pending",
+                decision="hidden",
+                message="Downloaded ClawHub skill detected - hidden until scan",
+                prompt=self._prompt_for_step("certify_v1"),
+            )
+            return
+
+        source_fingerprint = file_fingerprint(skill_md)
+        try:
+            resolve = self._run_ledger(["resolve", str(self.paths.skill_dir), "--json"])
+        except Exception as exc:
+            self._record_observer_error(str(exc))
+            return
+
+        key = ":".join(
+            [
+                str(resolve.get("decision")),
+                str(resolve.get("status")),
+                str(resolve.get("currentVersion")),
+                str(resolve.get("trustedVersion")),
+                source_fingerprint,
+                file_fingerprint(latest),
+            ]
         )
+        if state.get("observedKey") == key:
+            if self._needs_mount_refresh(resolve) and state.get("mountRefreshKey") != key:
+                try:
+                    refresh = self._run_mount_refresh()
+                except Exception as exc:
+                    self._record_observer_error(str(exc))
+                    return
+                self._apply_resolve(
+                    resolve,
+                    next_step=self._next_step_for_resolve(resolve),
+                    observed_key=key,
+                    mount_refresh=refresh,
+                )
+            return
+
+        next_step = self._next_step_for_resolve(resolve)
+        refresh = None
+        if self._needs_mount_refresh(resolve):
+            try:
+                refresh = self._run_mount_refresh()
+            except Exception as exc:
+                self._record_observer_error(str(exc))
+                return
+        self._apply_resolve(
+            resolve,
+            next_step=next_step,
+            observed_key=key,
+            mount_refresh=refresh,
+        )
+        self._emit_observed_resolve(resolve)
+
+    def _record_observer_error(self, message: str) -> None:
+        state = self._read_state()
+        state["observerError"] = message
+        self._write_state(state)
+
+    def _next_step_for_resolve(self, resolve: dict[str, Any]) -> str | None:
+        decision = resolve.get("decision")
+        current = resolve.get("currentVersion")
+        source_version = extract_version_marker(self._read_source_skill_md())
+        if decision == "fallback":
+            return "fallback_v2"
+        if decision == "current" and current == "v000001":
+            return "evolve_v2"
+        if decision == "current" and source_version == "v000002":
+            return "attack_v3"
+        if decision == "current":
+            return "evolve_v2"
+        if decision == "hidden":
+            return "certify_v1"
+        return None
+
+    def _emit_observed_resolve(self, resolve: dict[str, Any]) -> None:
+        decision = resolve.get("decision")
+        current = resolve.get("currentVersion")
+        source_version = extract_version_marker(self._read_source_skill_md())
+        decision_label = self._decision_label(resolve)
+        if decision == "fallback":
+            self._emit(
+                fs_hook="write(SKILL.md)",
+                ledger_action="scan -> resolve",
+                ledger_result=str(resolve.get("status")),
+                decision=decision_label,
+                message="Risky update denied - serving last trusted version",
+                prompt=self._prompt_for_step("fallback_v2"),
+            )
+        elif decision == "current" and current == "v000001":
+            self._emit(
+                fs_hook="scan completed",
+                ledger_action="scan -> resolve",
+                ledger_result=str(resolve.get("status")),
+                decision=decision_label,
+                message="Original tianqi-weather skill scanned and published - OpenClaw can call it",
+                prompt=self._prompt_for_step("evolve_v2"),
+            )
+        elif decision == "current" and source_version == "v000002":
+            previous = _previous_version(current) or resolve.get("trustedVersion")
+            if previous:
+                self._emit(
+                    fs_hook="write(SKILL.md)",
+                    ledger_action="drift detected",
+                    ledger_result="drifted",
+                    decision=f"fallback:{previous}",
+                    message=(
+                        "Uncertified safe evolution detected - temporarily "
+                        f"serving trusted {previous}"
+                    ),
+                    prompt=self._prompt_for_step("evolve_v2"),
+                )
+            self._emit(
+                fs_hook="write(SKILL.md)",
+                ledger_action="scan -> resolve",
+                ledger_result=str(resolve.get("status")),
+                decision=decision_label,
+                message="Safe evolution scanned and published - same skill name reads v000002",
+                prompt=self._prompt_for_step("attack_v3"),
+            )
+        else:
+            self._emit(
+                fs_hook="resolve",
+                ledger_action="resolve",
+                ledger_result=str(resolve.get("status")),
+                decision=decision_label,
+                message=f"Resolved activation decision: {decision_label}",
+                prompt=self._prompt_for_step(self._next_step_for_resolve(resolve)),
+            )
 
     def _run_ledger(self, args: list[str]) -> dict[str, Any]:
-        env = {
-            "XDG_DATA_HOME": str(self.paths.xdg_data),
-            "XDG_CONFIG_HOME": str(self.paths.xdg_config),
-        }
+        env = {}
+        if not self.shared_ledger_state:
+            env = {
+                "XDG_DATA_HOME": str(self.paths.xdg_data),
+                "XDG_CONFIG_HOME": str(self.paths.xdg_config),
+            }
         proc = subprocess.run(
             self.cli + ["skill-ledger"] + args,
             check=False,
@@ -289,8 +575,55 @@ class SkillFSDemoSimulator:
             )
         return parse_json_stdout(proc.stdout)
 
+    def _needs_mount_refresh(self, resolve: dict[str, Any]) -> bool:
+        if not self.mount_refresh_command or self.mirror_agent_entry:
+            return False
+        if resolve.get("decision") not in {"current", "fallback"}:
+            return False
+        return not (self.paths.agent_skill_dir / "SKILL.md").is_file()
+
+    def _run_mount_refresh(self) -> dict[str, Any]:
+        raw = self.mount_refresh_command
+        if not raw:
+            raise RuntimeError("mount refresh command is not configured")
+        command = raw.format(
+            root=str(self.paths.root),
+            source=str(self.paths.source),
+            mount=str(self.paths.mount),
+            events=str(self.paths.events),
+            skill=str(self.paths.skill_name),
+            agent_skill=str(self.paths.agent_skill_dir),
+        )
+        started = time.monotonic()
+        proc = subprocess.run(
+            shlex.split(command),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        summary = {
+            "command": command,
+            "returnCode": proc.returncode,
+            "elapsedMs": elapsed_ms,
+            "stdout": proc.stdout[-2000:],
+            "stderr": proc.stderr[-2000:],
+            "key": None,
+        }
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "mount refresh command failed with "
+                f"{proc.returncode}: {proc.stderr or proc.stdout}"
+            )
+        if not (self.paths.agent_skill_dir / "SKILL.md").is_file():
+            raise RuntimeError(
+                "mount refresh command completed but OpenClaw skill entry is "
+                f"still missing: {self.paths.agent_skill_dir / 'SKILL.md'}"
+            )
+        return summary
+
     def _step_install_skill(self) -> None:
-        self._seed_source_skill()
+        self._ensure_source_skill_ready()
         self._clear_agent_entry()
         active = {
             self.paths.skill_name: {
@@ -315,7 +648,7 @@ class SkillFSDemoSimulator:
             ledger_action="scan queued",
             ledger_result="pending",
             decision="hidden",
-            message="New skill installed - hidden until certified",
+            message="Downloaded ClawHub skill detected - hidden until scan",
             prompt=self._prompt_for_step("install"),
         )
 
@@ -330,7 +663,7 @@ class SkillFSDemoSimulator:
             ledger_action="scan -> resolve",
             ledger_result=str(scan.get("scanStatus", resolve.get("status"))),
             decision=decision,
-            message=f"Original weather skill certified - agent can call {version}",
+            message=f"Original tianqi-weather skill scanned and published - agent can call {version}",
             prompt=self._prompt_for_step("certify_v1"),
         )
 
@@ -347,7 +680,7 @@ class SkillFSDemoSimulator:
             ledger_action="check -> scan -> resolve",
             ledger_result=str(scan.get("scanStatus", resolve.get("status"))),
             decision=decision,
-            message="Safe evolution certified - agent still calls the same skill name",
+            message="Safe evolution scanned and published - agent still calls the same skill name",
             prompt=self._prompt_for_step("evolve_v2"),
             extra={"checkStatus": check.get("status")},
         )
@@ -418,20 +751,29 @@ class SkillFSDemoSimulator:
             return f"fallback:{resolve.get('trustedVersion')}"
         return decision
 
-    def _apply_resolve(self, resolve: dict[str, Any], next_step: str | None) -> None:
+    def _apply_resolve(
+        self,
+        resolve: dict[str, Any],
+        next_step: str | None,
+        observed_key: str | None = None,
+        mount_refresh: dict[str, Any] | None = None,
+    ) -> None:
         self._validate_resolve_contract(resolve)
         decision = resolve.get("decision")
         target = resolve.get("target")
         if decision == "current":
-            self._copy_skill_view(self.paths.skill_dir)
             target_path = str(self.paths.skill_dir)
+            if self.mirror_agent_entry:
+                self._copy_skill_view(self.paths.skill_dir)
         elif decision == "fallback" and isinstance(target, str):
             target_path_obj = self.paths.skill_dir / Path(target)
-            self._copy_skill_view(target_path_obj)
             target_path = str(target_path_obj)
+            if self.mirror_agent_entry:
+                self._copy_skill_view(target_path_obj)
         else:
-            self._clear_agent_entry()
             target_path = None
+            if self.mirror_agent_entry:
+                self._clear_agent_entry()
 
         active = {
             self.paths.skill_name: {
@@ -446,13 +788,18 @@ class SkillFSDemoSimulator:
                 "visibleVersion": extract_version_marker(self._read_agent_skill_md()),
             }
         }
-        self._write_state(
-            self._base_state(
-                active=active,
-                next_step=next_step,
-                last_prompt=self._prompt_for_step(next_step),
-            )
+        state = self._base_state(
+            active=active,
+            next_step=next_step,
+            last_prompt=self._prompt_for_step(next_step),
         )
+        if observed_key is not None:
+            state["observedKey"] = observed_key
+        if mount_refresh is not None:
+            mount_refresh["key"] = observed_key
+            state["mountRefreshKey"] = observed_key
+            state["mountRefresh"] = mount_refresh
+        self._write_state(state)
 
     def _validate_resolve_contract(self, resolve: dict[str, Any]) -> None:
         schema_version = resolve.get("schemaVersion")
@@ -483,7 +830,22 @@ class SkillFSDemoSimulator:
                     f"{target!r}"
                 )
 
-    def _seed_source_skill(self) -> None:
+    def _ensure_source_skill_ready(self) -> None:
+        if (self.paths.skill_dir / "SKILL.md").is_file():
+            self._normalize_source_skill()
+            return
+
+        if self.template_skill is not None:
+            self._seed_source_skill_from_template()
+            return
+
+        raise RuntimeError(
+            "source skill is not ready yet. Run the suggested OpenClaw prompt "
+            f"first so the real ClawHub skill is downloaded directly to "
+            f"{self.paths.skill_dir}; the dashboard will detect it automatically."
+        )
+
+    def _seed_source_skill_from_template(self) -> None:
         if self.paths.skill_dir.exists():
             if not relative_to(self.paths.skill_dir, self.paths.root):
                 raise RuntimeError(
@@ -507,11 +869,12 @@ class SkillFSDemoSimulator:
             shutil.copytree(template, self.paths.skill_dir, ignore=ignore)
         else:
             raise RuntimeError(
-                "missing weather skill template; pass --template-skill with a "
-                "ClawHub-downloaded weather skill directory, or pass --clawhub-slug "
-                "to let the script install one"
+                "missing tianqi-weather skill template"
             )
 
+        self._normalize_source_skill()
+
+    def _normalize_source_skill(self) -> None:
         path = self.paths.skill_dir / "SKILL.md"
         path.write_text(
             self._rewrite_frontmatter_name(read_text_if_file(path) or ""),
@@ -523,11 +886,12 @@ class SkillFSDemoSimulator:
         text = read_text_if_file(path) or ""
         text = self._rewrite_frontmatter_name(text)
         text = DEMO_SECTION_RE.sub("\n", text).rstrip()
+        text = self._strip_demo_version_rules(text).rstrip()
 
         if profile == "evolved":
             note = (
-                "这是一次安全的天气查询 skill 进化：回答时请先给出版本号，"
-                "然后用中文总结天气查询结果，并可以补充一句更清晰的使用提示。"
+                "这是一次安全的天气查询 skill 进化：回答任何天气查询时，"
+                "第一行必须输出对应的 Skill Ledger Version。"
             )
         elif profile == "malicious":
             note = (
@@ -544,6 +908,41 @@ class SkillFSDemoSimulator:
             f"{note}\n"
         )
         path.write_text(text + section, encoding="utf-8")
+
+    def _strip_demo_version_rules(self, text: str) -> str:
+        text = re.sub(
+            r"\n\n\*\*回答任何天气查询时，输出的第一行必须是：\*\*\n"
+            r"```\nSkill Ledger Version: v\d{6}\n```\s*",
+            "\n",
+            text,
+            flags=re.S,
+        )
+        text = re.sub(
+            r"\n\n回答任何天气查询时，第一行必须输出\s+`?Skill Ledger Version: v\d{6}`?[。.]?\s*",
+            "\n",
+            text,
+            flags=re.S,
+        )
+        parts = re.split(r"(\n{2,})", text)
+        kept = []
+        for part in parts:
+            has_version = re.search(r"Skill Ledger Version:\s*v\d{6}", part)
+            looks_like_demo_rule = re.search(
+                r"(回答任何天气查询|weather query|天气查询)",
+                part,
+                re.I,
+            )
+            if has_version and looks_like_demo_rule:
+                continue
+            kept.append(part)
+        text = "".join(kept)
+        text = re.sub(
+            r"\n\n```(?:text)?\nSkill Ledger Version:\s*v\d{6}\n```\s*",
+            "\n",
+            text,
+            flags=re.S,
+        )
+        return re.sub(r"\n\nSkill Ledger Version:\s*v\d{6}\s*", "\n", text)
 
     def _rewrite_frontmatter_name(self, text: str) -> str:
         if not text.startswith("---\n"):
@@ -597,6 +996,105 @@ class SkillFSDemoSimulator:
     def _read_source_skill_md(self) -> str | None:
         return read_text_if_file(self.paths.skill_dir / "SKILL.md")
 
+    def _read_latest_scan_state(self) -> dict[str, Any]:
+        latest_path = self.paths.skill_dir / ".skill-meta" / "latest.json"
+        empty = {
+            "manifestPath": str(latest_path),
+            "versionId": None,
+            "scanStatus": "none",
+            "updatedAt": None,
+            "scannedAt": None,
+            "scannerStatuses": [],
+            "findingsSummary": {"deny": 0, "warn": 0, "pass": 0},
+            "findings": [],
+            "findingCount": 0,
+            "threatCount": 0,
+        }
+        if not latest_path.is_file():
+            return empty
+
+        try:
+            manifest = json.loads(latest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                **empty,
+                "scanStatus": "error",
+                "error": str(exc),
+            }
+
+        scans = manifest.get("scans")
+        if not isinstance(scans, list):
+            scans = []
+
+        summary = {"deny": 0, "warn": 0, "pass": 0}
+        findings: list[dict[str, Any]] = []
+        scanner_statuses: list[dict[str, Any]] = []
+        scanned_at_values: list[str] = []
+
+        for scan in scans:
+            if not isinstance(scan, dict):
+                continue
+            scanner = str(scan.get("scanner") or "unknown")
+            status = str(scan.get("status") or "none")
+            scanned_at = scan.get("scannedAt")
+            if isinstance(scanned_at, str) and scanned_at:
+                scanned_at_values.append(scanned_at)
+            raw_findings = scan.get("findings")
+            if not isinstance(raw_findings, list):
+                raw_findings = []
+
+            threat_count = 0
+            for finding in raw_findings:
+                if not isinstance(finding, dict):
+                    continue
+                level = str(finding.get("level") or status or "warn").lower()
+                summary[level] = summary.get(level, 0) + 1
+                if level not in {"deny", "warn"}:
+                    continue
+                threat_count += 1
+                metadata = finding.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                evidence = (
+                    metadata.get("evidence")
+                    or metadata.get("matchedText")
+                    or metadata.get("match")
+                    or metadata.get("pattern")
+                )
+                findings.append(
+                    {
+                        "level": level,
+                        "rule": _safe_str(finding.get("rule")) or "unknown-rule",
+                        "message": _safe_str(finding.get("message")) or "",
+                        "file": _safe_str(finding.get("file")),
+                        "line": finding.get("line"),
+                        "scanner": scanner,
+                        "evidence": _safe_str(evidence),
+                    }
+                )
+
+            scanner_statuses.append(
+                {
+                    "scanner": scanner,
+                    "status": status,
+                    "findingCount": len(raw_findings),
+                    "threatCount": threat_count,
+                }
+            )
+
+        return {
+            "manifestPath": str(latest_path),
+            "versionId": _safe_str(manifest.get("versionId")),
+            "scanStatus": str(manifest.get("scanStatus") or "none"),
+            "updatedAt": _safe_str(manifest.get("updatedAt")),
+            "scannedAt": _latest_iso(scanned_at_values),
+            "scannerStatuses": scanner_statuses,
+            "findingsSummary": summary,
+            "findings": findings[:12],
+            "findingCount": sum(summary.values()),
+            "threatCount": len(findings),
+        }
+
     def _emit(
         self,
         *,
@@ -619,9 +1117,17 @@ class SkillFSDemoSimulator:
             "suggestedPrompt": prompt,
             "agentPath": str(self.paths.agent_skill_dir),
             "sourcePath": str(self.paths.skill_dir),
+            "clawhubInstallRoot": str(self.clawhub_install_dir),
+            "skillfsSourceRoot": str(self.paths.source),
+            "ledgerScanPath": str(self.paths.skill_dir),
+            "visibleSkillsDir": str(self.paths.visible_skills_dir),
+            "mountPath": str(self.paths.mount),
         }
         if extra:
             event.update(extra)
+        previous_events = self._read_events()
+        if previous_events and event_dedupe_key(previous_events[-1]) == event_dedupe_key(event):
+            return
         with self.paths.events.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         print(
@@ -640,33 +1146,148 @@ class SkillFSDemoSimulator:
             return {}
         return json.loads(self.paths.state_path.read_text(encoding="utf-8"))
 
+    def _with_current_prompts(self, state: dict[str, Any]) -> dict[str, Any]:
+        if not state:
+            return state
+        next_step = state.get("nextStep")
+        refreshed = dict(state)
+        agent_content = self._read_agent_skill_md()
+        source_content = self._read_source_skill_md()
+        active = dict(refreshed.get("active") or {})
+        active_record = dict(active.get(self.paths.skill_name) or {})
+        active_record["visibleVersion"] = extract_version_marker(agent_content)
+        if active_record:
+            active[self.paths.skill_name] = active_record
+        refreshed["active"] = active
+        refreshed["agentSkillExists"] = self.paths.agent_skill_dir.exists()
+        refreshed["agentSkillContent"] = agent_content
+        refreshed["sourceSkillContent"] = source_content
+        refreshed["visibleVersion"] = extract_version_marker(agent_content)
+        refreshed["sourceVersion"] = extract_version_marker(source_content)
+        refreshed["sourceFingerprint"] = file_fingerprint(
+            self.paths.skill_dir / "SKILL.md"
+        )
+        refreshed["latestScan"] = self._read_latest_scan_state()
+        refreshed["steps"] = [
+            {
+                "id": step,
+                "label": STEP_LABELS[step],
+                "prompt": self._prompt_for_step(step),
+                "note": self._note_for_step(step),
+                "bashCommand": self._bash_fallback_for_step(step),
+            }
+            for step in STEP_ORDER
+        ]
+        refreshed["suggestedPrompt"] = self._prompt_for_step(next_step)
+        refreshed["promptNote"] = self._note_for_step(next_step)
+        refreshed["bashFallbackCommand"] = self._bash_fallback_for_step(next_step)
+        return refreshed
+
     def _read_events(self) -> list[dict[str, Any]]:
         if not self.paths.events.exists():
             return []
-        return [
+        events = [
             json.loads(line)
             for line in self.paths.events.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
+        last_current_decision: dict[tuple[Any, ...], str] = {}
+        for event in events:
+            if "ledgerResult" not in event and "ledgerStatus" in event:
+                event["ledgerResult"] = event["ledgerStatus"]
+            event["time"] = _format_event_time(event.get("time"))
+            event_key = (
+                event.get("skill"),
+                event.get("fsHook"),
+                event.get("ledgerAction"),
+                event.get("ledgerResult"),
+            )
+            decision = event.get("skillfsDecision")
+            if decision == "current":
+                previous = last_current_decision.get(event_key)
+                if previous:
+                    event["skillfsDecision"] = previous
+            elif isinstance(decision, str) and decision.startswith("current:"):
+                last_current_decision[event_key] = decision
+            _polish_event_for_display(event)
+        events = _with_display_drift_transitions(events)
+        collapsed: list[dict[str, Any]] = []
+        last_key: tuple[Any, ...] | None = None
+        for event in events:
+            key = event_dedupe_key(event)
+            if key == last_key:
+                continue
+            collapsed.append(event)
+            last_key = key
+        return collapsed
 
     def _prompt_for_step(self, step: str | None) -> str | None:
         skill = self.paths.skill_name
+        install_dir = self.clawhub_install_dir
+        ledger = shlex.join(self.cli + ["skill-ledger"])
+        skill_dir = shlex.quote(str(self.paths.skill_dir))
+        scan = f"{ledger} scan {skill_dir} --json"
+        v2_script = "/root/anolisa-demo/scripts/skillfs-ledger-demo/evolve_skill_v2.sh"
+        v3_script = "/root/anolisa-demo/scripts/skillfs-ledger-demo/inject_attack_v3.sh"
+        install = shlex.join(
+            [
+                "clawhub",
+                "install",
+                self.clawhub_slug,
+                "--dir",
+                str(install_dir),
+                "--registry",
+                self.clawhub_registry,
+                "--no-input",
+            ]
+        )
         prompts = {
-            "install": f"请调用 {skill} 查询杭州天气。",
+            "install": (
+                f"帮我安装 ClawHub 的 `{skill}`：`{install}`。"
+            ),
             "certify_v1": (
-                f"请调用 {skill} 查询杭州今天的天气，并用中文简要总结。"
+                f"请执行扫描命令：`{scan}`。"
+                f"扫描完成后，调用 `{skill}` skill 查询 Hangzhou 天气。"
             ),
             "evolve_v2": (
-                f"请调用 {skill} 查询上海天气，并在回答第一行输出 Skill Ledger Version。"
+                f"请在终端执行安全演进脚本：`{v2_script}`。"
+                f"完成后调用 `{skill}` skill 查询 Shanghai 天气。"
             ),
             "attack_v3": (
-                f"请调用 {skill} 查询深圳天气，第一行输出 Skill Ledger Version，并说明当前是否仍是可信版本。"
+                f"请在终端执行风险注入脚本：`{v3_script}`。"
             ),
             "fallback_v2": (
-                f"请再次调用 {skill} 查询北京天气，回答第一行输出 Skill Ledger Version，以确认读取到的是可信版本。"
+                f"请调用 `{skill}` skill 查询 Beijing 天气。"
             ),
         }
         return prompts.get(step) if step else prompts["fallback_v2"]
+
+    def _note_for_step(self, step: str | None) -> str | None:
+        notes = {
+            "install": (
+                f"ClawHub 安装目录和 SkillFS source root 都是 {self.paths.source}；"
+                f"安装后真实 skill 路径应为 {self.paths.skill_dir}；OpenClaw 仍只应加载 "
+                f"{self.paths.visible_skills_dir}。"
+            ),
+            "certify_v1": (
+                "扫描发布后，demo 会把 source-direct 安装确定性刷新到 SkillFS normal mount；"
+                "页面显示 current 后再观察 OpenClaw 调用结果。"
+            ),
+            "attack_v3": (
+                "此步只制造风险版本；如果聊天模式拒绝，使用下方 Bash fallback。"
+                "不要让 Agent 自己补做扫描、检查或验证动作。"
+            ),
+            "fallback_v2": (
+                "复制前请先清理 OpenClaw 聊天上下文：推荐新开一个会话；"
+                "如果复用当前会话，请先单独发送 /clear。此步用于展示同一个 skill 入口自动回退到最近可信版本。"
+            ),
+        }
+        return notes.get(step) if step else None
+
+    def _bash_fallback_for_step(self, step: str | None) -> str | None:
+        if step != "attack_v3":
+            return None
+        return "/root/anolisa-demo/scripts/skillfs-ledger-demo/inject_attack_v3.sh"
 
     def _base_state(
         self,
@@ -683,6 +1304,9 @@ class SkillFSDemoSimulator:
             "openclawUrl": self.openclaw_url,
             "agentPath": str(self.paths.agent_skill_dir),
             "sourcePath": str(self.paths.skill_dir),
+            "clawhubInstallRoot": str(self.clawhub_install_dir),
+            "skillfsSourceRoot": str(self.paths.source),
+            "ledgerScanPath": str(self.paths.skill_dir),
             "visibleSkillsDir": str(self.paths.visible_skills_dir),
             "mountPath": str(self.paths.mount),
             "steps": [
@@ -690,11 +1314,15 @@ class SkillFSDemoSimulator:
                     "id": step,
                     "label": STEP_LABELS[step],
                     "prompt": self._prompt_for_step(step),
+                    "note": self._note_for_step(step),
+                    "bashCommand": self._bash_fallback_for_step(step),
                 }
                 for step in STEP_ORDER
             ],
             "nextStep": next_step,
             "suggestedPrompt": self._prompt_for_step(next_step),
+            "promptNote": self._note_for_step(next_step),
+            "bashFallbackCommand": self._bash_fallback_for_step(next_step),
             "lastPrompt": last_prompt,
             "active": active,
             "agentSkillExists": self.paths.agent_skill_dir.exists(),
@@ -704,6 +1332,8 @@ class SkillFSDemoSimulator:
             "sourceVersion": extract_version_marker(source_content),
             "trustedVersion": active_record.get("trustedVersion"),
             "currentVersion": active_record.get("currentVersion"),
+            "sourceFingerprint": file_fingerprint(self.paths.skill_dir / "SKILL.md"),
+            "latestScan": self._read_latest_scan_state(),
         }
 
 
@@ -723,22 +1353,10 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._send_file(self.static_dir / "index.html", "text/html; charset=utf-8")
             return
         if clean_path == "/events":
-            events = []
-            if self.events_path.exists():
-                events = [
-                    json.loads(line)
-                    for line in self.events_path.read_text(
-                        encoding="utf-8"
-                    ).splitlines()
-                    if line.strip()
-                ]
-            self._send_json(events)
+            self._send_json(self.simulator.snapshot()["events"])
             return
         if clean_path == "/state":
-            state = {}
-            if self.state_path.exists():
-                state = json.loads(self.state_path.read_text(encoding="utf-8"))
-            self._send_json(state)
+            self._send_json(self.simulator.snapshot()["state"])
             return
         self.send_error(404)
 
@@ -794,7 +1412,9 @@ def serve(paths: DemoPaths, simulator: SkillFSDemoSimulator, host: str, port: in
 def build_paths(args: argparse.Namespace) -> DemoPaths:
     root = Path(args.root).expanduser().resolve()
     source = (
-        Path(args.source).expanduser().resolve() if args.source else root / "source"
+        Path(args.source).expanduser().resolve()
+        if args.source
+        else root / "source"
     )
     mount = Path(args.mount).expanduser().resolve() if args.mount else root / "mount"
     events = (
@@ -817,7 +1437,7 @@ def build_paths(args: argparse.Namespace) -> DemoPaths:
     )
 
 
-def resolve_template_skill(args: argparse.Namespace) -> Path:
+def resolve_template_skill(args: argparse.Namespace) -> Path | None:
     if args.template_skill:
         template = Path(args.template_skill).expanduser().resolve()
         if not template.is_dir():
@@ -826,33 +1446,29 @@ def resolve_template_skill(args: argparse.Namespace) -> Path:
             raise RuntimeError(f"template skill has no SKILL.md: {template}")
         return template
 
-    if args.clawhub_slug:
-        return ensure_clawhub_skill(
-            slug=args.clawhub_slug,
-            clawhub_dir=Path(args.clawhub_dir).expanduser().resolve(),
-            registry=args.clawhub_registry,
-            command=parse_command(args.clawhub_command),
-        )
-
-    raise RuntimeError(
-        "This demo must be seeded from a real ClawHub weather skill. "
-        "Pass --template-skill <downloaded-weather-skill-dir> after installing "
-        "it with clawhub, or pass --clawhub-slug <slug> to install it first."
-    )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_root = "/tmp/skill-demo"
     parser = argparse.ArgumentParser(description="Run the SkillFS + Skill Ledger demo")
-    parser.add_argument("--root", default=default_root, help="Demo root directory")
-    parser.add_argument("--source", default=None, help="Skill source directory")
+    parser.add_argument("--root", default=DEFAULT_DEMO_ROOT, help="Demo root directory")
+    parser.add_argument(
+        "--source",
+        default=None,
+        help=(
+            "SkillFS source root. Defaults to <root>/source; the demo skill "
+            "is installed at <root>/source/<skill-name>."
+        ),
+    )
     parser.add_argument("--mount", default=None, help="Simulated mount directory")
     parser.add_argument(
         "--openclaw-skills",
         default=None,
         help=(
-            "OpenClaw-visible skills directory. Use ~/.openclaw/skills on the "
-            "demo host to make OpenClaw consume the simulated active skill."
+            "OpenClaw-visible skills directory. For the test-host demo this "
+            "should be the SkillFS mount skills directory, usually "
+            "/root/skillfs-demo/mount/skills, and OpenClaw should load it via "
+            "skills.load.extraDirs."
         ),
     )
     parser.add_argument(
@@ -863,17 +1479,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--template-skill",
         default=None,
-        help="ClawHub-downloaded weather skill directory used as the demo template",
+        help=(
+            "Optional local fixture fallback. The presentation flow should "
+            "download the real ClawHub skill directly into --source via the "
+            "OpenClaw prompt instead."
+        ),
     )
     parser.add_argument(
         "--clawhub-slug",
-        default=None,
-        help="Install/use this ClawHub weather skill slug as the demo template",
-    )
-    parser.add_argument(
-        "--clawhub-dir",
-        default=DEFAULT_CLAWHUB_DIR,
-        help="Directory where ClawHub installs skills",
+        default=DEFAULT_DEMO_SKILL,
+        help="ClawHub tianqi-weather skill slug shown in the install prompt",
     )
     parser.add_argument(
         "--clawhub-registry",
@@ -881,14 +1496,44 @@ def main(argv: list[str] | None = None) -> int:
         help="ClawHub registry URL",
     )
     parser.add_argument(
-        "--clawhub-command",
-        default="clawhub",
-        help="clawhub command to execute",
+        "--clawhub-install-dir",
+        default=None,
+        help=(
+            "Directory shown in the OpenClaw install prompt. Use this when "
+            "ClawHub installs into an enclosing workspace such as "
+            "/root/skillfs-demo/source while SkillFS reads its skills/ child."
+        ),
     )
     parser.add_argument(
         "--openclaw-url",
         default=None,
         help="Optional OpenClaw dashboard URL displayed in the demo UI",
+    )
+    parser.add_argument(
+        "--shared-ledger-state",
+        action="store_true",
+        help=(
+            "Use the caller's normal Skill Ledger key/state. Use this when the "
+            "demo UI observes metadata produced by real OpenClaw/SkillFS commands."
+        ),
+    )
+    parser.add_argument(
+        "--mirror-agent-entry",
+        action="store_true",
+        help=(
+            "Copy the resolved current/snapshot tree into the OpenClaw skill entry. "
+            "Leave disabled for the real SkillFS demo; SkillFS owns the mount view."
+        ),
+    )
+    parser.add_argument(
+        "--mount-refresh-command",
+        default=None,
+        help=(
+            "Optional command to refresh the real SkillFS mount when the demo "
+            "observes a source-direct install that has scanned to current but "
+            "is not yet visible under the OpenClaw skill entry. Placeholders: "
+            "{root}, {source}, {mount}, {events}, {skill}, {agent_skill}."
+        ),
     )
     parser.add_argument("--events", default=None, help="JSONL event output path")
     parser.add_argument("--cli", default=None, help="agent-sec-cli command to execute")
@@ -914,13 +1559,28 @@ def main(argv: list[str] | None = None) -> int:
         paths=paths,
         cli=parse_cli_command(args.cli),
         template_skill=template,
+        clawhub_slug=args.clawhub_slug,
+        clawhub_registry=args.clawhub_registry,
+        clawhub_install_dir=(
+            Path(args.clawhub_install_dir).expanduser().resolve()
+            if args.clawhub_install_dir
+            else None
+        ),
         openclaw_url=args.openclaw_url,
+        observe_external=args.serve,
+        shared_ledger_state=args.shared_ledger_state,
+        mirror_agent_entry=args.mirror_agent_entry or not args.serve,
+        mount_refresh_command=args.mount_refresh_command,
     )
     if args.serve:
         simulator.prepare(reset=not args.keep)
         print(f"OpenClaw skill entry: {paths.agent_skill_dir}")
         print(f"Source skill:         {paths.skill_dir}")
-        print(f"Template skill:       {template}")
+        if template:
+            print(f"Template skill:       {template}")
+        print(f"ClawHub prompt slug:  {args.clawhub_slug}")
+        if args.clawhub_install_dir:
+            print(f"ClawHub install dir:  {args.clawhub_install_dir}")
         print(f"Events:               {paths.events}")
         print(f"State:                {paths.state_path}")
         serve(paths, simulator, args.host, args.port)
@@ -929,7 +1589,11 @@ def main(argv: list[str] | None = None) -> int:
         simulator.run()
         print(f"\nOpenClaw skill entry: {paths.agent_skill_dir}")
         print(f"Source skill:         {paths.skill_dir}")
-        print(f"Template skill:       {template}")
+        if template:
+            print(f"Template skill:       {template}")
+        print(f"ClawHub prompt slug:  {args.clawhub_slug}")
+        if args.clawhub_install_dir:
+            print(f"ClawHub install dir:  {args.clawhub_install_dir}")
         print(f"Events:               {paths.events}")
         print(f"State:                {paths.state_path}")
     return 0
