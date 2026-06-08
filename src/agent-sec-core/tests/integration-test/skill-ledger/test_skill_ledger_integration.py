@@ -19,6 +19,7 @@ Prerequisites: Python 3.11, source tree
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -28,6 +29,9 @@ from pathlib import Path
 import agent_sec_cli.security_events as security_events
 import pytest
 from agent_sec_cli.cli import app as cli_app
+from agent_sec_cli.skill_ledger.core import resolver as resolver_core
+from agent_sec_cli.skill_ledger.core.resolver import resolve_activation
+from agent_sec_cli.skill_ledger.signing.ed25519 import NativeEd25519Backend
 from typer.testing import CliRunner
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -126,6 +130,31 @@ def read_latest_manifest(skill_dir: Path) -> dict:
     """Read ``.skill-meta/latest.json`` for assertions."""
     latest = skill_dir / ".skill-meta" / "latest.json"
     return json.loads(latest.read_text())
+
+
+def read_activation(skill_dir: Path) -> dict:
+    """Read ``.skill-meta/activation.json`` for assertions."""
+    activation = skill_dir / ".skill-meta" / "activation.json"
+    return json.loads(activation.read_text())
+
+
+def decode_xattr_activation(value: bytes) -> dict:
+    """Decode an activation xattr payload."""
+    return json.loads(value.decode("utf-8"))
+
+
+def resolve_skill_activation(skill_dir: Path, env_extra: dict) -> dict:
+    """Resolve activation using the same isolated env as CLI integration tests."""
+    previous = {key: os.environ.get(key) for key in env_extra}
+    os.environ.update(env_extra)
+    try:
+        return resolve_activation(str(skill_dir), NativeEd25519Backend())
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # ── Workspace ──────────────────────────────────────────────────────────────
@@ -436,7 +465,7 @@ def test_certify_auto_key_creation_warns_unencrypted(ws):
 
 
 def test_full_lifecycle_pass(ws):
-    """init-keys → check (none) → certify --findings (pass) → check (pass) → audit (valid)."""
+    """init-keys → check (none/read-only) → certify --findings (pass) → check (pass) → audit."""
     skill = make_skill(
         ws.skills_dir,
         "lifecycle-pass",
@@ -447,11 +476,12 @@ def test_full_lifecycle_pass(ws):
     )
     env = ws.env()
 
-    # check → auto-create → status=none
+    # check → status=none without creating a version
     r = run_skill_ledger(["check", str(skill)], env_extra=env)
     assert r.returncode == 0, f"check exit {r.returncode}: {r.stderr}"
     out = parse_json_output(r.stdout)
     assert out["status"] == "none", f"expected none, got {out}"
+    assert not (skill / ".skill-meta" / "latest.json").exists()
 
     # certify with pass findings
     findings = write_findings_file(
@@ -557,8 +587,8 @@ def test_lifecycle_with_warn_findings(ws):
 # ── Group 3: check state machine ──────────────────────────────────────────
 
 
-def test_check_no_manifest_auto_creates(ws):
-    """First check on new skill → auto-create manifest, status=none."""
+def test_check_no_manifest_is_read_only(ws):
+    """First check on new skill returns status=none without creating metadata."""
     skill = make_skill(ws.skills_dir, "check-new", {"f.txt": "hello"})
     env = ws.env()
 
@@ -566,10 +596,9 @@ def test_check_no_manifest_auto_creates(ws):
     assert r.returncode == 0
     out = parse_json_output(r.stdout)
     assert out["status"] == "none"
-
-    # .skill-meta/latest.json must exist
-    latest = skill / ".skill-meta" / "latest.json"
-    assert latest.exists(), f"latest.json not created: {list(skill.rglob('*'))}"
+    assert out["versionId"] is None
+    assert not (skill / ".skill-meta" / "latest.json").exists()
+    assert not (skill / ".skill-meta" / "versions").exists()
 
 
 def test_check_after_file_add_drifted(ws):
@@ -947,16 +976,22 @@ def test_certify_without_findings_errors(ws):
 
 
 def test_scan_auto_invoke_default_scanners(ws):
-    """scan auto-invokes default built-in scanners."""
+    """scan auto-invokes built-in scanners and creates the first signed snapshot."""
     skill = make_skill(ws.skills_dir, "scan-auto", {"f.txt": "f"})
     env = ws.env()
 
     r = run_skill_ledger(["scan", str(skill)], env_extra=env)
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
     out = parse_json_output(r.stdout)
+    assert out["versionId"] == "v000001"
+    assert out["newVersion"] is True
     assert out["scanStatus"] == "pass"
 
     manifest = read_latest_manifest(skill)
+    assert manifest["versionId"] == "v000001"
+    assert manifest["signature"] is not None
+    assert (skill / ".skill-meta" / "versions" / "v000001.json").is_file()
+    assert (skill / ".skill-meta" / "versions" / "v000001.snapshot").is_dir()
     scans = {scan["scanner"]: scan for scan in manifest["scans"]}
     assert "code-scanner" in scans
     assert "static-scanner" in scans
@@ -1375,6 +1410,299 @@ def test_audit_verify_snapshots(ws):
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr}"
     out = parse_json_output(r.stdout)
     assert out["valid"] is True
+
+
+def test_audit_verify_snapshots_rejects_symlink(ws):
+    """--verify-snapshots rejects symlinks added after snapshot creation."""
+    skill = make_skill(ws.skills_dir, "audit-snap-symlink", {"s.txt": "snapshot-test"})
+    env = ws.env()
+
+    findings = write_findings_file(
+        ws.fixtures,
+        "audit-snap-symlink.json",
+        [{"rule": "ok", "level": "pass", "message": "ok"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    outside = ws.root / "outside-secret.txt"
+    outside.write_text("secret")
+    (skill / ".skill-meta" / "versions" / "v000001.snapshot" / "escape").symlink_to(
+        outside
+    )
+
+    r = run_skill_ledger(
+        ["audit", str(skill), "--verify-snapshots"],
+        env_extra=env,
+    )
+    assert r.returncode == 1, f"expected invalid audit, got {r.stdout}"
+    out = parse_json_output(r.stdout)
+    assert out["valid"] is False
+    assert any("symbolic link" in err["error"] for err in out["errors"])
+
+
+# ── Group 6b: runtime activation resolver ─────────────────────────────────
+
+
+def test_resolve_no_manifest_writes_null_activation(ws, monkeypatch):
+    """resolve on a new skill exposes no runtime target and creates no version."""
+    skill = make_skill(ws.skills_dir, "resolve-new", {"f.txt": "new"})
+    env = ws.env()
+    xattr_calls = []
+
+    def fake_setxattr(path: str, name: str, value: bytes) -> None:
+        xattr_calls.append((path, name, value))
+
+    monkeypatch.setattr(resolver_core.os, "setxattr", fake_setxattr, raising=False)
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "none"
+    assert out["target"] is None
+    assert "reason" not in out
+    assert read_activation(skill) == {"schemaVersion": 1, "target": None}
+    assert out["activationXattr"] == {
+        "name": resolver_core.activation_xattr_name(),
+        "written": True,
+        "available": True,
+    }
+    assert len(xattr_calls) == 1
+    assert xattr_calls[0][0] == str(skill)
+    assert xattr_calls[0][1] == resolver_core.activation_xattr_name()
+    assert decode_xattr_activation(xattr_calls[0][2]) == {
+        "schemaVersion": 1,
+        "target": None,
+    }
+    assert not (skill / ".skill-meta" / "versions" / "v000001.json").exists()
+    assert not (skill / ".skill-meta" / "versions" / "v000001.snapshot").exists()
+
+
+def test_resolve_pass_targets_latest_snapshot(ws, monkeypatch):
+    """pass manifests activate their immutable snapshot."""
+    skill = make_skill(ws.skills_dir, "resolve-pass", {"tool.sh": "echo ok\n"})
+    env = ws.env()
+    xattr_calls = []
+
+    def fake_setxattr(path: str, name: str, value: bytes) -> None:
+        xattr_calls.append((path, name, value))
+
+    monkeypatch.setattr(resolver_core.os, "setxattr", fake_setxattr, raising=False)
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "pass"
+    assert out["activeVersionId"] == "v000001"
+    assert out["target"] == ".skill-meta/versions/v000001.snapshot"
+    assert read_activation(skill) == {
+        "schemaVersion": 1,
+        "target": ".skill-meta/versions/v000001.snapshot",
+    }
+    assert out["activationXattr"]["written"] is True
+    assert out["activationXattr"]["name"] == resolver_core.activation_xattr_name()
+    assert len(xattr_calls) == 1
+    assert xattr_calls[0][0] == str(skill)
+    assert xattr_calls[0][1] == resolver_core.activation_xattr_name()
+    assert decode_xattr_activation(xattr_calls[0][2]) == {
+        "schemaVersion": 1,
+        "target": ".skill-meta/versions/v000001.snapshot",
+    }
+    assert (skill / out["target"]).is_dir()
+
+
+def test_resolve_drifted_source_keeps_previous_pass_snapshot(ws):
+    """source changes remain candidate-only until a new pass snapshot is created."""
+    skill = make_skill(ws.skills_dir, "resolve-drift", {"data.txt": "v1"})
+    env = ws.env()
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-drift-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    (skill / "data.txt").write_text("v2 candidate")
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "drifted"
+    assert out["target"] == ".skill-meta/versions/v000001.snapshot"
+    assert "reason" not in out
+
+
+def test_resolve_xattr_failure_keeps_activation_file(ws, monkeypatch):
+    """xattr failures are best effort and do not break activation.json writes."""
+    skill = make_skill(ws.skills_dir, "resolve-xattr-failure", {"data.txt": "v1"})
+    env = ws.env()
+
+    def fail_setxattr(path: str, name: str, value: bytes) -> None:
+        raise OSError("xattr unavailable")
+
+    monkeypatch.setattr(resolver_core.os, "setxattr", fail_setxattr, raising=False)
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["target"] is None
+    assert read_activation(skill) == {"schemaVersion": 1, "target": None}
+    assert out["activationXattr"]["name"] == resolver_core.activation_xattr_name()
+    assert out["activationXattr"]["written"] is False
+    assert out["activationXattr"]["available"] is True
+    assert "xattr unavailable" in out["activationXattr"]["error"]
+
+
+def test_resolve_missing_xattr_support_keeps_activation_file(ws, monkeypatch):
+    """Platforms without os.setxattr still persist activation.json."""
+    skill = make_skill(ws.skills_dir, "resolve-xattr-missing", {"data.txt": "v1"})
+    env = ws.env()
+    monkeypatch.delattr(resolver_core.os, "setxattr", raising=False)
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["target"] is None
+    assert read_activation(skill) == {"schemaVersion": 1, "target": None}
+    assert out["activationXattr"] == {
+        "name": resolver_core.activation_xattr_name(),
+        "written": False,
+        "available": False,
+        "error": "os.setxattr unavailable",
+    }
+
+
+def test_resolve_warn_latest_falls_back_to_previous_pass_snapshot(ws):
+    """default pass_only policy does not activate warn snapshots."""
+    skill = make_skill(ws.skills_dir, "resolve-warn", {"data.txt": "v1"})
+    env = ws.env()
+    pass_findings = write_findings_file(
+        ws.fixtures,
+        "resolve-warn-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    warn_findings = write_findings_file(
+        ws.fixtures,
+        "resolve-warn-warn.json",
+        [{"rule": "warn", "level": "warn", "message": "warning"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(pass_findings)], env_extra=env
+    )
+    (skill / "data.txt").write_text("v2 warning")
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(warn_findings)], env_extra=env
+    )
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "warn"
+    assert out["activeVersionId"] == "v000001"
+    assert out["target"] == ".skill-meta/versions/v000001.snapshot"
+
+
+def test_resolve_tampered_latest_uses_previous_trusted_version_file(ws):
+    """tampering latest.json does not prevent fallback to intact version history."""
+    skill = make_skill(ws.skills_dir, "resolve-tamper", {"data.txt": "v1"})
+    env = ws.env()
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-tamper-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    latest = skill / ".skill-meta" / "latest.json"
+    data = json.loads(latest.read_text())
+    data["scanStatus"] = "deny"
+    latest.write_text(json.dumps(data))
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "tampered"
+    assert out["target"] == ".skill-meta/versions/v000001.snapshot"
+
+
+def test_resolve_skips_pass_version_when_snapshot_hash_mismatches(ws):
+    """activation never points at a snapshot whose files no longer match manifest."""
+    skill = make_skill(ws.skills_dir, "resolve-bad-snapshot", {"data.txt": "v1"})
+    env = ws.env()
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-bad-snapshot-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+    (skill / ".skill-meta" / "versions" / "v000001.snapshot" / "data.txt").write_text(
+        "tampered snapshot"
+    )
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "pass"
+    assert out["target"] is None
+    assert read_activation(skill) == {"schemaVersion": 1, "target": None}
+
+
+def test_resolve_skips_version_file_with_mismatched_manifest_id(ws):
+    """activation must verify and target the same version id."""
+    skill = make_skill(ws.skills_dir, "resolve-version-mismatch", {"data.txt": "v1"})
+    env = ws.env()
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-version-mismatch-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    versions = skill / ".skill-meta" / "versions"
+    shutil.copy2(versions / "v000001.json", versions / "v999999.json")
+    bad_snapshot = versions / "v999999.snapshot"
+    bad_snapshot.mkdir()
+    (bad_snapshot / "data.txt").write_text("malicious runtime")
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["activeVersionId"] == "v000001"
+    assert out["target"] == ".skill-meta/versions/v000001.snapshot"
+    assert read_activation(skill)["target"] == ".skill-meta/versions/v000001.snapshot"
+
+
+def test_resolve_rejects_snapshot_with_symlink(ws):
+    """activation never exposes a snapshot containing symlinks."""
+    skill = make_skill(ws.skills_dir, "resolve-snapshot-symlink", {"data.txt": "v1"})
+    env = ws.env()
+    findings = write_findings_file(
+        ws.fixtures,
+        "resolve-snapshot-symlink-pass.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    outside = ws.root / "outside-runtime.txt"
+    outside.write_text("secret")
+    (skill / ".skill-meta" / "versions" / "v000001.snapshot" / "escape").symlink_to(
+        outside
+    )
+
+    out = resolve_skill_activation(skill, env)
+
+    assert out["status"] == "pass"
+    assert out["target"] is None
+    assert read_activation(skill) == {"schemaVersion": 1, "target": None}
 
 
 # ── Group 7: status command ───────────────────────────────────────────────

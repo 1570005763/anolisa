@@ -4,7 +4,7 @@ These tests protect the configuration-layer invariants:
 1. Defaults stay enabled unless explicitly disabled.
 2. Dynamic discovery entries are stored in managedSkillDirs.
 3. SKILL.md gate — glob resolution only includes dirs with SKILL.md.
-4. Auto-remember — check/certify auto-append uncovered skill dirs.
+4. Auto-remember — scan/certify auto-append uncovered skill dirs.
 5. Compact — specific paths subsumed by a glob are pruned.
 """
 

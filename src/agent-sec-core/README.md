@@ -261,10 +261,10 @@ Ed25519-based integrity ledger for skill directories. Tracks file hashes, versio
 # Initialize keys and baseline covered skills
 agent-sec-cli skill-ledger init
 
-# Check integrity (creates unsigned baseline on first run)
+# Check integrity without modifying ledger metadata
 agent-sec-cli skill-ledger check /path/to/skill
 
-# Quick scan and sign
+# Quick scan, create/update a signed version, and snapshot
 agent-sec-cli skill-ledger scan /path/to/skill
 
 # System health overview

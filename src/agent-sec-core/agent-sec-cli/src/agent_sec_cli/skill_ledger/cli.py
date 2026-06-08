@@ -26,7 +26,7 @@ app = typer.Typer(
         "  6. audit     Deep-verify the full version history\n\n"
         "Integrity statuses:\n\n"
         "  pass      Files unchanged, signature valid, scan clean\n"
-        "  none      Never scanned — baseline will be created on first check\n"
+        "  none      Never scanned — no signed manifest is available\n"
         "  drifted   Skill files changed since last certification\n"
         "  warn      Scan found low-risk issues\n"
         "  deny      Scan found high-risk issues\n"
@@ -178,7 +178,7 @@ def cmd_check(
     the digital signature. Possible statuses:
 
       pass      Files unchanged, signature valid, scan clean
-      none      Never scanned — a baseline manifest is created automatically
+      none      Never scanned — no signed manifest is available
       drifted   Skill files changed since last certification
       warn      Signature valid, but scan found low-risk issues
       deny      Signature valid, but scan found high-risk issues

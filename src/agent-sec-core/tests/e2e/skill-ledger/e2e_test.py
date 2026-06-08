@@ -389,16 +389,17 @@ def case_lifecycle_with_warn_findings(ws: Workspace):
 # ── G4: check state machine ──────────────────────────────────────────────
 
 
-def case_check_no_manifest_auto_creates(ws: Workspace):
-    """First check on new skill → auto-create manifest, status=none."""
+def case_check_no_manifest_is_read_only(ws: Workspace):
+    """First check on new skill → status=none without writing metadata."""
     skill = make_skill(ws.skills_dir, "check-new", {"f.txt": "hello"})
     env = ws.env()
     r = run_skill_ledger(["check", str(skill)], env_extra=env)
     assert r.returncode == 0
     out = parse_json_output(r.stdout)
     assert out["status"] == "none"
-    latest = skill / ".skill-meta" / "latest.json"
-    assert latest.exists(), f"latest.json not created: {list(skill.rglob('*'))}"
+    assert out["versionId"] is None
+    assert not (skill / ".skill-meta" / "latest.json").exists()
+    assert not (skill / ".skill-meta" / "versions").exists()
 
 
 def case_check_after_file_add_drifted(ws: Workspace):
@@ -990,8 +991,8 @@ def case_contract_manifest_path(ws: Workspace):
     latest = skill / ".skill-meta" / "latest.json"
     assert latest.exists(), f"Manifest not at expected path: {list(skill.rglob('*'))}"
     data = json.loads(latest.read_text())
-    for field in ("versionId", "fileHashes", "scanStatus", "signature"):
-        assert field in data, f"Missing '{field}' in manifest"
+    for manifest_field in ("versionId", "fileHashes", "scanStatus", "signature"):
+        assert manifest_field in data, f"Missing '{manifest_field}' in manifest"
 
 
 def case_contract_check_status_values_complete(ws: Workspace):
@@ -1426,8 +1427,8 @@ def run_all_cases() -> int:
 
         # G4: check state machine
         run_case(
-            "G4: no manifest → auto-create",
-            lambda: case_check_no_manifest_auto_creates(ws),
+            "G4: no manifest → none/read-only",
+            lambda: case_check_no_manifest_is_read_only(ws),
         )
         run_case(
             "G4: file added → drifted", lambda: case_check_after_file_add_drifted(ws)

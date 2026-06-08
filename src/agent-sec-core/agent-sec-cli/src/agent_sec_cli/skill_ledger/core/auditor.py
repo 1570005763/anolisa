@@ -11,7 +11,7 @@ Implements ``agent-sec-cli skill-ledger audit <skill_dir> [--verify-snapshots]``
 from typing import Any
 
 from agent_sec_cli.skill_ledger.core.file_hasher import (
-    compute_file_hashes,
+    compute_snapshot_file_hashes,
     diff_file_hashes,
 )
 from agent_sec_cli.skill_ledger.core.version_chain import (
@@ -121,18 +121,27 @@ def audit(
         if verify_snapshots:
             snap_path = snapshot_dir_path(skill_dir, vid)
             if snap_path.is_dir():
-                snap_hashes = compute_file_hashes(str(snap_path))
-                diff = diff_file_hashes(manifest.fileHashes, snap_hashes)
-                if not diff["match"]:
+                try:
+                    snap_hashes = compute_snapshot_file_hashes(str(snap_path))
+                except ValueError as exc:
                     errors.append(
                         {
                             "versionId": vid,
-                            "error": (
-                                f"Snapshot mismatch — added: {diff['added']}, "
-                                f"removed: {diff['removed']}, modified: {diff['modified']}"
-                            ),
+                            "error": f"Snapshot invalid — {exc}",
                         }
                     )
+                else:
+                    diff = diff_file_hashes(manifest.fileHashes, snap_hashes)
+                    if not diff["match"]:
+                        errors.append(
+                            {
+                                "versionId": vid,
+                                "error": (
+                                    f"Snapshot mismatch — added: {diff['added']}, "
+                                    f"removed: {diff['removed']}, modified: {diff['modified']}"
+                                ),
+                            }
+                        )
             else:
                 errors.append(
                     {

@@ -261,7 +261,7 @@ agent-sec-cli verify
 # 初始化密钥并为已覆盖 Skill 建立 baseline
 agent-sec-cli skill-ledger init
 
-# 检查完整性（首次运行自动创建无签名基线）
+# 检查完整性，不修改 ledger 元数据
 agent-sec-cli skill-ledger check /path/to/skill
 
 # 快速扫描并签名

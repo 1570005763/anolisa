@@ -136,20 +136,18 @@ class TestCheckStateMachine(SkillDirTestCase):
     Each represents a distinct security posture.
     """
 
-    def test_no_manifest_creates_one_returns_none(self):
-        """First check on a fresh skill → auto-create manifest, status=none."""
+    def test_no_manifest_returns_none_read_only(self):
+        """First check on a fresh skill is read-only and returns status=none."""
         result = check(self.skill_dir, self.backend)
         self.assertEqual(result["status"], "none")
-        # .skill-meta/latest.json should now exist
+        # check is read-only; scan/certify are responsible for creating versions.
         latest = os.path.join(self.skill_dir, ".skill-meta", "latest.json")
-        self.assertTrue(os.path.isfile(latest))
-        # Enriched metadata must be present
+        self.assertFalse(os.path.exists(latest))
         self.assertEqual(result["skillName"], "test-skill")
-        self.assertIn("versionId", result)
-        self.assertIn("createdAt", result)
-        self.assertIn("updatedAt", result)
-        self.assertIn("fileCount", result)
-        self.assertIn("manifestHash", result)
+        self.assertIsNone(result["versionId"])
+        self.assertIsNone(result["createdAt"])
+        self.assertIsNone(result["updatedAt"])
+        self.assertIsNone(result["manifestHash"])
         self.assertIsInstance(result["fileCount"], int)
 
     def test_unchanged_after_certify_pass(self):
@@ -170,8 +168,10 @@ class TestCheckStateMachine(SkillDirTestCase):
 
     def test_drifted_after_file_change(self):
         """Modifying a skill file → check returns drifted."""
-        # First, establish a signed manifest
-        check(self.skill_dir, self.backend)
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
         # Modify a file
         self._write_file("run.sh", "#!/bin/bash\necho MODIFIED\n")
         result = check(self.skill_dir, self.backend)
@@ -180,7 +180,10 @@ class TestCheckStateMachine(SkillDirTestCase):
 
     def test_drifted_on_file_added(self):
         """Adding a new file → check returns drifted with added list."""
-        check(self.skill_dir, self.backend)
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
         self._write_file("new_file.py", "print('hello')\n")
         result = check(self.skill_dir, self.backend)
         self.assertEqual(result["status"], "drifted")
@@ -188,7 +191,10 @@ class TestCheckStateMachine(SkillDirTestCase):
 
     def test_drifted_on_file_removed(self):
         """Removing a file → check returns drifted with removed list."""
-        check(self.skill_dir, self.backend)
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
         os.remove(os.path.join(self.skill_dir, "run.sh"))
         result = check(self.skill_dir, self.backend)
         self.assertEqual(result["status"], "drifted")
@@ -196,12 +202,15 @@ class TestCheckStateMachine(SkillDirTestCase):
 
     def test_tampered_manifest_hash(self):
         """Directly editing the manifest JSON → tampered (hash mismatch)."""
-        check(self.skill_dir, self.backend)  # creates unsigned baseline manifest
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
         latest = os.path.join(self.skill_dir, ".skill-meta", "latest.json")
         with open(latest, "r") as f:
             data = json.load(f)
         # Tamper: change scanStatus without re-hashing
-        data["scanStatus"] = "pass"
+        data["scanStatus"] = "deny"
         with open(latest, "w") as f:
             json.dump(data, f)
         result = check(self.skill_dir, self.backend)
@@ -209,7 +218,6 @@ class TestCheckStateMachine(SkillDirTestCase):
 
     def test_tampered_wrong_key_signature(self):
         """Signing with a different key → tampered (signature mismatch)."""
-        # certify first to create a signed manifest (auto-create is unsigned)
         findings_path = self._write_findings(
             [{"rule": "r1", "level": "pass", "message": "ok"}]
         )
@@ -429,8 +437,6 @@ class TestCertifyWorkflow(SkillDirTestCase):
 
     def test_scan_mode_no_crash(self):
         """Scan runs default built-in scanners."""
-        # First create a manifest
-        check(self.skill_dir, self.backend)
         result = scan_skill(self.skill_dir, self.backend)
         self.assertIn("versionId", result)
         self.assertEqual(result["scanStatus"], "pass")
