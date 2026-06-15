@@ -626,6 +626,7 @@ def test_check_no_manifest_is_read_only(ws):
     out = parse_json_output(r.stdout)
     assert out["status"] == "none"
     assert out["versionId"] is None
+    assert out["fileCount"] is None
     assert not (skill / ".skill-meta" / "latest.json").exists()
     assert not (skill / ".skill-meta" / "versions").exists()
 
@@ -1416,6 +1417,43 @@ def test_audit_tampered_version_file(ws):
     assert len(out["errors"]) > 0
 
 
+def test_audit_corrupted_version_file_reports_error_without_traceback(ws):
+    """Malformed version JSON is reported as audit data instead of crashing."""
+    skill = make_skill(ws.skills_dir, "audit-corrupt-json", {"f.txt": "v1"})
+    env = ws.env()
+
+    findings = write_findings_file(
+        ws.fixtures,
+        "audit-corrupt-json.json",
+        [{"rule": "ok", "level": "pass", "message": "pass"}],
+    )
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+    (skill / "f.txt").write_text("v2")
+    run_skill_ledger(
+        ["certify", str(skill), "--findings", str(findings)], env_extra=env
+    )
+
+    (skill / ".skill-meta" / "versions" / "v000001.json").write_text("{not-json")
+
+    r = run_skill_ledger(["audit", str(skill)], env_extra=env)
+
+    assert r.returncode == 1
+    assert "Traceback" not in r.stderr
+    out = parse_json_output(r.stdout)
+    assert out["valid"] is False
+    assert out["versions_checked"] == 2
+    assert any(
+        error["versionId"] == "v000001" and "corrupted" in error["error"]
+        for error in out["errors"]
+    )
+    assert any(
+        error["versionId"] == "v000002" and "prior version manifest" in error["error"]
+        for error in out["errors"]
+    )
+
+
 def test_audit_verify_snapshots(ws):
     """--verify-snapshots validates snapshot file hashes match manifest."""
     skill = make_skill(ws.skills_dir, "audit-snap", {"s.txt": "snapshot-test"})
@@ -1499,6 +1537,7 @@ def test_resolve_no_manifest_writes_null_activation(ws, monkeypatch):
     assert len(xattr_calls) == 1
     assert xattr_calls[0][0] == str(skill)
     assert xattr_calls[0][1] == resolver_core.activation_xattr_name()
+    assert xattr_calls[0][2] == (skill / ".skill-meta" / "activation.json").read_bytes()
     assert decode_xattr_activation(xattr_calls[0][2]) == {
         "schemaVersion": 1,
         "target": None,
@@ -1540,6 +1579,7 @@ def test_resolve_pass_targets_latest_snapshot(ws, monkeypatch):
     assert len(xattr_calls) == 1
     assert xattr_calls[0][0] == str(skill)
     assert xattr_calls[0][1] == resolver_core.activation_xattr_name()
+    assert xattr_calls[0][2] == (skill / ".skill-meta" / "activation.json").read_bytes()
     assert decode_xattr_activation(xattr_calls[0][2]) == {
         "schemaVersion": 1,
         "target": ".skill-meta/versions/v000001.snapshot",
@@ -1646,6 +1686,34 @@ def test_resolve_missing_xattr_support_keeps_activation_file(ws, monkeypatch):
         "available": False,
         "error": "os.setxattr unavailable",
     }
+
+
+def test_resolve_without_writing_reports_stable_xattr_status(ws):
+    """Dry-run activation exposes a stable activationXattr debug shape."""
+    skill = make_skill(ws.skills_dir, "resolve-dry-run", {"data.txt": "v1"})
+    env = ws.env()
+    previous = {key: os.environ.get(key) for key in env}
+    os.environ.update(env)
+    try:
+        out = resolver_core.resolve_activation(
+            str(skill),
+            NativeEd25519Backend(),
+            write_activation=False,
+        )
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    assert out["activationXattr"] == {
+        "name": resolver_core.activation_xattr_name(),
+        "written": False,
+        "available": False,
+        "skipped": True,
+    }
+    assert not (skill / ".skill-meta" / "activation.json").exists()
 
 
 def test_resolve_warn_latest_falls_back_to_previous_pass_snapshot(ws):

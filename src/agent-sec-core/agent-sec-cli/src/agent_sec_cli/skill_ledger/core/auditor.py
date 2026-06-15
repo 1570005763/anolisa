@@ -27,6 +27,7 @@ from agent_sec_cli.skill_ledger.core.version_chain import (
 )
 from agent_sec_cli.skill_ledger.signing.base import SigningBackend
 from agent_sec_cli.skill_ledger.utils import validate_skill_dir
+from pydantic import ValidationError
 
 
 def audit(
@@ -55,7 +56,17 @@ def audit(
     prev_signature: str | None = None
 
     for vid in version_ids:
-        manifest = load_version_manifest(skill_dir, vid)
+        try:
+            manifest = load_version_manifest(skill_dir, vid)
+        except (ValueError, ValidationError) as exc:
+            errors.append(
+                {
+                    "versionId": vid,
+                    "error": f"Version manifest {vid}.json is corrupted: {exc}",
+                }
+            )
+            prev_signature = None
+            continue
 
         if manifest is None:
             errors.append(
@@ -158,7 +169,16 @@ def audit(
             prev_signature = None
 
     # Verify latest.json consistency
-    latest = load_latest_manifest(skill_dir)
+    try:
+        latest = load_latest_manifest(skill_dir)
+    except (ValueError, ValidationError) as exc:
+        errors.append(
+            {
+                "versionId": "latest.json",
+                "error": f"latest.json is corrupted: {exc}",
+            }
+        )
+        latest = None
     if latest is not None and version_ids:
         expected_latest_vid = version_ids[-1]
         if latest.versionId != expected_latest_vid:

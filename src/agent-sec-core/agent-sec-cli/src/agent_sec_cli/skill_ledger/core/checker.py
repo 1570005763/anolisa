@@ -4,7 +4,7 @@ Implements ``agent-sec-cli skill-ledger check <skill_dir>``:
 
 1. Read ``latest.json``
 2. Missing → ``{"status": "none"}``
-3. Compute current fileHashes, compare
+3. Manifest present → compute current fileHashes, compare
 4. Mismatch → ``{"status": "drifted", "added": ..., "removed": ..., "modified": ...}``
 5. Match → verify signature → invalid → ``{"status": "tampered", "reason": ...}``
 6. Check scanStatus → ``deny`` / ``warn`` / ``none`` / ``pass``
@@ -83,10 +83,7 @@ def check(skill_dir: str, backend: SigningBackend) -> dict[str, Any]:
         # File doesn't exist and some other error — treat as missing
         manifest = None
 
-    # Step 2: Compute current file hashes
-    current_hashes = compute_file_hashes(skill_dir)
-
-    # Step 2b: No manifest → read-only none.  scan/certify are the only
+    # Step 2: No manifest → read-only none.  scan/certify are the only
     # commands that create signed versions and snapshots.
     if manifest is None:
         return {
@@ -95,17 +92,20 @@ def check(skill_dir: str, backend: SigningBackend) -> dict[str, Any]:
             "versionId": None,
             "createdAt": None,
             "updatedAt": None,
-            "fileCount": len(current_hashes),
+            "fileCount": None,
             "manifestHash": None,
         }
+
+    # Step 3: Compute current file hashes
+    current_hashes = compute_file_hashes(skill_dir)
 
     # Manifest loaded — compute standard metadata for all subsequent returns
     meta = _manifest_metadata(manifest, skill_dir)
 
-    # Step 3: Compare fileHashes (takes priority over signature verification)
+    # Step 4: Compare fileHashes (takes priority over signature verification)
     diff = diff_file_hashes(manifest.fileHashes, current_hashes)
 
-    # Step 4: Mismatch → drifted
+    # Step 5: Mismatch → drifted
     if not diff["match"]:
         return {
             **meta,
@@ -115,8 +115,8 @@ def check(skill_dir: str, backend: SigningBackend) -> dict[str, Any]:
             "modified": diff["modified"],
         }
 
-    # Step 5: fileHashes match → verify signature
-    # 5a: Recompute manifestHash
+    # Step 6: fileHashes match → verify signature
+    # 6a: Recompute manifestHash
     hash_error = manifest_hash_error(manifest)
     if hash_error is not None:
         return {
@@ -125,7 +125,7 @@ def check(skill_dir: str, backend: SigningBackend) -> dict[str, Any]:
             "reason": hash_error,
         }
 
-    # 5b: Verify digital signature
+    # 6b: Verify digital signature
     signature_valid, signature_error = verify_manifest_signature(manifest, backend)
     if not signature_valid and signature_error == MISSING_SIGNATURE_ERROR:
         # Legacy manifest without signature — treat as "none" (backward compat)
@@ -137,7 +137,7 @@ def check(skill_dir: str, backend: SigningBackend) -> dict[str, Any]:
     if not signature_valid:
         return {**meta, "status": "tampered", "reason": signature_error}
 
-    # Step 6: Signature valid → dispatch on scanStatus
+    # Step 7: Signature valid → dispatch on scanStatus
     scan_status = manifest.scanStatus
 
     if scan_status == "deny":

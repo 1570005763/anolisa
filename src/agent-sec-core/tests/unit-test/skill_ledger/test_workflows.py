@@ -181,7 +181,18 @@ class TestCheckStateMachine(SkillDirTestCase):
         self.assertIsNone(result["createdAt"])
         self.assertIsNone(result["updatedAt"])
         self.assertIsNone(result["manifestHash"])
-        self.assertIsInstance(result["fileCount"], int)
+        self.assertIsNone(result["fileCount"])
+
+    def test_no_manifest_does_not_hash_files(self):
+        """A fresh skill returns none without walking and hashing the tree."""
+        with patch(
+            "agent_sec_cli.skill_ledger.core.checker.compute_file_hashes",
+            side_effect=AssertionError("fresh skill should not be hashed"),
+        ):
+            result = check(self.skill_dir, self.backend)
+
+        self.assertEqual(result["status"], "none")
+        self.assertIsNone(result["fileCount"])
 
     def test_unchanged_after_certify_pass(self):
         """certify with all-pass findings → check returns pass with enriched metadata."""
@@ -576,6 +587,45 @@ class TestAuditChainIntegrity(SkillDirTestCase):
         self.assertFalse(result["valid"])
         error_msgs = [e["error"] for e in result["errors"]]
         self.assertTrue(any("manifestHash" in msg for msg in error_msgs))
+
+    def test_corrupted_version_manifest_does_not_abort_audit(self):
+        """Malformed version JSON is reported while later versions are still audited."""
+        findings_path = self._write_findings(
+            [
+                {"rule": "r1", "level": "pass", "message": "ok"},
+            ]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+        self._write_file("run.sh", "#!/bin/bash\necho v2\n")
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+
+        v1_file = os.path.join(
+            self.skill_dir,
+            ".skill-meta",
+            "versions",
+            "v000001.json",
+        )
+        with open(v1_file, "w") as f:
+            f.write("{not-json")
+
+        result = audit(self.skill_dir, self.backend)
+
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["versions_checked"], 2)
+        errors = result["errors"]
+        self.assertTrue(
+            any(
+                error["versionId"] == "v000001" and "corrupted" in error["error"]
+                for error in errors
+            )
+        )
+        self.assertTrue(
+            any(
+                error["versionId"] == "v000002"
+                and "prior version manifest" in error["error"]
+                for error in errors
+            )
+        )
 
     def test_broken_chain_detected(self):
         """Corrupting previousManifestSignature → audit detects chain break."""

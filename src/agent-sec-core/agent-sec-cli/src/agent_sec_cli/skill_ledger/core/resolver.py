@@ -85,7 +85,11 @@ def resolve_activation(
         active_version, target = candidate
 
     activation = {"schemaVersion": SCHEMA_VERSION, "target": target}
-    activation_xattr = _activation_xattr_status(written=False, skipped=True)
+    activation_xattr = _activation_xattr_status(
+        written=False,
+        available=False,
+        skipped=True,
+    )
     if write_activation:
         activation_xattr = write_activation_contract(skill_dir, activation)
 
@@ -147,12 +151,7 @@ def write_activation_xattr(
         )
 
     contract = _minimal_activation_contract(activation)
-    payload = json.dumps(
-        contract,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    payload = serialize_activation_contract(contract)
     try:
         setxattr(str(Path(skill_dir)), ACTIVATION_XATTR, payload)
     except OSError as exc:
@@ -193,6 +192,17 @@ def _minimal_activation_contract(activation: dict[str, Any]) -> dict[str, Any]:
     return {"schemaVersion": SCHEMA_VERSION, "target": activation.get("target")}
 
 
+def serialize_activation_contract(activation: dict[str, Any]) -> bytes:
+    """Return the stable UTF-8 JSON payload used by file and xattr contracts."""
+    contract = _minimal_activation_contract(activation)
+    return json.dumps(
+        contract,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
 def _activation_xattr_status(
     *,
     written: bool,
@@ -217,9 +227,8 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
-        with open(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-            fh.write("\n")
+        with open(fd, "wb") as fh:
+            fh.write(serialize_activation_contract(data))
             fh.flush()
         os.replace(tmp_path, path)
     except BaseException:
