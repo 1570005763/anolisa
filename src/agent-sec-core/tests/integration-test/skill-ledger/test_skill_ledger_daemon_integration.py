@@ -37,6 +37,13 @@ def read_latest(skill_dir: Path) -> dict[str, Any]:
     return json.loads((skill_dir / ".skill-meta" / "latest.json").read_text())
 
 
+def read_skill_ledger_config(root: Path) -> dict[str, Any]:
+    """Read isolated Skill Ledger config."""
+    return json.loads(
+        (root / "xdg_config" / "agent-sec" / "skill-ledger" / "config.json").read_text()
+    )
+
+
 async def wait_for(
     predicate,
     *,
@@ -108,15 +115,17 @@ def test_daemon_notify_scans_and_writes_activation(monkeypatch, tmp_path: Path):
                 "daemon.health",
                 request_id="health-after-notify",
             )
+            config = read_skill_ledger_config(tmp_path)
         finally:
             await server.stop()
-        return response, activation, health
+        return response, activation, health, config
 
-    response, activation, health = asyncio.run(scenario())
+    response, activation, health, config = asyncio.run(scenario())
 
     assert response.ok is True
     assert response.data["accepted"] is True
     assert response.data["ignored"] is False
+    assert str(skill_dir) in config["managedSkillDirs"]
     assert activation["schemaVersion"] == 1
     assert activation["target"] == ".skill-meta/versions/v000001.snapshot"
     assert (skill_dir / activation["target"]).is_dir()

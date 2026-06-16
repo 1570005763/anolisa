@@ -120,7 +120,7 @@ skill_ledger.skillfs_notify_change
 | 字段 | 类型 | 枚举 / 约束 | 说明 |
 | --- | --- | --- | --- |
 | `schemaVersion` | number | `1` | 当前固定为 `1` |
-| `skillDir` | string | 绝对路径 | source/current workspace 中的 skill 根目录 |
+| `skillDir` | string | 绝对路径；不支持 `~` 展开 | source/current workspace 中的 skill 根目录 |
 | `skillName` | string | 非空字符串 | skill 名称；应与 `skillDir` basename 一致 |
 | `eventKind` | string | `mkdir` / `create` / `write` / `rename` / `unlink` / `rmdir` / `setattr` / `truncate` | SkillFS 观察到的文件系统变化类型 |
 | `paths` | string[] | 相对 `skillDir` 的路径数组，可为空；不得是绝对路径，不得包含 `..` | 触发变化的相对路径 |
@@ -160,6 +160,8 @@ skill_ledger.skillfs_notify_change
 通知语义：
 
 - 通知表示“某个 skill 的 source workspace 可能已变化”，不是安全结论。
+- SkillFS 是受信任事件来源；daemon 对 `skillDir` 做格式、存在性和 `SKILL.md` 检查，不要求该目录预先存在于 `managedSkillDirs`。
+- 对未被当前配置覆盖的新 skill，daemon 执行 scan 时会沿用 Skill Ledger 现有自动记忆逻辑，将该 skill 目录或父目录 glob 写入 `managedSkillDirs`，供后续 reconcile 使用。
 - 通知成功只表示 daemon 已接收事件，不表示 scan 已完成，也不表示 activation 已刷新。
 - `.skill-meta/**` only 事件会返回 `accepted=true, ignored=true`，不触发扫描，避免 Ledger 写 metadata 时形成循环。SkillFS 也可以选择不发送这类事件。
 - 事件可以重复、乱序或合并；daemon 必须按 skill 维度 debounce，并以当前磁盘状态重新计算。

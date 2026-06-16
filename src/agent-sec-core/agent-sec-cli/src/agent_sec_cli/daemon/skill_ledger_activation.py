@@ -127,11 +127,25 @@ class SkillLedgerActivationJob(BackgroundJob):
             await self._drain_pending()
 
     async def _drain_pending(self) -> None:
-        while self._pending:
-            pending = self._pending
-            self._pending = {}
-            for change in pending.values():
+        pending = self._pending
+        self._pending = {}
+        changes = list(pending.values())
+        for index, change in enumerate(changes):
+            try:
                 await self._process_change(change)
+            except asyncio.CancelledError:
+                self._requeue_changes(changes[index:])
+                raise
+
+    def _requeue_changes(self, changes: list[SkillFsChange]) -> None:
+        for change in changes:
+            existing = self._pending.get(change.skill_dir)
+            if existing is None:
+                self._pending[change.skill_dir] = change
+            else:
+                existing.merge(change)
+        if changes and self._wake_event is not None:
+            self._wake_event.set()
 
     async def _process_change(self, change: SkillFsChange) -> None:
         self._last_tick_at = utc_now()
@@ -265,7 +279,7 @@ def process_skill_change(change: SkillFsChange) -> dict[str, Any]:
 def _validate_skill_dir(value: Any) -> Path:
     if not isinstance(value, str) or not value:
         raise BadRequestError("params.skillDir must be a non-empty string")
-    path = Path(value).expanduser()
+    path = Path(value)
     if not path.is_absolute():
         raise BadRequestError("params.skillDir must be an absolute path")
     try:

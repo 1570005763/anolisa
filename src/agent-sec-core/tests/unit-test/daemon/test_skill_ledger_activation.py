@@ -62,6 +62,7 @@ def test_parse_skillfs_change_validates_request(tmp_path: Path):
     [
         ({"schemaVersion": 2}, "schemaVersion"),
         ({"skillDir": "relative-skill"}, "absolute path"),
+        ({"skillDir": "~/relative-to-home"}, "absolute path"),
         ({"skillName": "other"}, "skillName"),
         ({"eventKind": "chmod"}, "eventKind"),
         ({"paths": "/absolute"}, "paths"),
@@ -181,6 +182,95 @@ def test_activation_job_debounces_same_skill(monkeypatch, tmp_path: Path):
     assert len(calls) == 1
     assert calls[0].event_kinds == {"write", "rename"}
     assert calls[0].paths == {"SKILL.md", "scripts/run.sh"}
+
+
+def test_activation_job_debounces_events_arriving_during_drain(
+    monkeypatch,
+    tmp_path: Path,
+):
+    skill_dir = make_skill(tmp_path, "weather")
+    calls: list[tuple[set[str], float]] = []
+
+    monkeypatch.setattr(
+        "agent_sec_cli.daemon.skill_ledger_activation._resolve_managed_skill_dirs",
+        lambda: [],
+    )
+
+    async def scenario():
+        job = SkillLedgerActivationJob(debounce_seconds=0.05)
+
+        async def fake_process(change: SkillFsChange) -> None:
+            calls.append((set(change.event_kinds), asyncio.get_running_loop().time()))
+            if len(calls) == 1:
+                job.enqueue(
+                    SkillFsChange(
+                        skill_dir=skill_dir.resolve(),
+                        skill_name=skill_dir.name,
+                        event_kinds={"rename"},
+                        paths={"scripts/run.sh"},
+                    )
+                )
+
+        monkeypatch.setattr(job, "_process_change", fake_process)
+        await job.start()
+        try:
+            job.enqueue(
+                SkillFsChange(
+                    skill_dir=skill_dir.resolve(),
+                    skill_name=skill_dir.name,
+                    event_kinds={"write"},
+                    paths={"SKILL.md"},
+                )
+            )
+            deadline = asyncio.get_running_loop().time() + 1.0
+            while len(calls) < 2 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+        finally:
+            await job.stop()
+
+    asyncio.run(scenario())
+
+    assert [event_kinds for event_kinds, _ in calls] == [{"write"}, {"rename"}]
+    assert calls[1][1] - calls[0][1] >= 0.04
+
+
+def test_drain_pending_requeues_batch_on_cancelled_process(
+    monkeypatch,
+    tmp_path: Path,
+):
+    first = make_skill(tmp_path, "weather")
+    second = make_skill(tmp_path, "calendar")
+
+    async def scenario():
+        job = SkillLedgerActivationJob(debounce_seconds=0)
+        job._wake_event = asyncio.Event()
+        changes = [
+            SkillFsChange(
+                skill_dir=first.resolve(),
+                skill_name=first.name,
+                event_kinds={"write"},
+                paths={"SKILL.md"},
+            ),
+            SkillFsChange(
+                skill_dir=second.resolve(),
+                skill_name=second.name,
+                event_kinds={"write"},
+                paths={"SKILL.md"},
+            ),
+        ]
+        job._pending = {change.skill_dir: change for change in changes}
+
+        async def fail_process(_change: SkillFsChange) -> None:
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(job, "_process_change", fail_process)
+        with pytest.raises(asyncio.CancelledError):
+            await job._drain_pending()
+        return job._pending
+
+    pending = asyncio.run(scenario())
+
+    assert set(pending) == {first.resolve(), second.resolve()}
 
 
 def test_process_skill_change_resolves_activation_after_scan_error(
