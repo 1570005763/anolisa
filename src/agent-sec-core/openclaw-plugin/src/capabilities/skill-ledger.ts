@@ -19,8 +19,11 @@ type CheckResult = {
   [key: string]: unknown;
 };
 
+type SkillLedgerPolicy = "debug" | "warn" | "block";
+
 type SkillLedgerConfig = {
-  enableBlock: boolean;
+  policy: SkillLedgerPolicy;
+  blockStatuses: Set<string>;
 };
 
 // ---------------------------------------------------------------------------
@@ -30,6 +33,9 @@ type SkillLedgerConfig = {
 const READ_TOOL_NAMES = ["read"];
 const PATH_PARAM_NAMES = ["file_path", "path"];
 const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_POLICY: SkillLedgerPolicy = "debug";
+const VALID_POLICIES = new Set<SkillLedgerPolicy>(["debug", "warn", "block"]);
+const DEFAULT_BLOCK_STATUSES = ["none", "drifted", "deny", "tampered"];
 
 // ---------------------------------------------------------------------------
 // Status messages and confirmation policy
@@ -123,11 +129,62 @@ function confirmationSeverity(status: string): "warning" | "critical" | undefine
   return CONFIRMATION_SEVERITY[status];
 }
 
+function readPolicy(capabilityConfig: Record<string, any>): SkillLedgerPolicy {
+  if (typeof capabilityConfig.policy === "string") {
+    const policy = capabilityConfig.policy.trim().toLowerCase();
+    if (VALID_POLICIES.has(policy as SkillLedgerPolicy)) {
+      return policy as SkillLedgerPolicy;
+    }
+    return DEFAULT_POLICY;
+  }
+
+  if (typeof capabilityConfig.enableBlock === "boolean") {
+    return capabilityConfig.enableBlock ? "block" : "warn";
+  }
+
+  return DEFAULT_POLICY;
+}
+
+function readBlockStatuses(capabilityConfig: Record<string, any>): Set<string> {
+  const raw = capabilityConfig.blockStatuses ?? capabilityConfig.block_statuses;
+  if (!Array.isArray(raw)) {
+    return new Set(DEFAULT_BLOCK_STATUSES);
+  }
+  const statuses = raw
+    .filter(
+      (status): status is string =>
+        typeof status === "string" && status.trim().length > 0,
+    )
+    .map((status) => status.trim());
+  return new Set(statuses.length ? statuses : DEFAULT_BLOCK_STATUSES);
+}
+
 function readConfig(pluginConfig: Record<string, any>): SkillLedgerConfig {
   const capabilityConfig = pluginConfig.capabilities?.["skill-ledger"] ?? {};
   return {
-    enableBlock: capabilityConfig.enableBlock !== false,
+    policy: readPolicy(capabilityConfig),
+    blockStatuses: readBlockStatuses(capabilityConfig),
   };
+}
+
+function logDebug(api: any, message: string): void {
+  api.logger.debug?.(`[skill-ledger] ${message}`);
+}
+
+function logDiagnostic(api: any, cfg: SkillLedgerConfig, message: string): void {
+  if (cfg.policy === "debug") {
+    logDebug(api, message);
+  } else {
+    api.logger.warn(`[skill-ledger] ${message}`);
+  }
+}
+
+function logLifecycle(api: any, cfg: SkillLedgerConfig, message: string): void {
+  if (cfg.policy === "debug") {
+    logDebug(api, message);
+  } else {
+    api.logger.info(`[skill-ledger] ${message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -150,8 +207,10 @@ export const skillLedger: SecurityCapability = {
       ensureKeysPromise = (async () => {
         if (keysExist()) return;
 
-        api.logger.info(
-          "[skill-ledger] signing keys not found — running init --no-baseline",
+        logLifecycle(
+          api,
+          cfg,
+          "signing keys not found — running init --no-baseline",
         );
         const result = await callAgentSecCli(
           ["skill-ledger", "init", "--no-baseline"],
@@ -159,14 +218,17 @@ export const skillLedger: SecurityCapability = {
         );
 
         if (result.exitCode === 0) {
-          api.logger.info("[skill-ledger] signing keys initialized successfully");
+          logLifecycle(api, cfg, "signing keys initialized successfully");
         } else if (!keysExist()) {
-          api.logger.warn(
-            `[skill-ledger] init --no-baseline failed: ${result.stderr}`,
+          logDiagnostic(
+            api,
+            cfg,
+            `init --no-baseline failed: ${result.stderr}`,
           );
           ensureKeysPromise = null; // allow retry on next call
         }
-      })().catch(() => {
+      })().catch((err) => {
+        logDiagnostic(api, cfg, `init --no-baseline error: ${err}`);
         ensureKeysPromise = null; // unexpected error — allow retry
       });
 
@@ -204,14 +266,17 @@ export const skillLedger: SecurityCapability = {
           try {
             checkResult = JSON.parse(result.stdout) as CheckResult;
           } catch {
-            // Only log warning if parsing fails AND exit code is non-zero
             if (result.exitCode !== 0) {
-              api.logger.warn(
-                `[skill-ledger] CLI error (exit ${result.exitCode}): ${result.stderr}`,
+              logDiagnostic(
+                api,
+                cfg,
+                `CLI error (exit ${result.exitCode}): ${result.stderr}`,
               );
             } else {
-              api.logger.warn(
-                `[skill-ledger] failed to parse CLI output: ${result.stdout}`,
+              logDiagnostic(
+                api,
+                cfg,
+                `failed to parse CLI output: ${result.stdout}`,
               );
             }
             return undefined;
@@ -224,23 +289,21 @@ export const skillLedger: SecurityCapability = {
           }
 
           const message = formatSkillLedgerMessage(status, skillName);
+          if (cfg.policy === "debug") {
+            logDebug(api, `skill='${skillName}' status=${status}: ${message}`);
+            return undefined;
+          }
+
           api.logger.warn(`[skill-ledger] ${message}`);
-
           const severity = confirmationSeverity(status);
-          if (severity) {
-            if (cfg.enableBlock) {
-              return {
-                requireApproval: {
-                  title: "Skill Ledger Security Check",
-                  description: message,
-                  severity,
-                },
-              };
-            }
-
-            api.logger.warn(
-              `[skill-ledger] ${status.toUpperCase()} (enableBlock=false) — allowing`,
-            );
+          if (cfg.policy === "block" && severity && cfg.blockStatuses.has(status)) {
+            return {
+              requireApproval: {
+                title: "Skill Ledger Security Check",
+                description: message,
+                severity,
+              },
+            };
           }
 
           // For warn/error/unknown states, log and allow. Fail-open behavior for
@@ -248,7 +311,7 @@ export const skillLedger: SecurityCapability = {
           return undefined;
         } catch (err) {
           // Fail-open: uncaught errors must never block tool calls
-          api.logger.warn(`[skill-ledger] error: ${err}`);
+          logDiagnostic(api, cfg, `error: ${err}`);
           return undefined;
         }
       },

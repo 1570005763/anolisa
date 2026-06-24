@@ -19,14 +19,11 @@ Input schema::
 
 Output mapping:
 
-    status "pass"     → { "decision": "allow" }
-    status "none"     → { "decision": "ask", "reason": "⚠️ ..." }
-    status "drifted"  → { "decision": "ask", "reason": "⚠️ ..." }
-    status "deny"     → { "decision": "ask", "reason": "🚨 ..." }
-    status "tampered" → { "decision": "ask", "reason": "🚨 ..." }
-    status otherwise  → { "decision": "allow", "reason": "⚠️ ..." }
+    policy "debug" (default) → always allow; non-pass states only write debug stderr
+    policy "warn"            → non-pass states allow with a visible reason
+    policy "block"           → none/drifted/deny/tampered ask; other non-pass states warn
 
-Copilot-shell settings.json configuration::
+Optional copilot-shell settings.json configuration::
 
     {
       "hooks": {
@@ -62,6 +59,8 @@ _TOOL_NAME = "skill"
 _CHECK_TIMEOUT = 5  # seconds for the CLI check call
 _INIT_TIMEOUT = 3  # seconds for key initialization
 
+_DEFAULT_POLICY = "debug"
+_VALID_POLICIES = frozenset({"debug", "warn", "block"})
 _ASK_STATUSES = frozenset({"none", "drifted", "deny", "tampered"})
 
 _STATUS_MESSAGES = {
@@ -107,6 +106,27 @@ def _ask_with_reason(reason: str) -> str:
 def _debug(message: str) -> None:
     """Write debug-only hook details to stderr."""
     print(f"[skill-ledger debug] {message}", file=sys.stderr)
+
+
+def _allow_or_warn(reason: str, policy: str) -> str:
+    """Allow silently in debug policy; otherwise allow with a visible reason."""
+    if policy == "debug":
+        _debug(reason)
+        return _allow()
+    return _allow_with_reason(reason)
+
+
+def _read_policy() -> str:
+    """Return the configured hook policy."""
+    policy = os.environ.get("SKILL_LEDGER_HOOK_POLICY", _DEFAULT_POLICY).strip().lower()
+    if policy in _VALID_POLICIES:
+        return policy
+    _debug(
+        "invalid SKILL_LEDGER_HOOK_POLICY={!r}; using {}".format(
+            policy, _DEFAULT_POLICY
+        )
+    )
+    return _DEFAULT_POLICY
 
 
 def _supported_skill_bases(cwd: str) -> list[Path]:
@@ -241,24 +261,30 @@ def _ensure_keys(input_data: dict[str, Any]) -> None:
             ["agent-sec-cli", "skill-ledger", "init", "--no-baseline"],
             input_data,
         )
-        subprocess.run(
+        result = subprocess.run(
             cmd,
             capture_output=True,
             check=False,
             text=True,
             timeout=_INIT_TIMEOUT,
         )
-    except Exception:
-        pass
+        if result.returncode != 0:
+            _debug(
+                "key init failed, exit_code={}, stderr={!r}".format(
+                    result.returncode, result.stderr
+                )
+            )
+    except Exception as exc:
+        _debug("key init failed: {}".format(exc))
 
 
-def _format_cosh(check_result: dict, skill_name: str) -> str:
+def _format_cosh(check_result: dict, skill_name: str, policy: str) -> str:
     """Convert a check-result dict into a cosh HookOutput JSON string.
 
     Mapping:
-        status == "pass"                         → decision "allow" (silent)
-        none / drifted / deny / tampered         → decision "ask" + reason
-        warn / error / unknown / other statuses  → decision "allow" + reason
+        policy == "debug"                        → decision "allow" (silent)
+        policy == "block" and status is strong   → decision "ask" + reason
+        policy == "warn" or non-strong block     → decision "allow" + reason
     """
     status = check_result.get("status", "unknown")
 
@@ -273,7 +299,11 @@ def _format_cosh(check_result: dict, skill_name: str) -> str:
             skill_name, status
         )
 
-    if status in _ASK_STATUSES:
+    if policy == "debug":
+        _debug("skill='{}' status={}: {}".format(skill_name, status, reason))
+        return _allow()
+
+    if policy == "block" and status in _ASK_STATUSES:
         return _ask_with_reason(reason)
 
     return _allow_with_reason(reason)
@@ -297,20 +327,24 @@ def main() -> None:
         print(_allow())
         return
 
+    policy = _read_policy()
+
     tool_input = input_data.get("tool_input", {})
     skill_name = tool_input.get("skill", "")
     if not isinstance(skill_name, str):
         print(
-            _allow_with_reason(
-                "\u26a0\ufe0f Skill check skipped: skill name must be a string"
+            _allow_or_warn(
+                "\u26a0\ufe0f Skill check skipped: skill name must be a string",
+                policy,
             )
         )
         return
     skill_name = skill_name.strip()
     if not skill_name:
         print(
-            _allow_with_reason(
-                "\u26a0\ufe0f Skill check skipped: skill name is empty or missing"
+            _allow_or_warn(
+                "\u26a0\ufe0f Skill check skipped: skill name is empty or missing",
+                policy,
             )
         )
         return
@@ -334,7 +368,7 @@ def main() -> None:
         reason = "\U0001f6a8 Skill '{}' rejected: path traversal detected".format(
             skill_name
         )
-        print(_allow_with_reason(reason))
+        print(_allow_or_warn(reason, policy))
         return
     if skill_dir is None:
         # Not found in any supported location (project/user/system) → fail-open
@@ -343,7 +377,7 @@ def main() -> None:
                 skill_name
             )
         )
-        print(_allow_with_reason(reason))
+        print(_allow_or_warn(reason, policy))
         return
 
     # 4. Ensure signing keys exist (auto-init if missing)
@@ -364,6 +398,7 @@ def main() -> None:
         )
     except Exception:
         # Timeout or CLI not found → fail-open
+        _debug("skill='{}' check failed before CLI output".format(skill_name))
         print(_allow())
         return
 
@@ -371,10 +406,15 @@ def main() -> None:
     try:
         check_result = json.loads(proc.stdout)
     except (json.JSONDecodeError, ValueError):
+        _debug(
+            "skill='{}' invalid CLI JSON, exit_code={}, stderr={!r}".format(
+                skill_name, proc.returncode, proc.stderr
+            )
+        )
         print(_allow())
         return
 
-    print(_format_cosh(check_result, skill_name))
+    print(_format_cosh(check_result, skill_name, policy))
 
 
 if __name__ == "__main__":

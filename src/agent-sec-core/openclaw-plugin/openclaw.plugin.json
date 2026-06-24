@@ -61,10 +61,22 @@
             "type": "object",
             "properties": {
               "enabled": { "type": "boolean", "default": true },
+              "policy": {
+                "type": "string",
+                "enum": ["debug", "warn", "block"],
+                "default": "debug",
+                "description": "控制已挂载 Skill Ledger hook 的用户可见行为：debug 仅调试日志，warn 告警放行，block 对强门禁状态要求确认"
+              },
               "enableBlock": {
                 "type": "boolean",
-                "default": true,
-                "description": "检测到 none、drifted、deny 或 tampered skill 状态时是否要求用户确认"
+                "default": false,
+                "description": "Deprecated: 未配置 policy 时兼容旧配置；true 映射为 block，false 映射为 warn"
+              },
+              "blockStatuses": {
+                "type": "array",
+                "default": ["none", "drifted", "deny", "tampered"],
+                "items": { "type": "string" },
+                "description": "policy=block 时要求确认的 Skill Ledger 状态"
               }
             }
           },

@@ -18,6 +18,11 @@ _TOOL_NAME = "skill_view"
 _SKILL_MANIFEST = "SKILL.md"
 _DEFAULT_HERMES_SKILLS_DIR = Path("~/.hermes/skills")
 _DEFAULT_BLOCK_STATUSES = ["none", "drifted", "deny", "tampered"]
+_POLICY_DEBUG = "debug"
+_POLICY_WARN = "warn"
+_POLICY_BLOCK = "block"
+_DEFAULT_POLICY = _POLICY_DEBUG
+_VALID_POLICIES = frozenset({_POLICY_DEBUG, _POLICY_WARN, _POLICY_BLOCK})
 _SKIP_DIRS = frozenset({".git", ".github", ".hub", ".archive", ".skill-meta"})
 _CONTEXT_KEY_FIELDS = ("session_id", "task_id", "run_id")
 _HERMES_SESSION_ENV = "HERMES_SESSION_ID"
@@ -56,7 +61,8 @@ class SkillLedgerCapability(AgentSecCoreCapability):
 
     def _on_register(self, config: dict) -> None:
         """Read skill-ledger specific config."""
-        self._enable_block = bool(config.get("enable_block", False))
+        self._policy = self._read_policy(config)
+        self._enable_block = self._policy == _POLICY_BLOCK
         statuses = config.get("block_statuses", _DEFAULT_BLOCK_STATUSES)
         if not isinstance(statuses, list):
             statuses = _DEFAULT_BLOCK_STATUSES
@@ -80,12 +86,12 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         if tool_name != _TOOL_NAME:
             return None
         if not isinstance(args, dict):
-            logger.warning("[agent-sec-core] skill-ledger missing args, fail-open")
+            self._diagnostic("[agent-sec-core] skill-ledger missing args, fail-open")
             return None
 
         skill_dir = self._resolve_skill_dir(args)
         if skill_dir is None:
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger could not resolve skill_dir, fail-open"
             )
             return None
@@ -97,7 +103,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             trace_context=trace_context(kwargs),
         )
         if not result.stdout.strip():
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger empty CLI output, fail-open skill_dir=%s exit_code=%s",
                 skill_dir,
                 result.exit_code,
@@ -107,7 +113,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         try:
             check_result = json.loads(result.stdout)
         except (json.JSONDecodeError, ValueError):
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger invalid CLI JSON, fail-open skill_dir=%s exit_code=%s",
                 skill_dir,
                 result.exit_code,
@@ -115,7 +121,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             return None
 
         if not isinstance(check_result, dict):
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger CLI JSON is not an object, fail-open skill_dir=%s",
                 skill_dir,
             )
@@ -127,9 +133,14 @@ class SkillLedgerCapability(AgentSecCoreCapability):
 
         skill_name = str(check_result.get("skillName") or skill_dir.name)
         message = self._format_message(status, skill_name, skill_dir)
+
+        if self._policy == _POLICY_DEBUG:
+            logger.debug("[agent-sec-core] skill-ledger %s", message)
+            return None
+
         logger.warning("[agent-sec-core] skill-ledger %s", message)
 
-        if self._enable_block:
+        if self._policy == _POLICY_BLOCK:
             if status in self._block_statuses:
                 return {"action": "block", "message": message}
             return None
@@ -144,7 +155,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         **kwargs,
     ):
         """Prepend user-visible skill-ledger warnings to the final response."""
-        if self._enable_block:
+        if self._policy != _POLICY_WARN:
             return None
         if self._max_warnings_per_turn == 0:
             return None
@@ -223,7 +234,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
                     record(skill_file.parent, skill_file)
 
         if len(candidates) > 1:
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger ambiguous Hermes skill name=%s matches=%s, fail-open",
                 wanted,
                 [str(path) for path in candidates],
@@ -235,7 +246,7 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         try:
             return self._skills_dir.expanduser().resolve()
         except (OSError, ValueError):
-            logger.warning(
+            self._diagnostic(
                 "[agent-sec-core] skill-ledger invalid Hermes skills dir: %s",
                 self._skills_dir,
             )
@@ -282,6 +293,31 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    @staticmethod
+    def _read_policy(config: dict) -> str:
+        raw_policy = config.get("policy")
+        if isinstance(raw_policy, str) and raw_policy.strip():
+            policy = raw_policy.strip().lower()
+            if policy in _VALID_POLICIES:
+                return policy
+            logger.debug(
+                "[agent-sec-core] skill-ledger invalid policy=%r; using %s",
+                raw_policy,
+                _DEFAULT_POLICY,
+            )
+            return _DEFAULT_POLICY
+
+        if "enable_block" in config:
+            return _POLICY_BLOCK if bool(config.get("enable_block")) else _POLICY_WARN
+
+        return _DEFAULT_POLICY
+
+    def _diagnostic(self, message: str, *args: Any) -> None:
+        if self._policy == _POLICY_DEBUG:
+            logger.debug(message, *args)
+        else:
+            logger.warning(message, *args)
 
     def _remember_warning(
         self,

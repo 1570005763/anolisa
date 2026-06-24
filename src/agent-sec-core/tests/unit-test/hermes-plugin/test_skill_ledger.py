@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -16,11 +17,14 @@ sys.path.insert(0, str(_HERMES_PLUGIN_DIR))
 
 from src.capabilities.skill_ledger import SkillLedgerCapability  # noqa: E402
 from src.cli_runner import CliResult  # noqa: E402
+from src.registry import load_config, register_capabilities  # noqa: E402
 
 
 def _make_capability(
     root: Path,
     *,
+    policy: str = "debug",
+    include_policy: bool = True,
     enable_block: bool = False,
     block_statuses: list[str] | None = None,
     max_warnings_per_turn: int | str = 5,
@@ -28,14 +32,15 @@ def _make_capability(
 ) -> SkillLedgerCapability:
     cap = SkillLedgerCapability()
     cap._timeout = 5.0
-    cap._on_register(
-        {
-            "enable_block": enable_block,
-            "block_statuses": block_statuses or ["none", "drifted", "deny", "tampered"],
-            "max_warnings_per_turn": max_warnings_per_turn,
-            "max_warning_contexts": max_warning_contexts,
-        }
-    )
+    config = {
+        "enable_block": enable_block,
+        "block_statuses": block_statuses or ["none", "drifted", "deny", "tampered"],
+        "max_warnings_per_turn": max_warnings_per_turn,
+        "max_warning_contexts": max_warning_contexts,
+    }
+    if include_policy:
+        config["policy"] = policy
+    cap._on_register(config)
     cap._skills_dir = root
     return cap
 
@@ -74,6 +79,33 @@ def _install_gateway_session_context(monkeypatch, session_id: str) -> None:
     gateway_module.session_context = session_context_module
     monkeypatch.setitem(sys.modules, "gateway", gateway_module)
     monkeypatch.setitem(sys.modules, "gateway.session_context", session_context_module)
+
+
+class _RecordingHermesContext:
+    def __init__(self) -> None:
+        self.hooks: list[str] = []
+
+    def register_hook(self, hook_name, _callback):
+        self.hooks.append(hook_name)
+
+
+def test_default_config_enables_skill_ledger_debug_policy():
+    """Default Hermes installs keep the hook mounted in debug policy."""
+    config = tomllib.loads(
+        (_HERMES_PLUGIN_DIR / "src" / "config.toml").read_text(encoding="utf-8")
+    )
+
+    assert config["capabilities"]["skill-ledger"]["enabled"] is True
+    assert config["capabilities"]["skill-ledger"]["policy"] == "debug"
+
+
+def test_default_config_registers_skill_ledger_hooks():
+    ctx = _RecordingHermesContext()
+    config = load_config(_HERMES_PLUGIN_DIR / "src")
+
+    register_capabilities(ctx, [SkillLedgerCapability()], config)
+
+    assert ctx.hooks == ["pre_tool_call", "transform_llm_output"]
 
 
 class TestSkillLedgerHooks:
@@ -122,12 +154,35 @@ class TestSkillLedgerHooks:
         ["none", "warn", "drifted", "deny", "tampered", "error", "unknown"],
     )
     @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
-    def test_non_pass_default_allows_and_prepends_warning(
-        self, mock_cli, tmp_path, status
+    def test_non_pass_default_allows_debug_only(
+        self, mock_cli, tmp_path, status, caplog
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
         cap = _make_capability(root)
+        mock_cli.return_value = _cli_status(status, exit_code=1)
+        caplog.set_level(logging.DEBUG, logger="agent-sec-core")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, task_id="t1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", task_id="t1"
+        )
+
+        assert result is None
+        assert output is None
+        assert not cap._warnings_by_context
+        assert any(f"status={status}" in record.message for record in caplog.records)
+        assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        "status",
+        ["none", "warn", "drifted", "deny", "tampered", "error", "unknown"],
+    )
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_warn_policy_allows_and_prepends_warning(self, mock_cli, tmp_path, status):
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/risky")
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status(status, exit_code=1)
 
         result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, task_id="t1")
@@ -141,12 +196,41 @@ class TestSkillLedgerHooks:
         assert output.endswith("assistant response")
 
     @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_legacy_enable_block_false_maps_to_warn(self, mock_cli, tmp_path):
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/risky")
+        cap = _make_capability(root, include_policy=False, enable_block=False)
+        mock_cli.return_value = _cli_status("warn")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, task_id="t1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", task_id="t1"
+        )
+
+        assert result is None
+        assert output.startswith("[agent-sec-core skill-ledger warning]")
+        assert "status=warn" in output
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_legacy_enable_block_true_maps_to_block(self, mock_cli, tmp_path):
+        root = tmp_path / "skills"
+        _make_skill(root, "security/blocked")
+        cap = _make_capability(root, include_policy=False, enable_block=True)
+        mock_cli.return_value = _cli_status("deny", exit_code=1)
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "blocked"}, run_id="r1")
+
+        assert result is not None
+        assert result["action"] == "block"
+        assert "status=deny" in result["message"]
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
     def test_drifted_warning_uses_response_text_and_logs_status(
         self, mock_cli, tmp_path, caplog
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/drifted")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("drifted", exit_code=1)
         caplog.set_level(logging.WARNING, logger="agent-sec-core")
 
@@ -169,7 +253,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("drifted", exit_code=1)
         _install_gateway_session_context(monkeypatch, "hermes-session-1")
 
@@ -195,7 +279,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("drifted", exit_code=1)
         _install_gateway_session_context(monkeypatch, "")
 
@@ -215,7 +299,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "security/blocked")
-        cap = _make_capability(root, enable_block=True)
+        cap = _make_capability(root, policy="block")
         mock_cli.return_value = _cli_status("deny", exit_code=1)
 
         result = cap._on_pre_tool_call("skill_view", {"name": "blocked"}, run_id="r1")
@@ -231,7 +315,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "security/warn-only")
-        cap = _make_capability(root, enable_block=True)
+        cap = _make_capability(root, policy="block")
         mock_cli.return_value = _cli_status("warn")
 
         result = cap._on_pre_tool_call("skill_view", {"name": "warn-only"})
@@ -243,7 +327,7 @@ class TestSkillLedgerHooks:
     def test_nonzero_exit_with_valid_json_still_uses_status(self, mock_cli, tmp_path):
         root = tmp_path / "skills"
         _make_skill(root, "devops/drifted")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("drifted", exit_code=1)
 
         cap._on_pre_tool_call("skill_view", {"name": "drifted"}, session_id="s1")
@@ -262,7 +346,7 @@ class TestSkillLedgerHooks:
     def test_cli_failure_paths_fail_open(self, mock_cli, tmp_path, cli_result):
         root = tmp_path / "skills"
         _make_skill(root, "devops/flaky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = cli_result
 
         result = cap._on_pre_tool_call("skill_view", {"name": "flaky"})
@@ -273,7 +357,7 @@ class TestSkillLedgerHooks:
     @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
     def test_unresolved_skill_fails_open_without_cli(self, mock_cli, tmp_path):
         root = tmp_path / "skills"
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
 
         result = cap._on_pre_tool_call("skill_view", {"name": "missing"})
 
@@ -284,7 +368,7 @@ class TestSkillLedgerHooks:
     def test_warning_context_cache_is_bounded(self, mock_cli, tmp_path):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         cap._max_warning_contexts = 2
         mock_cli.return_value = _cli_status("warn")
 
@@ -304,7 +388,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("warn")
 
         cap._on_pre_tool_call("skill_view", {"name": "risky"})
@@ -319,7 +403,7 @@ class TestSkillLedgerHooks:
     ):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root)
+        cap = _make_capability(root, policy="warn")
         mock_cli.return_value = _cli_status("warn")
 
         cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
@@ -332,7 +416,7 @@ class TestSkillLedgerHooks:
     def test_zero_max_warnings_disables_visible_injection(self, mock_cli, tmp_path):
         root = tmp_path / "skills"
         _make_skill(root, "devops/risky")
-        cap = _make_capability(root, max_warnings_per_turn=0)
+        cap = _make_capability(root, policy="warn", max_warnings_per_turn=0)
         mock_cli.return_value = _cli_status("warn")
 
         cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")

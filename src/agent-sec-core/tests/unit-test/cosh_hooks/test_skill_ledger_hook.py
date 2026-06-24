@@ -37,6 +37,9 @@ _COSH_HOOK = str(
 sys.path.insert(0, str(Path(_COSH_HOOK).parent))
 import skill_ledger_hook  # noqa: E402
 
+_COSH_MANIFEST = Path(_COSH_HOOK).parents[1] / "cosh-extension.json"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -94,6 +97,19 @@ def _create_skill_dir(parent, name="test-skill", manifest_name=None):
         f"---\nname: {manifest_name}\ndescription: A test skill\n---\nHello\n"
     )
     return str(skill_dir)
+
+
+def test_cosh_manifest_registers_skill_ledger_by_default():
+    """Default Cosh installs keep the hook mounted in debug policy."""
+    manifest = json.loads(_COSH_MANIFEST.read_text(encoding="utf-8"))
+    registered_hook_names = [
+        hook.get("name")
+        for event_hooks in manifest.get("hooks", {}).values()
+        for matcher_hooks in event_hooks
+        for hook in matcher_hooks.get("hooks", [])
+    ]
+
+    assert "skill-ledger" in registered_hook_names
 
 
 def test_injects_trace_context_into_skill_ledger_check_command(monkeypatch, capsys):
@@ -192,31 +208,51 @@ class TestFailOpen:
         assert output == {"decision": "allow"}
 
     def test_missing_skill_name_allows(self):
-        output = _run_hook({"tool_name": "skill", "tool_input": {}})
-        assert output["decision"] == "allow"
-        assert "empty or missing" in output["reason"]
+        output, stderr = _run_hook(
+            {"tool_name": "skill", "tool_input": {}},
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "empty or missing" in stderr
 
     def test_empty_skill_name_allows(self):
-        output = _run_hook({"tool_name": "skill", "tool_input": {"skill": ""}})
-        assert output["decision"] == "allow"
-        assert "empty or missing" in output["reason"]
+        output, stderr = _run_hook(
+            {"tool_name": "skill", "tool_input": {"skill": ""}},
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "empty or missing" in stderr
 
     def test_whitespace_skill_name_allows(self):
-        output = _run_hook({"tool_name": "skill", "tool_input": {"skill": "   "}})
-        assert output["decision"] == "allow"
-        assert "empty or missing" in output["reason"]
+        output, stderr = _run_hook(
+            {"tool_name": "skill", "tool_input": {"skill": "   "}},
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "empty or missing" in stderr
 
     def test_nonstring_skill_name_allows(self):
-        output = _run_hook({"tool_name": "skill", "tool_input": {"skill": 42}})
-        assert output["decision"] == "allow"
-        assert "must be a string" in output["reason"]
+        output, stderr = _run_hook(
+            {"tool_name": "skill", "tool_input": {"skill": 42}},
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "must be a string" in stderr
 
     def test_skill_dir_not_found_allows(self):
         """Skill name that resolves to no on-disk directory → fail-open."""
-        output = _run_hook(_make_skill_event("nonexistent-skill-xyz", "/tmp"))
-        assert output["decision"] == "allow"
-        assert "not found on disk" in output["reason"]
-        assert "nonexistent-skill-xyz" in output["reason"]
+        output, stderr = _run_hook(
+            _make_skill_event("nonexistent-skill-xyz", "/tmp"),
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "not found on disk" in stderr
+        assert "nonexistent-skill-xyz" in stderr
 
     def test_path_traversal_blocked(self, tmp_path):
         """A ``../`` skill name that escapes the skills base emits a warning.
@@ -235,10 +271,14 @@ class TestFailOpen:
         evil.mkdir()
         (evil / "SKILL.md").write_text("---\nname: evil\n---\n")
 
-        output = _run_hook(_make_skill_event("../evil", str(project)))
-        assert output["decision"] == "allow"
-        assert "path traversal" in output["reason"]
-        assert "../evil" in output["reason"]
+        output, stderr = _run_hook(
+            _make_skill_event("../evil", str(project)),
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "reason" not in output
+        assert "path traversal" in stderr
+        assert "../evil" in stderr
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +298,7 @@ class TestSkillDirResolution:
         return plain allow with no ``reason`` at all.
         """
         env = mock_cli_env["make_env"](json.dumps({"status": "warn"}))
+        env["SKILL_LEDGER_HOOK_POLICY"] = "warn"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -277,6 +318,7 @@ class TestSkillDirResolution:
             manifest_name="frontmatter-name",
         )
         env = mock_cli_env["make_env"](json.dumps({"status": "warn"}))
+        env["SKILL_LEDGER_HOOK_POLICY"] = "warn"
         output = _run_hook(
             _make_skill_event(
                 "frontmatter-name",
@@ -300,6 +342,7 @@ class TestSkillDirResolution:
 
         env = mock_cli_env["make_env"](json.dumps({"status": "warn"}))
         env["HOME"] = str(home)
+        env["SKILL_LEDGER_HOOK_POLICY"] = "warn"
         output = _run_hook(
             _make_skill_event("user-skill", "\0bad-project", skill_file),
             env_override=env,
@@ -356,10 +399,14 @@ class TestSkillDirResolution:
             skill_dir = Path(tmpdir) / ".copilot-shell" / "skills" / "bad"
             skill_dir.mkdir(parents=True)
             # No SKILL.md file
-            output = _run_hook(_make_skill_event("bad", tmpdir))
-            assert output["decision"] == "allow"
-            assert "not found on disk" in output["reason"]
-            assert "bad" in output["reason"]
+            output, stderr = _run_hook(
+                _make_skill_event("bad", tmpdir),
+                return_stderr=True,
+            )
+            assert output == {"decision": "allow"}
+            assert "reason" not in output
+            assert "not found on disk" in stderr
+            assert "bad" in stderr
 
 
 # A tiny script that pretends to be agent-sec-cli.
@@ -433,19 +480,32 @@ class TestOutputMapping:
         assert output == {"decision": "allow"}
 
     def test_none_requires_confirmation(self, mock_cli_env):
-        """status=none → ask + 'not been security-scanned'."""
+        """Default policy: status=none → silent allow with debug stderr."""
         env = mock_cli_env["make_env"](json.dumps({"status": "none"}))
-        output = _run_hook(
+        output, stderr = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
+            return_stderr=True,
         )
-        assert output["decision"] == "ask"
-        assert "not been security-scanned" in output["reason"]
-        assert "test-skill" in output["reason"]
+        assert output == {"decision": "allow"}
+        assert "status=none" in stderr
+        assert "test-skill" in stderr
 
     def test_warn_returns_warning(self, mock_cli_env):
-        """status=warn → allow + 'low-risk findings'."""
+        """Default policy: status=warn → silent allow with debug stderr."""
         env = mock_cli_env["make_env"](json.dumps({"status": "warn"}))
+        output, stderr = _run_hook(
+            _make_skill_event("test-skill", mock_cli_env["cwd"]),
+            env_override=env,
+            return_stderr=True,
+        )
+        assert output == {"decision": "allow"}
+        assert "status=warn" in stderr
+
+    def test_warn_policy_returns_warning(self, mock_cli_env):
+        """SKILL_LEDGER_HOOK_POLICY=warn restores allow + reason."""
+        env = mock_cli_env["make_env"](json.dumps({"status": "warn"}))
+        env["SKILL_LEDGER_HOOK_POLICY"] = "warn"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -453,9 +513,21 @@ class TestOutputMapping:
         assert output["decision"] == "allow"
         assert "low-risk" in output["reason"]
 
+    def test_block_policy_requires_confirmation(self, mock_cli_env):
+        """SKILL_LEDGER_HOOK_POLICY=block restores ask for strong statuses."""
+        env = mock_cli_env["make_env"](json.dumps({"status": "none"}))
+        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
+        output = _run_hook(
+            _make_skill_event("test-skill", mock_cli_env["cwd"]),
+            env_override=env,
+        )
+        assert output["decision"] == "ask"
+        assert "not been security-scanned" in output["reason"]
+
     def test_deny_requires_confirmation(self, mock_cli_env):
-        """status=deny → ask + 'high-risk findings'."""
+        """SKILL_LEDGER_HOOK_POLICY=block: status=deny → ask."""
         env = mock_cli_env["make_env"](json.dumps({"status": "deny"}), rc=1)
+        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -464,8 +536,9 @@ class TestOutputMapping:
         assert "high-risk" in output["reason"]
 
     def test_drifted_requires_confirmation(self, mock_cli_env):
-        """status=drifted → ask + 'content has changed'."""
+        """SKILL_LEDGER_HOOK_POLICY=block: status=drifted → ask."""
         env = mock_cli_env["make_env"](json.dumps({"status": "drifted"}), rc=1)
+        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -474,8 +547,9 @@ class TestOutputMapping:
         assert "changed" in output["reason"]
 
     def test_tampered_requires_confirmation(self, mock_cli_env):
-        """status=tampered → ask + 'signature verification failed'."""
+        """SKILL_LEDGER_HOOK_POLICY=block: status=tampered → ask."""
         env = mock_cli_env["make_env"](json.dumps({"status": "tampered"}), rc=1)
+        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -484,15 +558,15 @@ class TestOutputMapping:
         assert "signature verification failed" in output["reason"]
 
     def test_unknown_status_returns_warning(self, mock_cli_env):
-        """Unrecognized status → allow + generic warning with status name."""
+        """Default policy: unrecognized status → silent allow with debug stderr."""
         env = mock_cli_env["make_env"](json.dumps({"status": "banana"}))
-        output = _run_hook(
+        output, stderr = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
+            return_stderr=True,
         )
-        assert output["decision"] == "allow"
-        assert "banana" in output["reason"]
-        assert "unknown status" in output["reason"]
+        assert output == {"decision": "allow"}
+        assert "status=banana" in stderr
 
     def test_cli_invalid_json_stdout_allows(self, mock_cli_env):
         """CLI returns non-JSON stdout → fail-open."""
@@ -513,11 +587,12 @@ class TestOutputMapping:
         assert output == {"decision": "allow"}
 
     def test_cli_missing_status_field_returns_unknown(self, mock_cli_env):
-        """CLI returns JSON without 'status' → treated as unknown status."""
+        """CLI returns JSON without 'status' → default debug-only unknown."""
         env = mock_cli_env["make_env"](json.dumps({"result": "ok"}))
-        output = _run_hook(
+        output, stderr = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
+            return_stderr=True,
         )
-        assert output["decision"] == "allow"
-        assert "unknown" in output["reason"]
+        assert output == {"decision": "allow"}
+        assert "status=unknown" in stderr

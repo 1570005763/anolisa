@@ -41,7 +41,15 @@ function registerHandlers(pluginConfig: Record<string, any> = {}) {
   return { beforeToolCall, hooks, logs };
 }
 
-function enableBlockConfig(enableBlock: boolean): Record<string, any> {
+function policyConfig(policy: "debug" | "warn" | "block"): Record<string, any> {
+  return {
+    capabilities: {
+      "skill-ledger": { policy },
+    },
+  };
+}
+
+function legacyEnableBlockConfig(enableBlock: boolean): Record<string, any> {
   return {
     capabilities: {
       "skill-ledger": { enableBlock },
@@ -361,8 +369,8 @@ describe("skill-ledger", () => {
     assert.equal(await beforeToolCall.handler(null, {}), undefined);
     assert.equal(await beforeToolCall.handler({ toolName: "read" }, {}), undefined);
 
-    assert.ok(logs.some((log) => log.includes("CLI error")));
-    assert.ok(logs.some((log) => log.includes("[skill-ledger] error:")));
+    assert.ok(logs.some((log) => log.includes("[DEBUG] [skill-ledger]")));
+    assert.ok(!logs.some((log) => log.includes("[WARN] [skill-ledger]")));
   });
 
   it("pass allows silently", async () => {
@@ -373,9 +381,25 @@ describe("skill-ledger", () => {
   });
 
   for (const status of ["none", "drifted", "deny", "tampered"]) {
-    it(`${status} asks for approval by default`, async () => {
+    it(`${status} logs debug and allows by default`, async () => {
       mockSkillLedgerStatus(status, status === "none" ? 0 : 1);
-      const { beforeToolCall } = registerHandlers();
+      const { beforeToolCall, logs } = registerHandlers();
+
+      const result = await beforeToolCall.handler(
+        readSkillEvent(`/skills/${status}/SKILL.md`, "run-1"),
+        { runId: "run-1" },
+      );
+
+      assert.equal(result, undefined);
+      assert.ok(logs.some((log) => log.includes("[DEBUG] [skill-ledger]")));
+      assert.ok(!logs.some((log) => log.includes("[WARN] [skill-ledger]")));
+    });
+  }
+
+  for (const status of ["none", "drifted", "deny", "tampered"]) {
+    it(`${status} asks for approval with block policy`, async () => {
+      mockSkillLedgerStatus(status, status === "none" ? 0 : 1);
+      const { beforeToolCall } = registerHandlers(policyConfig("block"));
 
       const result = await beforeToolCall.handler(
         readSkillEvent(`/skills/${status}/SKILL.md`, "run-1"),
@@ -391,10 +415,10 @@ describe("skill-ledger", () => {
     });
   }
 
-  for (const status of ["none", "drifted", "deny", "tampered"]) {
-    it(`${status} logs and allows when enableBlock=false`, async () => {
-      mockSkillLedgerStatus(status, status === "none" ? 0 : 1);
-      const { beforeToolCall, logs } = registerHandlers(enableBlockConfig(false));
+  for (const status of ["warn", "error", "mystery"]) {
+    it(`${status} logs debug only by default`, async () => {
+      mockSkillLedgerStatus(status, status === "error" ? 1 : 0);
+      const { beforeToolCall, logs } = registerHandlers();
 
       const result = await beforeToolCall.handler(
         readSkillEvent(`/skills/${status}/SKILL.md`, "run-1"),
@@ -402,13 +426,12 @@ describe("skill-ledger", () => {
       );
 
       assert.equal(result, undefined);
-      assert.ok(logs.some((log) => log.includes(`[skill-ledger] ${status.toUpperCase()} (enableBlock=false)`)));
+      assert.ok(logs.some((log) => log.includes("[DEBUG] [skill-ledger]")));
+      assert.ok(!logs.some((log) => log.includes("[WARN] [skill-ledger]")));
     });
-  }
 
-  for (const status of ["warn", "error", "mystery"]) {
-    it(`${status} logs only in default and enableBlock=false modes`, async () => {
-      for (const pluginConfig of [{}, enableBlockConfig(false)]) {
+    it(`${status} logs warning with warn policy`, async () => {
+      for (const pluginConfig of [policyConfig("warn"), legacyEnableBlockConfig(false)]) {
         mockSkillLedgerStatus(status, status === "error" ? 1 : 0);
         const { beforeToolCall, logs } = registerHandlers(pluginConfig);
 
@@ -418,8 +441,17 @@ describe("skill-ledger", () => {
         );
 
         assert.equal(result, undefined);
-        assert.ok(logs.some((log) => log.includes("[skill-ledger]")));
+        assert.ok(logs.some((log) => log.includes("[WARN] [skill-ledger]")));
       }
     });
   }
+
+  it("maps legacy enableBlock=true to block policy", async () => {
+    mockSkillLedgerStatus("deny", 1);
+    const { beforeToolCall } = registerHandlers(legacyEnableBlockConfig(true));
+
+    const result = await beforeToolCall.handler(readSkillEvent("/skills/deny/SKILL.md"), {});
+
+    assert.ok(result?.requireApproval);
+  });
 });

@@ -148,28 +148,28 @@ Skill 工作流：
 
 ---
 
-## 第二部分：通过 Skill 调用与 Hook 保护 Skill 安全
+## 第二部分：通过 SkillFS 激活与宿主 Hook Policy 保护 Skill 安全
 
 ### 架构概览
 
-Skill Ledger 提供**两层防护**协同工作：
+Skill Ledger 推荐与 SkillFS 联合使用：SkillFS 捕获 Skill 变更，通知 Skill Ledger daemon 扫描并刷新 `.skill-meta/activation.json`/xattr。宿主 hook/capability 默认仍可挂载，但默认 `policy = "debug"`，只做静默诊断；没有部署 SkillFS 且希望用户可见保护时，可显式切换为 `warn` 或 `block`。
 
 ```
 ┌──────────────────────────────────────────────────┐
 │                  Agent 运行时                      │
 │                                                   │
 │  ┌──────────────┐      ┌──────────────────────┐   │
-│  │  Hook 层      │      │  skill-ledger        │   │
-│  │  (自动守卫)    │      │  SKILL.md            │   │
+│  │  SkillFS     │      │  skill-ledger        │   │
+│  │  变更捕获      │      │  SKILL.md            │   │
 │  │               │      │  (按需深度扫描)       │   │
-│  │ ┌──────────┐  │      └──────────┬───────────┘   │
-│  │ │ OpenClaw  │  │               │               │
-│  │ │ Plugin    │  │               │               │
-│  │ ├──────────┤  │               │               │
-│  │ │ cosh Hook │  │               │               │
-│  │ │ (Python)  │  │               │               │
-│  │ └────┬─────┘  │               │               │
-│  └──────┤────────┘               │               │
+│  │      │        │      └──────────┬───────────┘   │
+│  │      ▼        │                 │               │
+│  │ daemon notify │                 │               │
+│  │      │        │                 │               │
+│  │      ▼        │                 │               │
+│  │ activation    │                 │               │
+│  │ refresh       │                 │               │
+│  └──────┤────────┘                 │               │
 │         ▼                         ▼               │
 │  ┌──────────────────────────────────────────┐     │
 │  │       agent-sec-cli skill-ledger          │     │
@@ -178,55 +178,83 @@ Skill Ledger 提供**两层防护**协同工作：
 │                      │                            │
 │                      ▼                            │
 │           .skill-meta/latest.json                 │
-│           (SignedManifest + 版本链)                 │
+│           .skill-meta/activation.json + xattr     │
 └───────────────────────────────────────────────────┘
 ```
 
-- **第一层——自动 Hook（实时守卫）**：
-  - **OpenClaw**：插件拦截所有对 `SKILL.md` 的 `read` 调用，在 Skill 加载前自动运行 `check`。
-  - **copilot-shell**：Python hook 脚本（`cosh-extension/hooks/skill_ledger_hook.py`）通过 `PreToolUse` 事件在 Skill 调用前自动运行 `check`。
-  - 两者采用相同默认策略：`pass` 静默放行，`warn`/`error`/`unknown` 告警放行，`none`/`drifted`/`deny`/`tampered` 要求用户确认。插件或扩展加载且能力未禁用时生效。
-- **第二层——Agent 驱动扫描**：`scan` 执行内置快速扫描并签名；`skill-ledger` Skill 在用户要求深度扫描时驱动完整的四阶段安全审查，并通过 `certify --findings` 导入结果。**按需触发**，由用户请求发起。
+- **推荐路径——SkillFS + daemon activation**：SkillFS 负责发现 Skill 文件变化；daemon 根据最新签名 manifest 和 activation policy 刷新可执行 activation 目标。Agent 运行时读取 activation metadata，而不是默认依赖宿主 hook 前置检查。
+- **兼容路径——宿主 hook/capability policy**：OpenClaw、Hermes 和 copilot-shell 可在 Skill 加载前调用 `agent-sec-cli skill-ledger check`。默认 `debug` 不打扰用户；无 SkillFS 且需要可见提示或阻断时，显式配置 `warn` / `block`。
+- **Agent 驱动扫描**：`scan` 执行内置快速扫描并签名；`skill-ledger` Skill 在用户要求深度扫描时驱动完整的四阶段安全审查，并通过 `certify --findings` 导入结果。**按需触发**，由用户请求发起。
 
-### 第一层：自动 Hook 防护
+### 推荐路径：SkillFS + daemon activation
 
 **工作原理：**
 
-OpenClaw 安全插件注册了一个 `before_tool_call` hook（优先级 80）。当 Agent 调用 `read` 读取任何 `SKILL.md` 文件时：
+启用 SkillFS 后，Skill Ledger 的运行态入口由 daemon 处理：
 
-1. Hook 从文件路径提取 Skill 目录
-2. 确保签名密钥存在（缺失时自动初始化）
-3. 执行 `agent-sec-cli skill-ledger check <skill_dir>`
-4. 根据状态执行默认策略：
+1. SkillFS 捕获 Skill 目录创建、更新、删除或内容变更。
+2. SkillFS 通知 Skill Ledger daemon 的 `skill_ledger.skillfs_notify_change` 接口。
+3. daemon 根据签名 manifest、当前文件状态和 activation policy 刷新 `.skill-meta/activation.json`，并尽力同步写入 xattr。
+4. 若当前版本不可激活，activation metadata 会指向 `target: null` 或上一个符合策略的 snapshot。
 
-| 状态 | 默认行为 | 输出 |
+### 兼容路径：Hook / capability policy
+
+当 Agent 加载 Skill 时，宿主 hook 会解析 Skill 目录，执行 `agent-sec-cli skill-ledger check <skill_dir>`，并由统一 `policy` 控制可见行为：
+
+| Policy | 行为 |
+|--------|------|
+| `debug` | 默认值。`pass` 静默放行；非 `pass`、CLI 失败、超时或输出不可解析都 fail-open，只写 debug 诊断，不返回 reason、不追加 warning、不写 warning 级日志。 |
+| `warn` | 恢复 warning-only 兼容行为；非 `pass` 放行，但通过宿主 warning 机制提示用户。 |
+| `block` | 对强门禁状态返回确认/阻断；其它非 `pass` 状态按 warning 诊断处理。 |
+
+`none` / `drifted` / `deny` / `tampered` 是默认强门禁状态。`block_statuses` / `blockStatuses` 只在 `policy = "block"` 时生效。
+
+| 状态 | 兼容行为 | 输出 |
 |------|---------|------|
 | `pass` | 静默放行 | 无 |
-| `warn` | 放行 + 告警 | `⚠️ Skill 'skill-name' has low-risk findings — review recommended` |
-| `error` | 放行 + 告警 | `⚠️ Skill 'skill-name' check returned an error — review recommended` |
-| `unknown` | 放行 + 告警 | `⚠️ Skill 'skill-name' returned an unknown status — review recommended` |
-| `none` | 用户确认 | `⚠️ Skill 'skill-name' has not been security-scanned yet` |
-| `drifted` | 用户确认 | `⚠️ Skill 'skill-name' content has changed since last scan` |
-| `deny` | 用户确认 | `🚨 Skill 'skill-name' has high-risk findings — immediate review recommended` |
-| `tampered` | 用户确认 | `🚨 Skill 'skill-name' metadata signature verification failed` |
+| `warn` | `debug` 静默；`warn` 告警；`block` 告警放行 | `⚠️ Skill 'skill-name' has low-risk findings — review recommended` |
+| `error` | `debug` 静默；`warn` 告警；`block` 告警放行 | `⚠️ Skill 'skill-name' check returned an error — review recommended` |
+| `unknown` | `debug` 静默；`warn` 告警；`block` 告警放行 | `⚠️ Skill 'skill-name' returned an unknown status — review recommended` |
+| `none` | `debug` 静默；`warn` 告警；`block` 确认/阻断 | `⚠️ Skill 'skill-name' has not been security-scanned yet` |
+| `drifted` | `debug` 静默；`warn` 告警；`block` 确认/阻断 | `⚠️ Skill 'skill-name' content has changed since last scan` |
+| `deny` | `debug` 静默；`warn` 告警；`block` 确认/阻断 | `🚨 Skill 'skill-name' has high-risk findings — immediate review recommended` |
+| `tampered` | `debug` 静默；`warn` 告警；`block` 确认/阻断 | `🚨 Skill 'skill-name' metadata signature verification failed` |
 
-OpenClaw 在需要确认时返回 `requireApproval`；copilot-shell 在需要确认时返回 `decision: "ask"`。CLI 不可用、执行失败、超时或输出不可解析时保持 fail-open，避免基础设施异常阻断 Skill 加载。
+OpenClaw 默认 `enabled=true, policy="debug"`；Hermes 默认 `enabled=true, policy="debug"`；copilot-shell 默认 manifest 注册 `skill-ledger` PreToolUse hook，并通过 `SKILL_LEDGER_HOOK_POLICY` 控制 policy。CLI 不可用、执行失败、超时或输出不可解析时始终保持 fail-open，避免基础设施异常阻断 Skill 加载。
 
 copilot-shell hook 当前仅覆盖 project / user / system 三类目录：`<cwd>/.copilot-shell/skills/`、`~/.copilot-shell/skills/`、`/usr/share/anolisa/skills/`。若 Skill 来自 custom、extension、remote 或其它路径，hook 会 fail-open 并跳过 skill-ledger 检查；OpenClaw 插件则按读取到的 `SKILL.md` 路径提取 Skill 目录。
 
 批量认证或安装后认证场景中，建议先完成目录定位和认证，再让 Agent 读取未认证 Skill 内容：批量认证前避免主动读取未认证 Skill 的 `SKILL.md` 或辅助文件；安装成功后应先定位最终本地目录，确认包含 `SKILL.md`，再执行快速扫描认证。
 
-**启用方式**：确保 `agent-sec` 插件已加载，且 `skill-ledger` 能力未被显式禁用。插件配置中可通过以下方式禁用：
+**OpenClaw 启用方式**：
 
 ```json
 {
   "capabilities": {
-    "skill-ledger": { "enabled": false }
+    "skill-ledger": {
+      "enabled": true,
+      "policy": "debug",
+      "blockStatuses": ["none", "drifted", "deny", "tampered"]
+    }
   }
 }
 ```
 
-### 第二层：Agent 驱动深度扫描
+**Hermes 启用方式**：
+
+```toml
+[capabilities.skill-ledger]
+enabled = true
+timeout = 5
+policy = "debug"
+enable_block = false
+```
+
+**copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `debug`；无 SkillFS 且希望可见提示或强门禁时，设置 `SKILL_LEDGER_HOOK_POLICY=warn` 或 `SKILL_LEDGER_HOOK_POLICY=block`。
+
+Skill Ledger 全局 `activationPolicy` 属于 SkillFS/daemon activation；这里的 hook `policy` 只控制宿主 hook/capability 的用户可见行为和日志等级。
+
+### Agent 驱动深度扫描
 
 #### 配置 Skill 目录（批量扫描使用）
 
@@ -309,7 +337,7 @@ crontab -l
 #### 场景 A：加载第三方 Skill 时检测篡改
 
 ```
-# Agent 加载 Skill → hook 自动触发
+# SkillFS/daemon 或宿主 hook 检测到异常状态
 [skill-ledger] 🚨 Skill 'third-party-tool' metadata signature verification failed
 ```
 

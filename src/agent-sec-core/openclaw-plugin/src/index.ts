@@ -6,6 +6,7 @@ import { observability } from "./capabilities/observability.js";
 import { piiScan } from "./capabilities/pii-scan.js";
 import { promptScan } from "./capabilities/prompt-scan.js";
 import { skillLedger } from "./capabilities/skill-ledger.js";
+import { isCapabilityEnabled } from "./registration.js";
 
 const capabilities: SecurityCapability[] = [
   codeScan,
@@ -23,7 +24,7 @@ export default definePluginEntry({
     const cfg = (api.pluginConfig as Record<string, any>)?.capabilities ?? {};
     let count = 0;
     for (const cap of capabilities) {
-      if (cfg[cap.id]?.enabled === false) {
+      if (!isCapabilityEnabled(cap, cfg)) {
         api.logger.info(`[agent-sec] skipped (disabled): ${cap.id}`);
         continue;
       }

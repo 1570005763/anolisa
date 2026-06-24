@@ -10,7 +10,7 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 
 1. **防篡改**：通过密码学签名的版本链（SignedManifest）保护 Skill 元数据，使篡改可被检测
 2. **安全扫描集成**：提供可扩展的扫描器框架，支持 Agent 驱动（skill-vetter）和 CLI 自动调用两种模式
-3. **实时守卫**：在 Skill 加载时自动执行完整性检查（hook 层），默认对异常状态输出可见告警并放行；需要强门禁时可通过宿主侧配置升级为阻断
+3. **运行态激活**：推荐与 SkillFS 联合使用，由 SkillFS 捕获 Skill 变更并通知 Skill Ledger daemon 刷新 activation metadata
 4. **可用性优先**：CLI 异常、超时、输出不可解析时保持 fail-open；检查成功后按状态分级处理
 
 ### 非目标
@@ -25,22 +25,21 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│              宿主系统 (OpenClaw / copilot-shell)        │
+│              宿主系统 + SkillFS                         │
 │                                                       │
 │  ┌──────────────┐       ┌──────────────────────────┐ │
-│  │  Hook 层      │       │  Agent 工作区              │ │
-│  │  (门禁)       │       │                          │ │
-│  │               │       │  ┌──────────────────┐   │ │
-│  │ skill-ledger  │       │  │  skill-ledger    │   │ │
-│  │  check (CLI)  │       │  │  (Skill)         │   │ │
-│  │               │       │  │                  │   │ │
-│  │ 读 latest.json│       │  │  Phase 1: 状态   │   │ │
-│  │ 验签名       │       │  │  Phase 2: 快扫   │   │ │
-│  │ 比 fileHashes │       │  │  Phase 3: 深扫   │   │ │
-│  │ 查 scanStatus  │       │  │  scan/certify 签名 │   │ │
-│  │       │       │       │  │                  │   │ │
-│  │       ▼       │       │  └──────────────────┘   │ │
-│  │ allow / 告警 / 确认 │  │                          │ │
+│  │  SkillFS     │       │  Agent 工作区              │ │
+│  │  捕获变更     │       │                          │ │
+│  │      │        │       │  ┌──────────────────┐   │ │
+│  │      ▼        │       │  │  skill-ledger    │   │ │
+│  │ daemon notify │       │  │  (Skill)         │   │ │
+│  │      │        │       │  │                  │   │ │
+│  │      ▼        │       │  │  Phase 1: 状态   │   │ │
+│  │ activation    │       │  │  Phase 2: 快扫   │   │ │
+│  │ refresh       │       │  │  Phase 3: 深扫   │   │ │
+│  │      │        │       │  │  scan/certify 签名 │   │ │
+│  │      ▼        │       │  │                  │   │ │
+│  │ activation.json/xattr │  └──────────────────┘   │ │
 │  └───────────────┘       └──────────────────────────┘ │
 │          │                          │                  │
 │          └──── .skill-meta/ ────────┘                  │
@@ -54,10 +53,11 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 
 **组件职责**：
 
-- **skill-ledger CLI**：核心基础设施。提供 `init`（初始化密钥并可为已覆盖 Skill 建立快速扫描 baseline）、`scan`（运行内置快速扫描器并签名入账）、`check`（hook 调用，只读检查 JSON + 验签 + 比哈希 + 输出状态）、`certify`（导入外部 findings 并签名）等子命令。`scan` / `certify` 写入的 manifest 经 Ed25519 数字签名保护，防止篡改；`check` 在无 manifest 时返回 `none`，不创建版本或 snapshot。确定性逻辑不依赖 LLM，不可被 prompt injection 绕过。
+- **skill-ledger CLI**：核心基础设施。提供 `init`（初始化密钥并可为已覆盖 Skill 建立快速扫描 baseline）、`scan`（运行内置快速扫描器并签名入账）、`check`（只读检查 JSON + 验签 + 比哈希 + 输出状态，可供宿主 hook/capability 调用）、`certify`（导入外部 findings 并签名）等子命令。`scan` / `certify` 写入的 manifest 经 Ed25519 数字签名保护，防止篡改；`check` 在无 manifest 时返回 `none`，不创建版本或 snapshot。确定性逻辑不依赖 LLM，不可被 prompt injection 绕过。
 - **Scanner Registry**：可扩展扫描框架。通过配置注册扫描器（`builtin`/`cli`/`skill`/`api` 四种调用类型）和结果解析器（将异构扫描输出归一化为统一 `NormalizedFinding` 格式）。本版本默认注册 `skill-vetter`（`type: "skill"`，由 Agent 深度扫描后通过 `certify --findings` 消费）、`code-scanner` 和 `static-scanner`（均为 `type: "builtin"`，可由 `scan` 自动调用）。当前仅实现 `findings-array` parser；`cli`/`api` adapter 及其它 parser 类型为预留扩展点。旧名称 `skill-code-scanner`、`cisco-static-scanner` 仅作为兼容 alias 读取，不再作为公开名称展示或写入新 manifest。
 - **skill-ledger Skill**：一个 Skill，三个阶段。Phase 1 做环境准备与状态查看；Phase 2 默认执行快速扫描认证（`scan` 调用内置 `code-scanner` 与 `static-scanner`）；Phase 3 在用户显式要求或确认后执行 Agent 驱动深度扫描（`skill-vetter`），再用 `certify --findings ... --delete-findings` 写入版本链。
-- **Hook 层**：门禁。调用 `skill-ledger check`，默认 `pass` 静默放行、非 `pass` 告警放行；宿主配置开启阻断后，可对指定状态直接阻断。CLI 不可用、执行失败、超时或输出不可解析时保持 fail-open。
+- **SkillFS + daemon activation**：推荐运行态入口。SkillFS 捕获 Skill 文件变化后调用 daemon 的 `skill_ledger.skillfs_notify_change` 接口，daemon 根据签名 manifest 和 activation policy 刷新 `.skill-meta/activation.json`，并尽力同步写入 xattr。
+- **Hook / capability 兼容层**：宿主可挂载 `skill-ledger check` 作为兼容入口。默认发行配置继续挂载/注册，但 `policy = "debug"`，只写 debug 诊断，不阻断、不产生用户可见 warning；无 SkillFS 且需要可见提示或强门禁时，可显式配置 `policy = "warn"` 或 `policy = "block"`。
 
 ---
 
@@ -597,38 +597,38 @@ agent-sec-cli skill-ledger certify <skill_dir> --findings /tmp/skill-vetter-find
 
 ---
 
-## 5. Hook 默认策略
+## 5. 可选 Hook / capability 兼容策略
 
 ### 设计原则
 
-hook 层（`skill-ledger check`）采用默认观察策略：
+推荐部署模式是 SkillFS 捕获变更并触发 daemon activation refresh。宿主 hook/capability 作为兼容入口保留并默认挂载，但默认 `policy = "debug"` 不改变用户可见行为。没有部署 SkillFS、且希望在 Skill 加载前给用户提示或要求确认时，可显式配置 `policy = "warn"` 或 `policy = "block"`。
 
-- `pass`：静默放行。
-- 非 `pass`：放行 + 告警，提示用户后续复查或重新扫描。
-- `enable_block = true` 时，命中宿主配置的阻断状态才阻断；默认阻断状态建议为 `none` / `drifted` / `deny` / `tampered`。
+- `debug`：`pass` 静默放行；非 `pass`、CLI 失败、超时、输出不可解析、key init 失败等都 fail-open，只写 debug 诊断，不返回 reason、不注入回复、不写 warning 级日志。
+- `warn`：恢复 warning-only 行为；非 `pass` 放行，但通过宿主 warning 机制提示用户复查或重新扫描。
+- `block`：命中配置的强门禁状态可升级为确认或阻断；其它非 `pass` 状态按 warning 诊断处理。
 
-fail-open 仅用于基础设施异常：CLI 不可用、执行失败、超时或输出不可解析时，hook 不阻断 Skill 加载，并通过宿主日志记录诊断信息。
+`block_statuses` / `blockStatuses` 仅在 `policy = "block"` 下生效；推荐强门禁状态为 `none` / `drifted` / `deny` / `tampered`。旧配置兼容规则是：显式 `policy` 优先；未配置 `policy` 时，`enable_block` / `enableBlock = true` 映射为 `block`，`false` 映射为 `warn`。
 
-### 各状态的行为
+fail-open 仅用于基础设施异常：CLI 不可用、执行失败、超时或输出不可解析时，hook/capability 不阻断 Skill 加载。`debug` policy 只写 debug；`warn` / `block` 可通过 warning 级诊断提示运维侧。
 
-| 状态 | 行为 | 告警内容 |
-|------|------|---------|
-| `pass` | 静默放行 | 无 |
-| `warn` | 放行 + 告警 | `⚠️ Skill '<name>' 存在低风险项，建议关注` |
-| `error` | 放行 + 告警 | `⚠️ Skill '<name>' 状态检查返回错误，建议复查` |
-| `unknown` | 放行 + 告警 | `⚠️ Skill '<name>' 返回未知状态，建议复查` |
-| `drifted` | 放行 + 告警；可配置阻断 | `⚠️ Skill '<name>' 内容已变更，尚未重新扫描` |
-| `none` | 放行 + 告警；可配置阻断 | `⚠️ Skill '<name>' 尚未经过安全扫描` |
-| `deny` | 放行 + 告警；可配置阻断 | `🚨 Skill '<name>' 上次扫描存在高危项，请尽快处理` |
-| `tampered` | 放行 + 告警；可配置阻断 | `🚨 Skill '<name>' 元数据签名校验失败，建议重新扫描建版` |
+### 各状态的兼容行为
 
-`none` / `drifted` / `deny` / `tampered` 是推荐的强门禁状态，但仍采用放行 + 告警，避免安全能力自身影响 Agent 可用性。需要强门禁的部署可显式开启 `enable_block`，并用 `block_statuses` 控制哪些状态直接阻断。`tampered` 触发条件较窄（内容未变但 manifest 被伪造），属于元数据可信度问题；告警中应建议重新执行扫描建版。
+| 状态 | `debug` | `warn` | `block` |
+|------|---------|--------|---------|
+| `pass` | 静默放行 | 静默放行 | 静默放行 |
+| `warn` | debug 诊断后放行 | warning 告警后放行 | warning 诊断后放行 |
+| `error` | debug 诊断后放行 | warning 告警后放行 | warning 诊断后放行 |
+| `unknown` | debug 诊断后放行 | warning 告警后放行 | warning 诊断后放行 |
+| `drifted` | debug 诊断后放行 | warning 告警后放行 | 命中 `block_statuses` 时确认/阻断 |
+| `none` | debug 诊断后放行 | warning 告警后放行 | 命中 `block_statuses` 时确认/阻断 |
+| `deny` | debug 诊断后放行 | warning 告警后放行 | 命中 `block_statuses` 时确认/阻断 |
+| `tampered` | debug 诊断后放行 | warning 告警后放行 | 命中 `block_statuses` 时确认/阻断 |
 
-所有告警均通过宿主系统日志/消息通道输出，保证可追溯。
+`tampered` 触发条件较窄（内容未变但 manifest 被伪造），属于元数据可信度问题；warning/block 文案中应建议重新执行扫描建版。`debug` policy 下只保留调试诊断，避免默认路径打扰用户。
 
 ### 后续升级路径
 
-当前策略为默认观察、可配置阻断。后续可按需扩展为更细粒度策略，例如对不同 Skill 来源设置不同阻断门槛，或对 `drifted`/`none` 状态配置自动触发扫描建版。升级时仅需修改 hook handler 的返回值，不影响 CLI 和 Skill 侧逻辑。
+兼容 hook/capability 策略由统一 `policy` 控制。后续可按需扩展为更细粒度策略，例如对不同 Skill 来源设置不同阻断门槛，或对 `drifted`/`none` 状态配置自动触发扫描建版。升级时仅需修改 hook handler 的返回值，不影响 CLI、daemon activation 和 Skill 侧逻辑。
 
 ### 向后兼容
 
@@ -638,25 +638,27 @@ fail-open 仅用于基础设施异常：CLI 不可用、执行失败、超时或
 
 ## 6. 宿主集成
 
-skill-ledger 需适配多个宿主系统，各宿主的 Skill 模型和 Hook 机制存在差异：
+推荐宿主集成由 SkillFS 驱动：SkillFS 负责捕获 Skill 目录变更，通知 Skill Ledger daemon 扫描并刷新 `.skill-meta/activation.json`/xattr。宿主 hook/capability 作为兼容路径保留并默认使用 debug policy，各宿主的 Skill 模型和 Hook 机制存在差异：
 
 | 维度 | OpenClaw | copilot-shell | Hermes |
 |------|---------|---------------|--------|
 | Skill 调用方式 | Agent 通过 read tool 读取 SKILL.md | Agent 调用 `Skill` tool，框架加载返回内容 | Agent 调用 `skill_view` 读取 Skill |
 | Hook 机制 | Plugin Hook（进程内 async handler） | Command Hook（fork 子进程，stdin/stdout JSON） | Plugin Hook（`pre_tool_call` + `transform_llm_output`） |
-| 默认告警输出 | `api.logger.warn` / 宿主消息通道 | `decision: "allow"` + `reason` | 缓存本轮 warning，并追加到最终回复开头 |
-| 强门禁方式 | 可返回 `requireApproval` | 可返回 `decision: "ask"` | `enable_block = true` 时返回 `{"action": "block"}` |
+| `debug` policy | `api.logger.debug`，无 `requireApproval` | stderr debug，无 `reason` | logger debug，不注入回复 |
+| `warn` policy | `api.logger.warn` 后放行 | `decision: "allow"` + `reason` | 缓存本轮 warning，并追加到最终回复开头 |
+| `block` policy | 可返回 `requireApproval` | 可返回 `decision: "ask"` | 命中 `block_statuses` 时返回 `{"action": "block"}` |
 | Skill 安装路径 | `~/.openclaw/skills/` | `~/.copilot-shell/skills/` | 当前 hook 覆盖 `~/.hermes/skills/**` |
+| 默认启用状态 | `enabled=true, policy="debug"` | 默认 manifest 注册 hook，`SKILL_LEDGER_HOOK_POLICY=debug` | `enabled=true, policy="debug"` |
 
-各实现共享相同的默认语义：拦截 Skill 加载 → 调用 `skill-ledger check` → `pass` 静默放行，非 `pass` 告警放行；需要强门禁时，由宿主侧配置把 `none` / `drifted` / `deny` / `tampered` 等状态升级为确认或阻断。
+各实现共享相同基础流程：拦截 Skill 加载 → 调用 `skill-ledger check` → `pass` 静默放行。默认 `debug` 只输出调试诊断；显式 `warn` 输出用户可见告警；显式 `block` 可把 `none` / `drifted` / `deny` / `tampered` 等状态升级为确认或阻断。
 
 ### 6.1 OpenClaw（Plugin Hook）
 
-以 OpenClaw Plugin 形式分发。`before_tool_call` handler 过滤 read tool 对 `*/SKILL.md` 的访问，解析 `skill_dir` 后调用 `agent-sec-cli skill-ledger check`。告警通过 `api.logger.warn` 输出。
+以 OpenClaw Plugin 形式分发，默认注册 `skill-ledger` capability，`capabilities.skill-ledger.policy` 默认为 `debug`。`before_tool_call` handler 过滤 read tool 对 `*/SKILL.md` 的访问，解析 `skill_dir` 后调用 `agent-sec-cli skill-ledger check`。`enabled=false` 时完全不注册；`policy=warn` 时通过 `api.logger.warn` 输出告警；`policy=block` 且状态命中 `blockStatuses` 时返回 `requireApproval`。旧 `enableBlock` 仅在未配置 `policy` 时作为兼容映射。
 
 ### 6.2 copilot-shell（Command Hook）
 
-独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。
+独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。默认 Cosh manifest 挂载该 hook，默认 `SKILL_LEDGER_HOOK_POLICY=debug`：
 
 配置：
 ```jsonc
@@ -687,4 +689,6 @@ skill-ledger 需适配多个宿主系统，各宿主的 Skill 模型和 Hook 机
 
 ### 6.3 Hermes（Plugin Hook）
 
-以 Hermes Plugin 形式分发。`pre_tool_call` handler 过滤 `skill_view`，仅根据 `name` / `skill` / `skill_name` 在 Hermes 默认本地目录 `~/.hermes/skills` 下解析 Skill 目录后调用 `agent-sec-cli skill-ledger check`。`file_path` / `path` 在 Hermes 中表示 Skill 内 supporting file，不作为 Skill 身份来源。若无法解析、匹配到多个候选、命中 `~/.hermes/config.yaml` 的 `skills.external_dirs` 或 plugin-provided skills 等当前未覆盖来源，hook 采用 fail-open 并仅记录日志；未来如需覆盖这些来源，应单独补充 resolver、信任边界与测试。默认 `enable_block = false`，非 `pass` 状态记录为本轮 warning，并由 `transform_llm_output` 追加到最终回复开头，保证用户可见；当 `enable_block = true` 且状态命中 `block_statuses` 时直接阻断本次 `skill_view`。`max_warnings_per_turn = 0` 可关闭用户可见 warning 注入，仅保留日志。
+以 Hermes Plugin 形式分发，默认 `capabilities.skill-ledger.enabled=true` 且 `policy="debug"`。`pre_tool_call` handler 过滤 `skill_view`，仅根据 `name` / `skill` / `skill_name` 在 Hermes 默认本地目录 `~/.hermes/skills` 下解析 Skill 目录后调用 `agent-sec-cli skill-ledger check`。`file_path` / `path` 在 Hermes 中表示 Skill 内 supporting file，不作为 Skill 身份来源。若无法解析、匹配到多个候选、命中 `~/.hermes/config.yaml` 的 `skills.external_dirs` 或 plugin-provided skills 等当前未覆盖来源，hook 采用 fail-open；默认 policy 仅记录 debug。`policy=warn` 时，非 `pass` 状态记录为本轮 warning，并由 `transform_llm_output` 追加到最终回复开头；`policy=block` 且状态命中 `block_statuses` 时直接阻断本次 `skill_view`。`max_warnings_per_turn = 0` 只影响 `policy=warn` 的用户可见 warning 注入。旧 `enable_block` 仅在未配置 `policy` 时作为兼容映射。
+
+Skill Ledger 全局 `activationPolicy` 属于 SkillFS/daemon activation，宿主 hook 的 `policy` 只控制 hook/capability 的用户可见行为和日志等级。

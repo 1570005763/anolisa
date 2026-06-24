@@ -235,7 +235,7 @@ AGENT_SEC_LIVE=1 npm run smoke
 | `pii-scan-user-input` | `before_dispatch`, `before_tool_call`, `after_tool_call`, `llm_output` | 200 before dispatch/tool call | Scans user text, tool parameters, tool output, and model output for PII/credentials; optionally blocks pre-execution `deny` verdicts |
 | `prompt-scan`      | `before_dispatch`     | 190      | Scans inbound messages for prompt injection attacks   |
 | `scan-code`        | `before_tool_call`    | 0 (default) | Scans tool commands for security issues              |
-| `skill-ledger`     | `before_tool_call`    | 80       | Checks skill integrity when SKILL.md is read and optionally asks on risky states |
+| `skill-ledger`     | `before_tool_call`    | 80       | Checks skill integrity when SKILL.md is read; default policy is debug-only |
 | `observability`    | selected typed hooks  | varies   | Sends observability records to agent-sec-cli          |
 
 ### Configuring `code-scan`
@@ -298,7 +298,11 @@ Supported OpenClaw plugin entry config:
             "scan-code": { "enabled": true },
             "prompt-scan": { "enabled": true },
             "pii-scan-user-input": { "enabled": true, "enableBlock": false },
-            "skill-ledger": { "enabled": true, "enableBlock": true },
+            "skill-ledger": {
+              "enabled": true,
+              "policy": "debug",
+              "blockStatuses": ["none", "drifted", "deny", "tampered"]
+            },
             "observability": { "enabled": true }
           }
         },
@@ -311,22 +315,36 @@ Supported OpenClaw plugin entry config:
 }
 ```
 
-Set a capability's `enabled` value to `false` to skip registering only that capability while keeping the rest of the `agent-sec` plugin active.
+Set a capability's `enabled` value to `false` to skip registering only that capability while keeping the rest of the `agent-sec` plugin active. `skill-ledger` is enabled by default with `policy: "debug"` so it can run integrity checks without blocking, warning the user, or writing warning-level logs.
 Set `enableBlock` on supported capabilities to control whether matching security findings block or ask the user for approval.
 
 `llm_input`, `llm_output`, and `agent_end` require OpenClaw to allow conversation access for this external plugin with `plugins.entries.agent-sec.hooks.allowConversationAccess=true`. Without that OpenClaw setting, those hooks are blocked by OpenClaw before this plugin sees them.
 
 ### Configuring `skill-ledger`
 
-The `skill-ledger` capability checks skill integrity by invoking `agent-sec-cli skill-ledger check` when the agent reads a `SKILL.md` file. It automatically initializes signing keys on first use.
+The recommended Skill Ledger deployment is SkillFS + Skill Ledger daemon activation: SkillFS observes skill changes and the daemon refreshes `.skill-meta/activation.json`/xattr. The OpenClaw `skill-ledger` capability is still mounted by default, but its default `policy: "debug"` is intentionally silent.
 
-By default, `capabilities["skill-ledger"].enableBlock` is `true`. In this mode, `none`, `drifted`, `deny`, and `tampered` statuses return an OpenClaw approval request. `warn`, `error`, and unknown statuses are logged only.
+Default behavior:
 
-Set `enableBlock: false` to log all non-`pass` statuses without asking:
+- `enabled: false` fully disables registration.
+- `policy: "debug"` runs `agent-sec-cli skill-ledger check`, fail-opens on non-`pass` or CLI failures, and writes debug diagnostics only.
+- `policy: "warn"` logs warning-level diagnostics but allows the read.
+- `policy: "block"` returns OpenClaw `requireApproval` for `blockStatuses` (`none`, `drifted`, `deny`, `tampered` by default); other non-`pass` statuses are warning diagnostics only.
+- Legacy configs without `policy` still map `enableBlock: true` to `block` and `enableBlock: false` to `warn`.
+
+Set `policy: "warn"` when running without SkillFS but wanting visible diagnostics:
 
 ```bash
-openclaw config set 'plugins.entries.agent-sec.config.capabilities.skill-ledger.enableBlock' false
+openclaw config set 'plugins.entries.agent-sec.config.capabilities.skill-ledger.policy' warn
 ```
+
+Set `policy: "block"` to ask for approval on strong gate statuses:
+
+```bash
+openclaw config set 'plugins.entries.agent-sec.config.capabilities.skill-ledger.policy' block
+```
+
+Skill Ledger global `activationPolicy` belongs to SkillFS/daemon activation. OpenClaw `policy` only controls this host hook's user-visible behavior and log level.
 
 **Prerequisites**: `agent-sec-cli skill-ledger check` must be available. Signing keys are auto-initialized (no passphrase) if not present.
 
