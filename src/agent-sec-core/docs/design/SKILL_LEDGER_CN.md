@@ -658,7 +658,7 @@ fail-open 仅用于基础设施异常：CLI 不可用、执行失败、超时或
 
 ### 6.2 copilot-shell（Command Hook）
 
-独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。默认 Cosh manifest 挂载该 hook，默认 `SKILL_LEDGER_HOOK_POLICY=debug`：
+独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。默认 Cosh manifest 挂载该 hook，默认 `SKILL_LEDGER_HOOK_POLICY=debug`。该环境变量属于可信宿主或部署环境配置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；若需要防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源：
 
 配置：
 ```jsonc

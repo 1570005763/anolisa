@@ -129,12 +129,18 @@ function confirmationSeverity(status: string): "warning" | "critical" | undefine
   return CONFIRMATION_SEVERITY[status];
 }
 
-function readPolicy(capabilityConfig: Record<string, any>): SkillLedgerPolicy {
+function readPolicy(
+  capabilityConfig: Record<string, any>,
+  api: any,
+): SkillLedgerPolicy {
   if (typeof capabilityConfig.policy === "string") {
     const policy = capabilityConfig.policy.trim().toLowerCase();
     if (VALID_POLICIES.has(policy as SkillLedgerPolicy)) {
       return policy as SkillLedgerPolicy;
     }
+    api.logger.warn(
+      `[skill-ledger] invalid policy="${capabilityConfig.policy}"; using ${DEFAULT_POLICY}`,
+    );
     return DEFAULT_POLICY;
   }
 
@@ -159,10 +165,10 @@ function readBlockStatuses(capabilityConfig: Record<string, any>): Set<string> {
   return new Set(statuses.length ? statuses : DEFAULT_BLOCK_STATUSES);
 }
 
-function readConfig(pluginConfig: Record<string, any>): SkillLedgerConfig {
+function readConfig(pluginConfig: Record<string, any>, api: any): SkillLedgerConfig {
   const capabilityConfig = pluginConfig.capabilities?.["skill-ledger"] ?? {};
   return {
-    policy: readPolicy(capabilityConfig),
+    policy: readPolicy(capabilityConfig, api),
     blockStatuses: readBlockStatuses(capabilityConfig),
   };
 }
@@ -196,7 +202,7 @@ export const skillLedger: SecurityCapability = {
   name: "Skill Ledger",
   hooks: ["before_tool_call"],
   register(api) {
-    const cfg = readConfig((api.pluginConfig as Record<string, any>) ?? {});
+    const cfg = readConfig((api.pluginConfig as Record<string, any>) ?? {}, api);
 
     /** Ensure signing keys exist; auto-init if missing. */
     let ensureKeysPromise: Promise<void> | null = null;

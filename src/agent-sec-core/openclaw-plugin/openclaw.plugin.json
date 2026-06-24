@@ -69,7 +69,6 @@
               },
               "enableBlock": {
                 "type": "boolean",
-                "default": false,
                 "description": "Deprecated: 未配置 policy 时兼容旧配置；true 映射为 block，false 映射为 warn"
               },
               "blockStatuses": {

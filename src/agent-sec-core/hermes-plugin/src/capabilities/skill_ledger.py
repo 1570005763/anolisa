@@ -62,7 +62,6 @@ class SkillLedgerCapability(AgentSecCoreCapability):
     def _on_register(self, config: dict) -> None:
         """Read skill-ledger specific config."""
         self._policy = self._read_policy(config)
-        self._enable_block = self._policy == _POLICY_BLOCK
         statuses = config.get("block_statuses", _DEFAULT_BLOCK_STATUSES)
         if not isinstance(statuses, list):
             statuses = _DEFAULT_BLOCK_STATUSES

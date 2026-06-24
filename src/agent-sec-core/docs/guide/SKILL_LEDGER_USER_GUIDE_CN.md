@@ -250,7 +250,7 @@ policy = "debug"
 enable_block = false
 ```
 
-**copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `debug`；无 SkillFS 且希望可见提示或强门禁时，设置 `SKILL_LEDGER_HOOK_POLICY=warn` 或 `SKILL_LEDGER_HOOK_POLICY=block`。
+**copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `debug`；无 SkillFS 且希望可见提示或强门禁时，设置 `SKILL_LEDGER_HOOK_POLICY=warn` 或 `SKILL_LEDGER_HOOK_POLICY=block`。该环境变量应由可信宿主或部署环境设置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；如需防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源。
 
 Skill Ledger 全局 `activationPolicy` 属于 SkillFS/daemon activation；这里的 hook `policy` 只控制宿主 hook/capability 的用户可见行为和日志等级。
 

@@ -415,6 +415,28 @@ describe("skill-ledger", () => {
     });
   }
 
+  it("invalid explicit policy falls back to debug and logs a config warning", async () => {
+    mockSkillLedgerStatus("deny", 1);
+    const { beforeToolCall, logs } = registerHandlers({
+      capabilities: {
+        "skill-ledger": { policy: "blcok" },
+      },
+    });
+
+    const result = await beforeToolCall.handler(
+      readSkillEvent("/skills/deny/SKILL.md"),
+      {},
+    );
+
+    assert.equal(result, undefined);
+    assert.ok(
+      logs.some((log) =>
+        log.includes("[WARN] [skill-ledger] invalid policy=\"blcok\"; using debug"),
+      ),
+    );
+    assert.ok(logs.some((log) => log.includes("[DEBUG] [skill-ledger]")));
+  });
+
   for (const status of ["warn", "error", "mystery"]) {
     it(`${status} logs debug only by default`, async () => {
       mockSkillLedgerStatus(status, status === "error" ? 1 : 0);
