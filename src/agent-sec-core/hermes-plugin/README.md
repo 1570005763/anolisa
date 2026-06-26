@@ -122,15 +122,21 @@ Hermes 支持的 hook 及其回调签名：
 
 ### Skill Ledger
 
-推荐部署模式是 SkillFS + Skill Ledger daemon activation：SkillFS 捕获 skill 变更，daemon 刷新 `.skill-meta/activation.json`/xattr。Hermes `skill-ledger` capability 默认仍注册，默认 `policy = "ask"`：在 Hermes `skill_view` 读取技能前读取统一 exposure summary；Hermes 没有交互确认能力，因此 `ask` 会降级为用户可见 warning 并放行。
+当前 Hermes 场景暂不支持 Skill Ledger 安全检查，请自行关注 skill 安全性。Hermes
+`skill-ledger` capability 只保留 fail-open 兼容行为：检测到不兼容的 Hermes skill root
+时跳过检查、不调用 CLI、不阻断，并在 `policy = "ask"` / `policy = "warn"` 下提示
+`暂不支持Hermes场景，请自行关注skill安全性。`
 
 - `enabled = false`：完全不注册 Hermes hook。
-- `policy = "ask"`：默认策略；当 summary `message` 非空时缓存为本轮告警，并通过
+- `policy = "ask"`：默认策略；未触发暂不支持兜底时，当 summary `message` 非空会缓存为本轮告警，并通过
   `transform_llm_output` 追加到最终回复开头，确保用户可见。
 - `policy = "debug"`：静默兼容模式；summary `message` 非空、CLI 失败或 JSON 解析失败都 fail-open，只写 debug。
-- `policy = "warn"`：warning-only 兼容模式；summary `message` 非空时缓存为本轮告警，并通过
+- `policy = "warn"`：warning-only 兼容模式；未触发暂不支持兜底时，summary `message` 非空会缓存为本轮告警，并通过
   `transform_llm_output` 追加到最终回复开头，确保用户可见。
 - `policy = "block"`：summary `message` 非空时直接返回 Hermes block 结果。
+- 检测到暂不支持的 Hermes skill root 时，所有 `policy` 都 fail-open；`ask` / `warn`
+  会显示 `暂不支持Hermes场景，请自行关注skill安全性。`，`debug` 只写日志，`block`
+  不阻断。
 - `latestStatus = "unmanaged"` 是 Skill Ledger 诊断状态，summary `message` 为 `null`，包括 `block` 在内的所有 policy 都静默放行。
 - 未配置 `policy` 的旧配置仍兼容：`enable_block = true` 映射为 `block`，`enable_block = false` 映射为 `warn`。
 - 当前版本仅覆盖 Hermes 默认本地技能目录 `~/.hermes/skills`，按 Hermes `skill_view`
@@ -155,7 +161,8 @@ max_warnings_per_turn = 5
 max_warning_contexts = 128
 ```
 
-无 SkillFS 且希望用户可见提示或阻断时，将 `policy` 显式改为 `ask`、`warn` 或 `block`。
+Hermes 场景请不要依赖该 capability 作为 Skill Ledger 安全拦截；如需严格 Skill
+安全检查，请在非 Hermes 场景或独立流程中完成。
 
 ### observability
 

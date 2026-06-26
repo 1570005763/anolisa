@@ -131,6 +131,100 @@ def test_default_config_registers_skill_ledger_hooks():
 class TestSkillLedgerHooks:
     """Behavior tests for pre_tool_call and transform_llm_output."""
 
+    @pytest.mark.parametrize(
+        "sentinel",
+        [
+            ".skillfs-inbox",
+            "skill-discover/SKILL.md",
+        ],
+    )
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_skillfs_inplace_root_fails_open_with_short_notice(
+        self, mock_cli, tmp_path, sentinel
+    ):
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/risky")
+        sentinel_path = root / sentinel
+        if sentinel_path.name == "SKILL.md":
+            sentinel_path.parent.mkdir(parents=True)
+            sentinel_path.write_text(
+                "---\nname: skill-discover\n---\n", encoding="utf-8"
+            )
+        else:
+            sentinel_path.mkdir(parents=True)
+        cap = _make_capability(root, policy="warn")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", session_id="s1"
+        )
+
+        assert result is None
+        mock_cli.assert_not_called()
+        assert (
+            output
+            == "暂不支持Hermes场景，请自行关注skill安全性。\n\nassistant response"
+        )
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_skillfs_inplace_root_debug_policy_only_logs(
+        self, mock_cli, tmp_path, caplog
+    ):
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/risky")
+        (root / ".skillfs-inbox").mkdir()
+        cap = _make_capability(root, policy="debug")
+        caplog.set_level(logging.DEBUG, logger="agent-sec-core")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", session_id="s1"
+        )
+
+        assert result is None
+        mock_cli.assert_not_called()
+        assert output is None
+        assert not cap._warnings_by_context
+        assert any("暂不支持Hermes场景" in record.message for record in caplog.records)
+
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_skillfs_inplace_root_block_policy_does_not_block(self, mock_cli, tmp_path):
+        root = tmp_path / "skills"
+        _make_skill(root, "devops/risky")
+        (root / ".skillfs-inbox").mkdir()
+        cap = _make_capability(root, policy="block")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", session_id="s1"
+        )
+
+        assert result is None
+        mock_cli.assert_not_called()
+        assert output is None
+
+    @patch("src.capabilities.skill_ledger.Path.rglob")
+    @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
+    def test_skill_file_traversal_loop_fails_open_with_short_notice(
+        self, mock_cli, mock_rglob, tmp_path
+    ):
+        root = tmp_path / "skills"
+        root.mkdir()
+        cap = _make_capability(root, policy="warn")
+        mock_rglob.side_effect = OSError("File system loop detected")
+
+        result = cap._on_pre_tool_call("skill_view", {"name": "risky"}, session_id="s1")
+        output = cap._on_transform_llm_output(
+            response_text="assistant response", session_id="s1"
+        )
+
+        assert result is None
+        mock_cli.assert_not_called()
+        assert (
+            output
+            == "暂不支持Hermes场景，请自行关注skill安全性。\n\nassistant response"
+        )
+
     @patch("src.capabilities.skill_ledger.call_agent_sec_cli")
     def test_pass_allows_without_warning(self, mock_cli, tmp_path):
         root = tmp_path / "skills"

@@ -26,6 +26,21 @@ _VALID_POLICIES = frozenset({_POLICY_ASK, _POLICY_DEBUG, _POLICY_WARN, _POLICY_B
 _SKIP_DIRS = frozenset({".git", ".github", ".hub", ".archive", ".skill-meta"})
 _CONTEXT_KEY_FIELDS = ("session_id", "task_id", "run_id")
 _HERMES_SESSION_ENV = "HERMES_SESSION_ID"
+_UNSUPPORTED_STATUS = "unsupported"
+_UNSUPPORTED_HERMES_NOTICE = "暂不支持Hermes场景，请自行关注skill安全性。"
+_SKILLFS_INPLACE_SENTINELS = (
+    Path(".skillfs-inbox"),
+    Path("skill-discover") / _SKILL_MANIFEST,
+)
+
+
+class _UnsupportedHermesSkillRoot(Exception):
+    """Internal signal for unsupported Hermes skill root views."""
+
+    def __init__(self, root: Path, reason: str):
+        super().__init__(reason)
+        self.root = root
+        self.reason = reason
 
 
 @dataclass
@@ -75,13 +90,29 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             self._diagnostic("[agent-sec-core] skill-ledger missing args, fail-open")
             return None
 
-        skill_dir = self._resolve_skill_dir(args)
+        root = self._resolved_skills_dir()
+        if root is not None:
+            unsupported_reason = self._unsupported_reason_for_root(root)
+            if unsupported_reason is not None:
+                self._handle_unsupported_hermes(kwargs, root, unsupported_reason)
+                return None
+
+        try:
+            skill_dir = self._resolve_skill_dir(args, root=root)
+        except _UnsupportedHermesSkillRoot as exc:
+            self._handle_unsupported_hermes(kwargs, exc.root, exc.reason)
+            return None
+
         if skill_dir is None:
             self._diagnostic(
                 "[agent-sec-core] skill-ledger could not resolve skill_dir, fail-open"
             )
             return None
-        skill_dir = skill_dir.resolve()
+        try:
+            skill_dir = skill_dir.resolve()
+        except (OSError, ValueError) as exc:
+            self._handle_unsupported_hermes(kwargs, skill_dir, str(exc))
+            return None
 
         result = call_agent_sec_cli(
             ["skill-ledger", "show", str(skill_dir)],
@@ -150,10 +181,23 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         if not warnings:
             return None
 
+        unsupported_warnings = [
+            warning for warning in warnings if warning.status == _UNSUPPORTED_STATUS
+        ]
+        warnings = [
+            warning for warning in warnings if warning.status != _UNSUPPORTED_STATUS
+        ]
+
+        if unsupported_warnings and not warnings:
+            return f"{_UNSUPPORTED_HERMES_NOTICE}\n\n{response_text}"
+
         lines = [
             "[agent-sec-core skill-ledger warning]",
             "The following Hermes skills did not pass Skill Ledger checks:",
         ]
+        if unsupported_warnings:
+            lines.insert(0, "")
+            lines.insert(0, _UNSUPPORTED_HERMES_NOTICE)
         for warning in warnings[: self._max_warnings_per_turn]:
             lines.append(
                 f"- {warning.skill_name}: status={warning.status}; {warning.message}"
@@ -166,14 +210,18 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         lines.append(response_text)
         return "\n".join(lines)
 
-    def _resolve_skill_dir(self, args: dict[str, Any]) -> Path | None:
+    def _resolve_skill_dir(
+        self, args: dict[str, Any], *, root: Path | None = None
+    ) -> Path | None:
         """Resolve a Hermes skill_view call to a local skill directory."""
         skill_name = self._extract_string(args, "name", "skill", "skill_name")
         if not skill_name:
             return None
-        return self._resolve_skill_dir_from_name(skill_name)
+        return self._resolve_skill_dir_from_name(skill_name, root=root)
 
-    def _resolve_skill_dir_from_name(self, skill_name: str) -> Path | None:
+    def _resolve_skill_dir_from_name(
+        self, skill_name: str, *, root: Path | None = None
+    ) -> Path | None:
         """Resolve by Hermes local directory name or category/name."""
         wanted = skill_name.strip()
         if not wanted:
@@ -185,9 +233,15 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             )
             return None
 
-        root = self._resolved_skills_dir()
-        if root is None or not root.is_dir():
+        if root is None:
+            root = self._resolved_skills_dir()
+        if root is None:
             return None
+        try:
+            if not root.is_dir():
+                return None
+        except OSError as exc:
+            raise _UnsupportedHermesSkillRoot(root, str(exc)) from exc
 
         candidates: list[Path] = []
         seen: set[Path] = set()
@@ -196,7 +250,9 @@ class SkillLedgerCapability(AgentSecCoreCapability):
             try:
                 resolved_file = skill_file.resolve()
                 resolved_dir = skill_dir.resolve()
-            except (OSError, ValueError):
+            except OSError as exc:
+                raise _UnsupportedHermesSkillRoot(root, str(exc)) from exc
+            except ValueError:
                 return
             if not self._is_under_root(resolved_file, root):
                 return
@@ -209,7 +265,11 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         if relative_name is not None:
             direct_path = root / relative_name
             direct_skill_file = direct_path / _SKILL_MANIFEST
-            if direct_path.is_dir() and direct_skill_file.is_file():
+            try:
+                is_direct_skill = direct_path.is_dir() and direct_skill_file.is_file()
+            except OSError as exc:
+                raise _UnsupportedHermesSkillRoot(root, str(exc)) from exc
+            if is_direct_skill:
                 record(direct_path, direct_skill_file)
 
         if "/" not in wanted:
@@ -238,14 +298,50 @@ class SkillLedgerCapability(AgentSecCoreCapability):
 
     def _iter_skill_files(self, root: Path):
         """Yield SKILL.md files under the default Hermes local skills dir."""
-        for skill_file in sorted(root.rglob(_SKILL_MANIFEST)):
+        try:
+            skill_files = sorted(root.rglob(_SKILL_MANIFEST))
+        except OSError as exc:
+            raise _UnsupportedHermesSkillRoot(root, str(exc)) from exc
+
+        for skill_file in skill_files:
             try:
                 resolved = skill_file.resolve()
-            except (OSError, ValueError):
+            except OSError as exc:
+                raise _UnsupportedHermesSkillRoot(root, str(exc)) from exc
+            except ValueError:
                 continue
             if self._is_ignored_path(resolved, root):
                 continue
             yield resolved
+
+    def _unsupported_reason_for_root(self, root: Path) -> str | None:
+        for sentinel in _SKILLFS_INPLACE_SENTINELS:
+            sentinel_path = root / sentinel
+            try:
+                if sentinel_path.exists():
+                    return f"SkillFS in-place sentinel found: {sentinel}"
+            except OSError as exc:
+                return str(exc)
+        return None
+
+    def _handle_unsupported_hermes(
+        self, kwargs: dict[str, Any], root: Path, reason: str
+    ) -> None:
+        log_message = "[agent-sec-core] skill-ledger %s root=%s reason=%s"
+        if self._policy == _POLICY_DEBUG:
+            logger.debug(log_message, _UNSUPPORTED_HERMES_NOTICE, root, reason)
+            return
+
+        logger.warning(log_message, _UNSUPPORTED_HERMES_NOTICE, root, reason)
+        if self._policy not in {_POLICY_ASK, _POLICY_WARN}:
+            return
+        self._remember_warning(
+            kwargs,
+            "Hermes",
+            root,
+            _UNSUPPORTED_STATUS,
+            _UNSUPPORTED_HERMES_NOTICE,
+        )
 
     @staticmethod
     def _is_ignored_path(path: Path, root: Path) -> bool:
