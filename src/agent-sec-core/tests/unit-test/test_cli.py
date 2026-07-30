@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from agent_sec_cli.cli import (
     _extract_trace_context_arg,
+    _is_read_only_skill_analyze,
     _resolve_time_range,
     app,
     main,
@@ -86,6 +87,33 @@ def test_extract_trace_context_arg_supports_future_pre_app_initialization():
             ]
         )
         == '{"session_id":"session-1"}'
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["agent-sec-cli", "skill-ledger", "analyze", "/tmp/skill"],
+        [
+            "agent-sec-cli",
+            "--trace-context",
+            '{"session_id":"session-1"}',
+            "skill-ledger",
+            "analyze",
+            "/tmp/skill",
+        ],
+    ],
+)
+def test_read_only_skill_analyze_skips_cli_logging(argv):
+    assert _is_read_only_skill_analyze(argv) is True
+
+
+def test_other_skill_ledger_commands_keep_cli_logging():
+    assert (
+        _is_read_only_skill_analyze(
+            ["agent-sec-cli", "skill-ledger", "scan", "/tmp/skill"]
+        )
+        is False
     )
 
 

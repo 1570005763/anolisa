@@ -264,6 +264,7 @@ Ed25519-based integrity ledger for skill directories. Tracks file hashes, versio
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize keys and quick-scan covered skills |
+| `analyze <dir> --format json` | Read-only content analysis without creating or updating ledger state |
 | `scan <dir>` | Run built-in quick scanners and sign the manifest |
 | `check <dir>` | Detect drift / tampering against the manifest |
 | `show <dir>` | Show latest/active exposure summary, user decision, warnings, and findings |
@@ -282,6 +283,9 @@ agent-sec-cli skill-ledger init
 
 # Check integrity without modifying ledger metadata
 agent-sec-cli skill-ledger check /path/to/skill
+
+# Analyze current content without keys, manifests, signatures, or events
+agent-sec-cli skill-ledger analyze /path/to/skill --format json
 
 # Inspect runtime exposure and user-decision state
 agent-sec-cli skill-ledger show /path/to/skill

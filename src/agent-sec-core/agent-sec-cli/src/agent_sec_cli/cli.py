@@ -84,6 +84,25 @@ def _init_trace_context(trace_context: str | None) -> None:
     init_process_trace_context(parse_trace_context(trace_context))
 
 
+def _is_read_only_skill_analyze(argv: list[str]) -> bool:
+    """Return whether argv selects the side-effect-free Skill analysis path."""
+    command_tokens: list[str] = []
+    index = 1 if argv else 0
+    while index < len(argv) and len(command_tokens) < 2:
+        arg = argv[index]
+        if arg == "--trace-context":
+            index += 2
+            continue
+        if arg.startswith("--trace-context="):
+            index += 1
+            continue
+        if arg.startswith("-"):
+            return False
+        command_tokens.append(arg)
+        index += 1
+    return command_tokens == ["skill-ledger", "analyze"]
+
+
 @app.callback(invoke_without_command=True)
 def main_callback(
     ctx: typer.Context,
@@ -645,7 +664,8 @@ def main() -> None:
         # trace-context initialization path.
         _init_trace_context(_extract_trace_context_arg(sys.argv))
         init_invocation_context()
-        setup_cli_logging()
+        if not _is_read_only_skill_analyze(sys.argv):
+            setup_cli_logging()
     except ValueError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise SystemExit(1) from exc

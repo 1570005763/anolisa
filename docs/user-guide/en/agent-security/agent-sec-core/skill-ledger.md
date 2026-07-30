@@ -57,6 +57,63 @@ Outputs JSON; the key field is `status`:
 
 ### 3. Quick Scan + Signed Certification
 
+For a machine-readable, read-only assessment before certification, run:
+
+```bash
+agent-sec-cli skill-ledger analyze /path/to/your-skill --format json
+```
+
+`analyze` runs both `code-scanner` and `static-scanner` against the current
+directory. It does not create keys, `.skill-meta`, manifests, snapshots,
+signatures, configuration entries, or security events. It is suitable as an
+incremental signal for submission services, but does not replace their existing
+content rules or approval policy.
+
+The process contract is:
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Coverage is complete; inspect `status` for `pass`, `warn`, or `deny` |
+| `1` | A scanner or file could not be covered; `status=error` and `coverage_complete=false` |
+| `2` | Invalid input or protocol usage, including a missing `SKILL.md` |
+
+Callers must check the exit code, top-level `status`, and
+`coverage_complete`. Findings are sorted by `file`, `line`, and `rule`;
+scanner results are always ordered as `code-scanner`, then `static-scanner`.
+The bundled JSON Schema is
+`agent_sec_cli/skill_ledger/analyze.schema.json`.
+Analysis accepts at most 2,000 regular files, 50 MiB of aggregate file content,
+and 32 directory levels. Exceeding a limit returns incomplete coverage.
+
+Node.js subprocess example:
+
+```javascript
+import { spawn } from "node:child_process";
+
+const child = spawn(
+  "agent-sec-cli",
+  ["skill-ledger", "analyze", skillDir, "--format", "json"],
+  { stdio: ["ignore", "pipe", "pipe"] },
+);
+
+let stdout = "";
+child.stdout.setEncoding("utf8");
+child.stdout.on("data", (chunk) => {
+  stdout += chunk;
+});
+child.on("close", (code) => {
+  const result = JSON.parse(stdout);
+  if (code !== 0 || result.status === "error" || !result.coverage_complete) {
+    throw new Error("Skill analysis did not complete");
+  }
+  // Keep existing submission rules; consume result.scanners as extra evidence.
+});
+```
+
+`analyze` currently ships in the complete `agent-sec-cli` wheel and RPM. A
+future packaging change may extract the shared scanners into a scanner-only
+wheel or RPM subpackage; the scanner rules must remain single-source.
+
 The default certification path uses the built-in quick scanner and does not depend on an LLM. For a single Skill:
 
 ```bash

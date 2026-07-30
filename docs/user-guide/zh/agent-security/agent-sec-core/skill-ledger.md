@@ -57,6 +57,59 @@ agent-sec-cli skill-ledger check /path/to/your-skill
 
 ### 3. 快速扫描 + 签名认证
 
+如需在认证前执行机器可调用的只读评估，可运行：
+
+```bash
+agent-sec-cli skill-ledger analyze /path/to/your-skill --format json
+```
+
+`analyze` 会针对当前目录依次运行 `code-scanner` 和 `static-scanner`。它不会
+创建密钥、`.skill-meta`、manifest、snapshot、签名、配置项或安全事件。投稿
+服务可以将结果作为增量信号，但不能用它替代已有内容规则和审核策略。
+
+进程契约如下：
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | 覆盖完整；通过 `status` 判断 `pass`、`warn` 或 `deny` |
+| `1` | scanner 或文件未能完整覆盖；`status=error` 且 `coverage_complete=false` |
+| `2` | 输入或协议使用错误，包括缺少 `SKILL.md` |
+
+调用方必须同时检查退出码、顶层 `status` 和 `coverage_complete`。Findings
+按 `file`、`line`、`rule` 排序；scanner 结果固定先输出 `code-scanner`，再输出
+`static-scanner`。随包 JSON Schema 位于
+`agent_sec_cli/skill_ledger/analyze.schema.json`。
+分析最多接受 2,000 个普通文件、50 MiB 文件总量和 32 层目录深度；超过任一限制
+都会返回覆盖不完整。
+
+Node.js subprocess 示例：
+
+```javascript
+import { spawn } from "node:child_process";
+
+const child = spawn(
+  "agent-sec-cli",
+  ["skill-ledger", "analyze", skillDir, "--format", "json"],
+  { stdio: ["ignore", "pipe", "pipe"] },
+);
+
+let stdout = "";
+child.stdout.setEncoding("utf8");
+child.stdout.on("data", (chunk) => {
+  stdout += chunk;
+});
+child.on("close", (code) => {
+  const result = JSON.parse(stdout);
+  if (code !== 0 || result.status === "error" || !result.coverage_complete) {
+    throw new Error("Skill analysis did not complete");
+  }
+  // 保留现有投稿规则，将 result.scanners 作为补充证据。
+});
+```
+
+`analyze` 当前随完整的 `agent-sec-cli` wheel 和 RPM 交付。后续可将共享 scanner
+提取为 scanner-only wheel 或 RPM 子包，但 scanner 规则必须继续保持单一源码。
+
 默认认证路径使用内置快速扫描器，不依赖 LLM。对单个 Skill 执行：
 
 ```bash
