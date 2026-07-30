@@ -263,6 +263,7 @@ agent-sec-cli verify
 | 命令 | 说明 |
 |------|------|
 | `init` | 初始化密钥，并为已覆盖 Skill 执行快速扫描 |
+| `analyze <dir> --format json` | 只读分析当前内容，不创建或更新账本状态 |
 | `scan <dir>` | 执行内置快速扫描并签名写入 manifest |
 | `check <dir>` | 检测 Skill 文件是否漂移或被篡改 |
 | `show <dir>` | 展示 latest/active 暴露摘要、用户决策、告警信息和 findings |
@@ -281,6 +282,9 @@ agent-sec-cli skill-ledger init
 
 # 检查完整性，不修改 ledger 元数据
 agent-sec-cli skill-ledger check /path/to/skill
+
+# 分析当前内容，不创建密钥、manifest、签名或事件
+agent-sec-cli skill-ledger analyze /path/to/skill --format json
 
 # 查看运行态暴露与用户决策状态
 agent-sec-cli skill-ledger show /path/to/skill
