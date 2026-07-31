@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from agent_sec_cli.skill_ledger.analyze import analyze_skill
+from agent_sec_cli.skill_ledger.analyze import _sanitize_payload, analyze_skill
 
 
 def _write_skill(root: Path, body: str = "Use this Skill safely.\n") -> None:
@@ -106,6 +106,64 @@ def test_scanner_error_marks_coverage_incomplete_and_keeps_other_result() -> Non
     assert payload["coverage_complete"] is False
     assert payload["scanners"][0]["status"] == "error"
     assert payload["scanners"][1]["status"] == "pass"
+
+
+def test_unexpected_static_scanner_error_is_json_coverage_error() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_skill(root)
+        with patch(
+            "agent_sec_cli.skill_ledger.analyze.run_builtin_scanner",
+            side_effect=KeyError("unexpected dispatcher failure"),
+        ):
+            payload, exit_code = analyze_skill(root)
+
+    assert exit_code == 1
+    assert payload["status"] == "error"
+    assert payload["coverage_complete"] is False
+    assert payload["scanners"][0]["status"] == "pass"
+    assert payload["scanners"][1]["status"] == "error"
+    assert payload["scanners"][1]["errors"] == [
+        {
+            "code": "scanner-error",
+            "message": "static-scanner failed to complete.",
+        }
+    ]
+    assert "unexpected dispatcher failure" not in str(payload)
+
+
+def test_payload_sanitization_redacts_temporary_directories() -> None:
+    root = Path("/skills/example")
+    payload = {
+        "message": "/env/tmp/private.txt /other/temp/a /other/tmp/b",
+        "metadata": {
+            "macos": "/private/var/folders/ab/session/result.json",
+        },
+    }
+
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "TMPDIR": "/env/tmp",
+                "TEMP": "/other/temp",
+                "TMP": "/other/tmp",
+            },
+            clear=False,
+        ),
+        patch(
+            "agent_sec_cli.skill_ledger.analyze.tempfile.gettempdir",
+            return_value="/private/var/folders/ab/session",
+        ),
+    ):
+        sanitized = _sanitize_payload(payload, root)
+
+    rendered = str(sanitized)
+    assert "/env/tmp" not in rendered
+    assert "/other/temp" not in rendered
+    assert "/other/tmp" not in rendered
+    assert "/private/var/folders" not in rendered
+    assert rendered.count("<redacted>") == 4
 
 
 def test_large_text_file_is_coverage_error() -> None:
