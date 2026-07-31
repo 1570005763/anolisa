@@ -2,12 +2,12 @@
 
 import os
 import stat
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from agent_sec_cli import __version__ as AGENT_SEC_VERSION
 from agent_sec_cli.skill_ledger.scanner.builtins.dispatcher import (
-    BuiltinScannerError,
     run_builtin_scanner,
 )
 from agent_sec_cli.skill_ledger.scanner.names import (
@@ -198,7 +198,7 @@ def _run_code_scanner(root: Path) -> dict[str, Any]:
 def _run_static_scanner(root: Path) -> dict[str, Any]:
     try:
         result = run_builtin_scanner(STATIC_SCANNER_NAME, root)
-    except (BuiltinScannerError, ValueError):
+    except Exception:
         return _scanner_error(
             STATIC_SCANNER_NAME,
             "unknown",
@@ -324,12 +324,27 @@ def _sort_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _sanitize_payload(payload: dict[str, Any], root: Path) -> dict[str, Any]:
-    sensitive_roots = {str(root), str(Path.home())}
+    def is_safe_redaction_root(value: str) -> bool:
+        path = Path(value)
+        return path.is_absolute() and path != Path(path.anchor)
+
+    sensitive_roots = {str(root), str(Path.home()), tempfile.gettempdir()}
     sensitive_roots.update(
         value
-        for name in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME")
+        for name in (
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+        )
         if (value := os.environ.get(name))
     )
+    sensitive_roots = {
+        value for value in sensitive_roots if is_safe_redaction_root(value)
+    }
 
     def sanitize(value: Any) -> Any:
         if isinstance(value, dict):

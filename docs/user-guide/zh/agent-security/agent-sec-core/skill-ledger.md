@@ -75,6 +75,9 @@ agent-sec-cli skill-ledger analyze /path/to/your-skill --format json
 | `1` | scanner 或文件未能完整覆盖；`status=error` 且 `coverage_complete=false` |
 | `2` | 输入或协议使用错误，包括缺少 `SKILL.md` |
 
+协议错误包括缺少 Skill 根目录参数（`skill-root-required`）和不支持的输出格式
+（`unsupported-format`）；两者均返回退出码 `2` 和 JSON 错误负载。
+
 调用方必须同时检查退出码、顶层 `status` 和 `coverage_complete`。Findings
 按 `file`、`line`、`rule` 排序；scanner 结果固定先输出 `code-scanner`，再输出
 `static-scanner`。随包 JSON Schema 位于

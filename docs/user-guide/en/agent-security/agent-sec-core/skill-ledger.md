@@ -77,6 +77,10 @@ The process contract is:
 | `1` | A scanner or file could not be covered; `status=error` and `coverage_complete=false` |
 | `2` | Invalid input or protocol usage, including a missing `SKILL.md` |
 
+Protocol errors include a missing Skill root argument (`skill-root-required`)
+and unsupported output formats (`unsupported-format`); both return exit code
+`2` with a JSON error payload.
+
 Callers must check the exit code, top-level `status`, and
 `coverage_complete`. Findings are sorted by `file`, `line`, and `rule`;
 scanner results are always ordered as `code-scanner`, then `static-scanner`.
