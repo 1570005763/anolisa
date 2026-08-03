@@ -69,6 +69,119 @@ class TestPiiScanCapability:
             "on_session_end",
         ]
 
+    def test_environment_policy_overrides_capability_policy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "observe")
+        monkeypatch.setenv("PII_CHECKER_MODE", "deny")
+        capability = PiiScanCapability()
+
+        capability._on_register({"policy": "block"})
+
+        assert capability._policy == "observe"
+
+    def test_legacy_mode_overrides_capability_policy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PII_CHECKER_MODE", "deny")
+        capability = PiiScanCapability()
+
+        capability._on_register({"policy": "observe"})
+
+        assert capability._policy == "block"
+
+    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
+    def test_observe_scans_model_output_without_mutating_it(
+        self, mock_cli: MagicMock
+    ) -> None:
+        capability = PiiScanCapability()
+        capability._timeout = 5.0
+        capability._on_register({"policy": "observe"})
+        mock_cli.return_value = CliResult(
+            stdout=json.dumps(
+                {
+                    "verdict": "warn",
+                    "findings": [
+                        {
+                            "type": "email",
+                            "severity": "warn",
+                            "evidence_redacted": "a***@example.com",
+                        }
+                    ],
+                    "redacted_text": "Contact a***@example.com",
+                }
+            ),
+            stderr="",
+            exit_code=0,
+        )
+
+        result = capability._on_transform_llm_output(
+            "Contact alice@example.com", session_id="session-1"
+        )
+
+        assert result is None
+        mock_cli.assert_called_once()
+
+    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
+    def test_environment_switch_disables_before_input_scan(
+        self, mock_cli: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PII_CHECKER_HOOK_ENABLED", "false")
+        capability = PiiScanCapability()
+        capability._on_register({})
+        monkeypatch.setattr(
+            "hermes_plugin_src.capabilities.pii_scan.extract_user_text",
+            lambda *_args, **_kwargs: pytest.fail("input should not be read"),
+        )
+
+        result = capability._on_pre_llm_call(
+            user_message="password=secret", session_id="session-1"
+        )
+
+        assert result is None
+        mock_cli.assert_not_called()
+
+    @pytest.mark.parametrize("policy", ["warn", "ask", "block"])
+    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
+    def test_non_observe_policies_warn_and_continue(
+        self,
+        mock_cli: MagicMock,
+        policy: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
+        monkeypatch.delenv("PII_CHECKER_MODE", raising=False)
+        capability = PiiScanCapability()
+        capability._timeout = 5.0
+        capability._on_register({"policy": policy})
+        mock_cli.side_effect = [
+            _scan_result(
+                "deny",
+                [
+                    {
+                        "type": "credential",
+                        "severity": "deny",
+                        "evidence_redacted": "token=[REDACTED]",
+                    }
+                ],
+            ),
+            _scan_result("pass"),
+        ]
+
+        capability._on_pre_llm_call(
+            user_message="token=raw-secret-value",
+            session_id="session-1",
+        )
+        output = capability._on_transform_llm_output(
+            "assistant reply",
+            session_id="session-1",
+        )
+
+        assert output is not None
+        assert "token=[REDACTED]" in output
+        assert output.endswith("\n\nassistant reply")
+        assert "blocked" not in output.lower()
+
     @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
     def test_empty_input_passthrough(self, mock_cli, capability):
         """Empty user input should not call scan-pii."""

@@ -11,12 +11,32 @@ This script is intentionally self-contained — it does NOT import any
 """
 
 import json
+import os
 import subprocess
 import sys
 from typing import Any
 
+from hook_config import env_flag_enabled, env_hook_policy, normalize_hook_policy
 from pii_text import value_to_text
 from trace_context import with_trace_context
+
+_HOOK_ENABLED = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
+
+
+def _read_policy() -> str:
+    """Read the canonical policy, falling back to the legacy mode."""
+    if "PII_CHECKER_HOOK_POLICY" in os.environ:
+        raw = os.environ.get("PII_CHECKER_HOOK_POLICY")
+        policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
+        if normalize_hook_policy(raw, "") == "":
+            print("[pii-checker] invalid hook policy; using observe", file=sys.stderr)
+        return policy
+    raw = os.environ.get("PII_CHECKER_MODE")
+    policy = normalize_hook_policy(raw, "observe")
+    if "PII_CHECKER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
+        print("[pii-checker] invalid legacy mode; using observe", file=sys.stderr)
+    return policy
+
 
 _USER_INPUT_SOURCE = "user_input"
 _TOOL_INPUT_SOURCE = "tool_input"
@@ -189,7 +209,7 @@ def _extract_scan_target(input_data: dict[str, Any]) -> tuple[str, str]:
     return "", "unknown"
 
 
-def _format_cosh(scan_result: dict[str, Any]) -> str:
+def _format_cosh(scan_result: dict[str, Any], policy: str = "warn") -> str:
     """Convert a scan-pii result dict into a cosh HookOutput JSON string.
 
     Mapping:
@@ -204,7 +224,7 @@ def _format_cosh(scan_result: dict[str, Any]) -> str:
     if verdict == "pass" or not findings:
         return _allow()
 
-    if verdict in {"warn", "deny"}:
+    if policy != "observe" and verdict in {"warn", "deny"}:
         return json.dumps(
             {"decision": "allow", "reason": _format_pii_warning(verdict, findings)},
             ensure_ascii=False,
@@ -214,6 +234,10 @@ def _format_cosh(scan_result: dict[str, Any]) -> str:
 
 
 def main() -> None:
+    if not _HOOK_ENABLED:
+        print(_allow())
+        return
+
     try:
         input_data = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError, ValueError):
@@ -233,7 +257,8 @@ def main() -> None:
     if scan_result is None:
         print(_allow())
         return
-    print(_format_cosh(scan_result))
+    # Cosh PII cannot enforce ask/block consistently; both fall back to warn.
+    print(_format_cosh(scan_result, _read_policy()))
 
 
 if __name__ == "__main__":
