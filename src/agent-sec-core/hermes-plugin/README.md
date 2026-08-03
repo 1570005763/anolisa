@@ -130,7 +130,7 @@ Hermes 支持的 hook 及其回调签名：
 - `enabled = false`：完全不注册 Hermes hook。
 - `policy = "ask"`：默认策略；未触发暂不支持兜底时，当 summary `message` 非空会缓存为本轮告警，并通过
   `transform_llm_output` 追加到最终回复开头，确保用户可见。
-- `policy = "debug"`：静默兼容模式；summary `message` 非空、CLI 失败或 JSON 解析失败都 fail-open，只写 debug。
+- `policy = "observe"`：静默模式；summary `message` 非空、CLI 失败或 JSON 解析失败都 fail-open，只写 debug。旧值 `debug` 仍作为别名兼容。
 - `policy = "warn"`：warning-only 兼容模式；未触发暂不支持兜底时，summary `message` 非空会缓存为本轮告警，并通过
   `transform_llm_output` 追加到最终回复开头，确保用户可见。
 - `policy = "block"`：summary `message` 非空时直接返回 Hermes block 结果。
@@ -205,6 +205,10 @@ CLI 调用方式和 `openclaw-plugin` 保持一致：helper 将一条 JSON paylo
 ### pii-scan-user-input
 
 `pii-scan-user-input` 对齐 Cosh/OpenClaw 多点位 PII checker 语义：
+
+默认 `policy = "observe"`，只扫描和审计。`warn` 返回脱敏告警并继续；Hermes 当前
+无法落实 `ask` / `block`，因此显式 fallback 为 `warn`。环境变量 policy 优先于
+capability 配置，旧变量 `PII_CHECKER_MODE` 继续兼容。
 
 - 挂在 `pre_llm_call`、`pre_tool_call`、`post_tool_call`、`transform_llm_output`、`on_session_end`
 - 扫描本轮用户输入、tool 参数、tool 返回结果和最终模型回复；不扫描 history、memory 或 RAG context

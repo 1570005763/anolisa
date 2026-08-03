@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..cli_runner import call_agent_sec_cli, trace_context
+from ..hook_config import (  # noqa: TID252 - Hermes loads this as a standalone package.
+    env_flag_enabled,
+    env_hook_policy,
+    normalize_hook_policy,
+)
 from ..pii_text import extract_user_text, value_to_text
 from .base import AgentSecCoreCapability
 
@@ -42,12 +48,41 @@ class PiiScanCapability(AgentSecCoreCapability):
 
     def __init__(self):
         super().__init__()
+        self._hook_enabled = True
+        self._policy = "warn"
         self._include_low_confidence = False
         self._warning_ttl_seconds = _DEFAULT_WARNING_TTL_SECONDS
         self._warnings_by_key: dict[str, WarningBucket] = {}
 
     def _on_register(self, config: dict) -> None:
         """Read pii-scan specific config."""
+        self._hook_enabled = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
+        if "PII_CHECKER_HOOK_POLICY" in os.environ:
+            self._policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
+            if (
+                normalize_hook_policy(os.environ.get("PII_CHECKER_HOOK_POLICY"), "")
+                == ""
+            ):
+                logger.warning(
+                    "[agent-sec-core] pii-checker invalid environment policy; using observe"
+                )
+        elif "PII_CHECKER_MODE" in os.environ:
+            self._policy = env_hook_policy("PII_CHECKER_MODE", "observe")
+            if normalize_hook_policy(os.environ.get("PII_CHECKER_MODE"), "") == "":
+                logger.warning(
+                    "[agent-sec-core] pii-checker invalid legacy policy; using observe"
+                )
+        else:
+            raw_policy = config.get("policy")
+            self._policy = normalize_hook_policy(raw_policy, "observe")
+            if (
+                isinstance(raw_policy, str)
+                and normalize_hook_policy(raw_policy, "") == ""
+            ):
+                logger.warning(
+                    "[agent-sec-core] pii-checker invalid capability policy=%r; using observe",
+                    raw_policy,
+                )
         self._include_low_confidence = bool(config.get("include_low_confidence", False))
         ttl = config.get("warning_ttl_seconds", _DEFAULT_WARNING_TTL_SECONDS)
         try:
@@ -67,6 +102,8 @@ class PiiScanCapability(AgentSecCoreCapability):
 
     def _on_pre_llm_call(self, messages=None, **kwargs):
         """Scan the current user input before the LLM turn starts."""
+        if not self._hook_enabled:
+            return None
         self._cleanup_expired()
 
         user_text = extract_user_text(messages, kwargs)
@@ -97,6 +134,8 @@ class PiiScanCapability(AgentSecCoreCapability):
         **kwargs: Any,
     ):
         """Scan tool arguments before execution."""
+        if not self._hook_enabled:
+            return None
         self._cleanup_expired()
         text = self._value_to_text(args)
         if not text.strip():
@@ -125,6 +164,8 @@ class PiiScanCapability(AgentSecCoreCapability):
         **kwargs: Any,
     ):
         """Scan tool output after execution."""
+        if not self._hook_enabled:
+            return None
         self._cleanup_expired()
         text = self._value_to_text(result)
         if not text.strip():
@@ -151,6 +192,8 @@ class PiiScanCapability(AgentSecCoreCapability):
         **kwargs,
     ):
         """Prepend cached PII warnings to the final user-visible response."""
+        if not self._hook_enabled:
+            return response_text
         self._cleanup_expired()
         if not isinstance(response_text, str):
             return None
@@ -173,6 +216,11 @@ class PiiScanCapability(AgentSecCoreCapability):
                 verdict = self._safe_string(scan.get("verdict")) or "pass"
                 findings = self._as_list(scan.get("findings"))
                 if verdict in {"warn", "deny"} and findings:
+                    if self._policy == "observe":
+                        logger.info(
+                            f"[agent-sec-core] {self.id} {verdict.upper()} model output observed"
+                        )
+                        return None
                     warnings.append(self._format_pii_warning(verdict, findings))
                     redacted_text = self._safe_string(scan.get("redacted_text"))
                     if redacted_text:
@@ -286,6 +334,10 @@ class PiiScanCapability(AgentSecCoreCapability):
             )
             return
 
+        if self._policy == "observe":
+            return
+
+        # Hermes cannot request approval or block PII at these hooks; ask/block warn.
         warning = self._format_pii_warning(verdict, findings)
         self._push_warning(cache_key, warning)
         logger.warning(

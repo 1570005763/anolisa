@@ -81,9 +81,45 @@ class TestFormatCosh:
         result = json.loads(_format_cosh({"verdict": verdict, "findings": [{}]}))
         assert result == {"decision": "allow"}
 
+    @pytest.mark.parametrize(
+        ("policy", "warns"),
+        [
+            ("observe", False),
+            ("warn", True),
+            ("ask", True),
+            ("block", True),
+        ],
+    )
+    def test_unified_policy_matrix_falls_back_to_non_blocking_warning(
+        self, policy, warns
+    ):
+        result = json.loads(
+            _format_cosh(
+                {
+                    "verdict": "deny",
+                    "findings": [
+                        {
+                            "type": "credential",
+                            "severity": "deny",
+                            "evidence_redacted": "token=[REDACTED]",
+                        }
+                    ],
+                },
+                policy,
+            )
+        )
+
+        assert result["decision"] == "allow"
+        if warns:
+            assert "token=[REDACTED]" in result["reason"]
+            assert "本轮请求将继续处理" in result["reason"]
+        else:
+            assert result == {"decision": "allow"}
+
 
 class TestCoshHookMain:
     def _run_main(self, monkeypatch, capsys, input_data):
+        monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "warn")
         monkeypatch.setattr(pii_checker_hook.sys, "stdin", io.StringIO(input_data))
         pii_checker_hook.main()
         return json.loads(capsys.readouterr().out)
@@ -344,6 +380,46 @@ class TestCoshHookMain:
         assert output == {"decision": "allow"}
 
 
+def test_environment_disabled_short_circuits_before_input_and_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("PII_CHECKER_HOOK_ENABLED", "false")
+    disabled_hook = load_standalone_hook(
+        "cosh_pii_checker_disabled_hook",
+        Path(_COSH_HOOK),
+    )
+    monkeypatch.setattr(
+        disabled_hook.sys,
+        "stdin",
+        type(
+            "UnreadableInput",
+            (),
+            {"read": lambda *_args, **_kwargs: pytest.fail("input should not be read")},
+        )(),
+    )
+    monkeypatch.setattr(
+        disabled_hook.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("CLI should not be called"),
+    )
+
+    disabled_hook.main()
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"decision": "allow"}
+    assert captured.err == ""
+
+
+def test_new_policy_overrides_conflicting_legacy_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "observe")
+    monkeypatch.setenv("PII_CHECKER_MODE", "deny")
+
+    assert pii_checker_hook._read_policy() == "observe"
+
+
 def test_manifest_registers_only_user_prompt_submit_for_pii():
     manifest_path = (
         Path(__file__).resolve().parents[2]
@@ -367,3 +443,11 @@ def test_manifest_registers_only_user_prompt_submit_for_pii():
         "PostToolUse",
         "PostToolUseFailure",
     ]
+
+
+def test_invalid_legacy_mode_reports_observe_fallback(monkeypatch, capsys):
+    monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
+    monkeypatch.setenv("PII_CHECKER_MODE", "banana")
+
+    assert pii_checker_hook._read_policy() == "observe"
+    assert "invalid legacy mode; using observe" in capsys.readouterr().err
