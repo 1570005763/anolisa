@@ -580,7 +580,7 @@ def test_qwen_skill_ledger_hook_uses_qwen_home_and_blocks_managed_drift(
             "AGENT_SEC_DATA_DIR": str(data_dir),
             "XDG_DATA_HOME": str(xdg_data),
             "XDG_CONFIG_HOME": str(xdg_config),
-            "SKILL_LEDGER_HOOK_POLICY": "block",
+            "SKILL_LEDGER_MODE": "block",
         }
     )
     _ensure_agent_sec_cli(env, tmp_path)
@@ -680,7 +680,7 @@ def test_qwen_disabled_skill_skips_ledger_show_under_block_policy(tmp_path) -> N
             "AGENT_SEC_DATA_DIR": str(data_dir),
             "XDG_DATA_HOME": str(xdg_data),
             "XDG_CONFIG_HOME": str(xdg_config),
-            "SKILL_LEDGER_HOOK_POLICY": "block",
+            "SKILL_LEDGER_MODE": "block",
         }
     )
     _ensure_agent_sec_cli(env, tmp_path)

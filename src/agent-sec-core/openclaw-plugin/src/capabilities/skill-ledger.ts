@@ -121,20 +121,11 @@ function readPolicy(
   capabilityConfig: Record<string, any>,
   api: any,
 ): SkillLedgerPolicy {
-  if (process.env.SKILL_LEDGER_HOOK_POLICY !== undefined) {
-    const rawPolicy = process.env.SKILL_LEDGER_HOOK_POLICY;
-    const policy = envHookPolicy("SKILL_LEDGER_HOOK_POLICY", DEFAULT_POLICY);
-    if (!isHookPolicyValue(rawPolicy)) {
-      api.logger.warn(`[skill-ledger] invalid environment policy; using ${DEFAULT_POLICY}`);
-    }
-    return policy;
-  }
-
   if (process.env.SKILL_LEDGER_MODE !== undefined) {
     const rawPolicy = process.env.SKILL_LEDGER_MODE;
     const policy = envHookPolicy("SKILL_LEDGER_MODE", DEFAULT_POLICY);
     if (!isHookPolicyValue(rawPolicy)) {
-      api.logger.warn(`[skill-ledger] invalid legacy policy; using ${DEFAULT_POLICY}`);
+      api.logger.warn("[skill-ledger] invalid SKILL_LEDGER_MODE; using ask");
     }
     return policy;
   }

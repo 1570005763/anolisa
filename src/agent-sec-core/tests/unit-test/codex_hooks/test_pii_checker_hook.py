@@ -377,18 +377,6 @@ def test_environment_disabled_short_circuits_before_input_and_cli(
     assert captured.err == ""
 
 
-def test_new_policy_overrides_conflicting_legacy_mode(mock_cli) -> None:
-    env = mock_cli(
-        output=_PII_DENY_RESULT,
-        extra={
-            "PII_CHECKER_HOOK_POLICY": "observe",
-            "PII_CHECKER_MODE": "deny",
-        },
-    )
-
-    assert _run_hook(_USER_PROMPT_EVENT, env_override=env) == {}
-
-
 class TestUnifiedHookPolicyWarnings:
     """Warnings preserve scanner verdict, policy, and actual fallback behavior."""
 
@@ -453,7 +441,7 @@ class TestUnifiedHookPolicyWarnings:
             output=scan_output,
             extra={
                 "PII_CHECKER_HOOK_ENABLED": "true",
-                "PII_CHECKER_HOOK_POLICY": policy,
+                "PII_CHECKER_MODE": policy,
             },
         )
 
@@ -476,7 +464,7 @@ class TestUnifiedHookPolicyWarnings:
             output=_PII_DENY_RESULT,
             extra={
                 "PII_CHECKER_HOOK_ENABLED": "true",
-                "PII_CHECKER_HOOK_POLICY": "block",
+                "PII_CHECKER_MODE": "block",
             },
         )
 
@@ -584,12 +572,11 @@ class TestUnknownMode:
         assert output == {}
 
 
-def test_invalid_legacy_mode_reports_observe_fallback(monkeypatch, capsys):
-    monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
+def test_invalid_mode_reports_observe_fallback(monkeypatch, capsys):
     monkeypatch.setenv("PII_CHECKER_MODE", "banana")
 
     assert pii_checker_hook._read_policy() == "observe"
-    assert "invalid legacy mode; using observe" in capsys.readouterr().err
+    assert "invalid PII_CHECKER_MODE; using observe" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

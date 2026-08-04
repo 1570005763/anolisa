@@ -29,15 +29,10 @@ function readConfig(pluginConfig: Record<string, any>, api: any): PiiScanConfig 
   const capabilityConfig =
     pluginConfig.capabilities?.["pii-scan-user-input"] ?? {};
   let policy: HookPolicy = "observe";
-  if (process.env.PII_CHECKER_HOOK_POLICY !== undefined) {
-    policy = envHookPolicy("PII_CHECKER_HOOK_POLICY", "observe");
-    if (!isHookPolicyValue(process.env.PII_CHECKER_HOOK_POLICY)) {
-      api.logger.warn("[pii-checker] invalid environment policy; using observe");
-    }
-  } else if (process.env.PII_CHECKER_MODE !== undefined) {
+  if (process.env.PII_CHECKER_MODE !== undefined) {
     policy = envHookPolicy("PII_CHECKER_MODE", "observe");
     if (!isHookPolicyValue(process.env.PII_CHECKER_MODE)) {
-      api.logger.warn("[pii-checker] invalid legacy PII_CHECKER_MODE; using observe");
+      api.logger.warn("[pii-checker] invalid PII_CHECKER_MODE; using observe");
     }
   } else if (typeof capabilityConfig.policy === "string") {
     policy = normalizeHookPolicy(capabilityConfig.policy, "observe");

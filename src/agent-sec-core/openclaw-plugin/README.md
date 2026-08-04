@@ -413,7 +413,7 @@ Default behavior:
 
 Deployment environment variables override capability configuration. Use
 `SKILL_LEDGER_HOOK_ENABLED`, `PII_CHECKER_HOOK_ENABLED`,
-`SKILL_LEDGER_HOOK_POLICY`, and `PII_CHECKER_HOOK_POLICY` for deployment-level
+`SKILL_LEDGER_MODE`, and `PII_CHECKER_MODE` for deployment-level
 control. Disabling Skill Ledger short-circuits before key initialization.
   `blockStatuses` is accepted as deprecated configuration metadata but no longer controls runtime decisions.
 

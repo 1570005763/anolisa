@@ -234,7 +234,7 @@ def test_hook_event_name_supports_both_fields_and_legacy_default(payload, expect
 
 class TestCoshHookMain:
     def _run_main(self, monkeypatch, capsys, input_data, policy="warn"):
-        monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", policy)
+        monkeypatch.setenv("PII_CHECKER_MODE", policy)
         monkeypatch.setattr(pii_checker_hook.sys, "stdin", io.StringIO(input_data))
         pii_checker_hook.main()
         return json.loads(capsys.readouterr().out)
@@ -561,15 +561,6 @@ def test_environment_disabled_short_circuits_before_input_and_cli(
     assert captured.err == ""
 
 
-def test_new_policy_overrides_conflicting_legacy_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("PII_CHECKER_MODE", "deny")
-
-    assert pii_checker_hook._read_policy() == "observe"
-
-
 def test_manifest_registers_all_supported_pii_events():
     manifest_path = (
         Path(__file__).resolve().parents[2]
@@ -595,9 +586,8 @@ def test_manifest_registers_all_supported_pii_events():
     ]
 
 
-def test_invalid_legacy_mode_reports_observe_fallback(monkeypatch, capsys):
-    monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
+def test_invalid_mode_reports_observe_fallback(monkeypatch, capsys):
     monkeypatch.setenv("PII_CHECKER_MODE", "banana")
 
     assert pii_checker_hook._read_policy() == "observe"
-    assert "invalid legacy mode; using observe" in capsys.readouterr().err
+    assert "invalid PII_CHECKER_MODE; using observe" in capsys.readouterr().err

@@ -8,14 +8,14 @@ HookOutput JSON to stdout.
 
 Hook point: **UserPromptSubmit** (no matcher — fires on every prompt)
 
-Policy (controlled by SKILL_LEDGER_HOOK_POLICY, default: ask):
+Policy (controlled by SKILL_LEDGER_MODE, default: ask):
   - observe: silent pass-through, only audit trail via agent-sec-cli events.
             Even if integrity check fails, it will NOT be blocked.
   - warn: show a warning and continue.
   - ask: fall back to warn because this Codex hook cannot request confirmation.
   - block: block the entire turn when any skill fails integrity check.
 
-Legacy SKILL_LEDGER_MODE is supported; debug maps to observe and deny maps to block.
+The compatibility values debug and deny map to observe and block, respectively.
 
 Input schema::
 
@@ -62,21 +62,14 @@ from trace_context import with_trace_context
 
 _HOOK_ENABLED = env_flag_enabled("SKILL_LEDGER_HOOK_ENABLED", True)
 MODE = os.environ.get("SKILL_LEDGER_MODE")
-_POLICY_FROM_ENV = "SKILL_LEDGER_HOOK_POLICY" in os.environ
 
 
 def _read_policy() -> str:
-    """Read the canonical policy, falling back to the legacy mode."""
-    if "SKILL_LEDGER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("SKILL_LEDGER_HOOK_POLICY")
-        policy = env_hook_policy("SKILL_LEDGER_HOOK_POLICY", "ask")
-        if normalize_hook_policy(raw, "") == "":
-            print("[skill-ledger] invalid hook policy; using ask", file=sys.stderr)
-        return policy
+    """Read the configured Skill Ledger mode."""
     raw = os.environ.get("SKILL_LEDGER_MODE")
-    policy = normalize_hook_policy(raw, "ask")
+    policy = env_hook_policy("SKILL_LEDGER_MODE", "ask")
     if "SKILL_LEDGER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
-        print("[skill-ledger] invalid legacy mode; using ask", file=sys.stderr)
+        print("[skill-ledger] invalid SKILL_LEDGER_MODE; using ask", file=sys.stderr)
     return policy
 
 
@@ -84,8 +77,8 @@ _POLICY = _read_policy()
 
 
 def _effective_policy() -> str:
-    """Return policy while preserving legacy module-level test overrides."""
-    return _POLICY if _POLICY_FROM_ENV else normalize_hook_policy(MODE, _POLICY)
+    """Return policy while preserving module-level test overrides."""
+    return normalize_hook_policy(MODE, _POLICY)
 
 
 try:

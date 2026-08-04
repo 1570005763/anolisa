@@ -690,7 +690,7 @@ OpenClaw、copilot-shell、Hermes、Codex 和 Qwen Code 遇到 CLI 不可用、�
 
 ### 6.2 copilot-shell（Command Hook）
 
-独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。默认 Cosh manifest 挂载该 hook，默认 `SKILL_LEDGER_HOOK_POLICY=ask`。该环境变量属于可信宿主或部署环境配置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；若需要防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源：
+独立 Python 脚本 `cosh-extension/hooks/skill_ledger_hook.py`，专为 stdin/stdout 协议设计，不依赖 `agent_sec_cli` 包。默认 Cosh manifest 挂载该 hook，默认 `SKILL_LEDGER_MODE=ask`。该环境变量属于可信宿主或部署环境配置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；若需要防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源：
 
 配置：
 ```jsonc
@@ -727,7 +727,7 @@ OpenClaw、copilot-shell、Hermes、Codex 和 Qwen Code 遇到 CLI 不可用、�
 
 `qoder-plugin/hooks/hooks.json` 为 `Skill` tool 注册独立的 `PreToolUse` hook。事件只提供 Skill 名和绝对 `cwd`，没有宿主已解析的绝对 Skill 路径，因此 hook 不直接拼接最终目录，而是按 user → project 顺序扫描 `~/.qoder/skills/` 和 `<cwd>/.qoder/skills/` 的直接子目录，读取 `SKILL.md` frontmatter `name`（无 frontmatter 时回退目录名），再执行 canonical path 和根目录边界校验。用户级同名 Skill 优先；frontmatter 存在但 `name` 缺失、歧义或使用 hook 无法安全解析的 YAML scalar 时，与同一根重名、路径穿越、symlink 逃逸或目录不可读取一样，不任意选择目录或降级为非本地 Skill，而是交给当前 policy 处理。只有两个本地目录表均可信解析且没有匹配时，才视为 Qoder 内置、plugin 或 remote 来源，放行并仅写 debug。
 
-解析成功后，hook 调用 `agent-sec-cli skill-ledger check <canonical_skill_dir>`。`check` 每次重新计算当前文件哈希，因此无需 watcher 即可在下一次调用前发现漂移；hook 不自动执行 `init`、`scan` 或 `certify`。`pass` 静默放行，其余五个完整性状态 `none` / `drifted` / `warn` / `deny` / `tampered` 以及 `error` 按 `SKILL_LEDGER_HOOK_POLICY=observe|warn|ask|block` 处理，默认 `ask`；旧值 `debug` / `deny` 分别作为 `observe` / `block` 的兼容别名。`SKILL_LEDGER_TIMEOUT` 控制 CLI 超时，默认 5 秒。即使 CLI 返回非零退出码，hook 仍优先解析合法 JSON，以保留 `deny` / `tampered` 等安全结果。所有实际 `check` 调用通过 Qoder trace context 进入统一 Skill Ledger 安全审计日志。
+解析成功后，hook 调用 `agent-sec-cli skill-ledger check <canonical_skill_dir>`。`check` 每次重新计算当前文件哈希，因此无需 watcher 即可在下一次调用前发现漂移；hook 不自动执行 `init`、`scan` 或 `certify`。`pass` 静默放行，其余五个完整性状态 `none` / `drifted` / `warn` / `deny` / `tampered` 以及 `error` 按 `SKILL_LEDGER_MODE=observe|warn|ask|block` 处理，默认 `ask`；旧值 `debug` / `deny` 分别作为 `observe` / `block` 的兼容别名。`SKILL_LEDGER_TIMEOUT` 控制 CLI 超时，默认 5 秒。即使 CLI 返回非零退出码，hook 仍优先解析合法 JSON，以保留 `deny` / `tampered` 等安全结果。所有实际 `check` 调用通过 Qoder trace context 进入统一 Skill Ledger 安全审计日志。
 
 ### 6.5 Codex（Command Hook）
 

@@ -55,7 +55,6 @@ def _register_policy(
 ) -> None:
     """Register a capability policy without ambient environment overrides."""
     monkeypatch.delenv("PII_CHECKER_HOOK_ENABLED", raising=False)
-    monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
     monkeypatch.delenv("PII_CHECKER_MODE", raising=False)
     capability._on_register({"policy": policy})
 
@@ -84,15 +83,14 @@ class TestPiiScanCapability:
     def test_environment_policy_overrides_capability_policy(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "observe")
-        monkeypatch.setenv("PII_CHECKER_MODE", "deny")
+        monkeypatch.setenv("PII_CHECKER_MODE", "observe")
         capability = PiiScanCapability()
 
         capability._on_register({"policy": "block"})
 
         assert capability._policy == "observe"
 
-    def test_legacy_mode_overrides_capability_policy(
+    def test_environment_mode_deny_alias_overrides_capability_policy(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("PII_CHECKER_MODE", "deny")
@@ -161,7 +159,6 @@ class TestPiiScanCapability:
         policy: str,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
         monkeypatch.delenv("PII_CHECKER_MODE", raising=False)
         capability = PiiScanCapability()
         capability._timeout = 5.0

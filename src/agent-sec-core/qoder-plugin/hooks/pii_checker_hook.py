@@ -20,13 +20,8 @@ from qoder_hook_common import (
 )
 
 _HOOK_ENABLED = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
-if "PII_CHECKER_HOOK_POLICY" in os.environ:
-    _POLICY_ENV_NAME = "PII_CHECKER_HOOK_POLICY"
-elif "PII_CHECKER_MODE" in os.environ:
-    _POLICY_ENV_NAME = "PII_CHECKER_MODE"
-else:
-    _POLICY_ENV_NAME = None
-_POLICY_RAW = os.environ.get(_POLICY_ENV_NAME) if _POLICY_ENV_NAME else None
+_POLICY_ENV_NAME = "PII_CHECKER_MODE"
+_POLICY_RAW = os.environ.get(_POLICY_ENV_NAME)
 _POLICY = normalize_hook_policy(_POLICY_RAW, "observe")
 try:
     _TIMEOUT = int(os.environ.get("PII_CHECKER_TIMEOUT", "5"))
@@ -181,9 +176,8 @@ def _warn_output(notice: str) -> str:
 def _invalid_policy_output() -> str:
     """Return a visible fail-open warning for an invalid checker policy."""
     configured_mode = _shorten(_safe_string(_POLICY_RAW), 32) or "<empty>"
-    environment_name = _POLICY_ENV_NAME or "PII_CHECKER_HOOK_POLICY"
     notice = (
-        f"[pii-checker] Invalid {environment_name} {configured_mode!r}; expected "
+        f"[pii-checker] invalid {_POLICY_ENV_NAME} {configured_mode!r}; expected "
         "observe, warn, ask, or block. Falling back to observe; execution will continue."
     )
     return _warn_output(notice)

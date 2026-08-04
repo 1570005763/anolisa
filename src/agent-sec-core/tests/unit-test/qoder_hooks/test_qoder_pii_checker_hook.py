@@ -172,42 +172,10 @@ def test_user_prompt_observe_scans_and_allows_silently(mock_cli) -> None:
     assert captured["stdin"] == "phone 13800138000"
 
 
-@pytest.mark.parametrize(
-    ("new_policy", "legacy_mode", "expected_decision"),
-    [
-        ("observe", "deny", None),
-        ("block", "observe", "deny"),
-    ],
-)
-def test_new_policy_overrides_conflicting_legacy_mode(
-    mock_cli, new_policy, legacy_mode, expected_decision
-) -> None:
-    env, _capture = mock_cli(
-        output=_PII_DENY_RESULT,
-        extra={
-            "PII_CHECKER_HOOK_POLICY": new_policy,
-            "PII_CHECKER_MODE": legacy_mode,
-        },
-    )
-
-    proc = _run_hook(
-        {
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "api key sk-live-secret",
-        },
-        env,
-    )
-
-    if expected_decision is None:
-        assert proc.stdout == ""
-    else:
-        assert _stdout_json(proc)["decision"] == expected_decision
-
-
 def test_warn_policy_warns_and_continues(mock_cli) -> None:
     env, _capture = mock_cli(
         output=_PII_DENY_RESULT,
-        extra={"PII_CHECKER_HOOK_POLICY": "warn"},
+        extra={"PII_CHECKER_MODE": "warn"},
     )
 
     output = _stdout_json(
@@ -227,7 +195,7 @@ def test_warn_policy_warns_and_continues(mock_cli) -> None:
 def test_ask_policy_requests_pre_tool_approval(mock_cli) -> None:
     env, _capture = mock_cli(
         output=_PII_DENY_RESULT,
-        extra={"PII_CHECKER_HOOK_POLICY": "ask"},
+        extra={"PII_CHECKER_MODE": "ask"},
     )
 
     output = _stdout_json(
@@ -246,7 +214,7 @@ def test_ask_policy_requests_pre_tool_approval(mock_cli) -> None:
 def test_ask_policy_falls_back_to_warning_without_confirmation(mock_cli) -> None:
     env, _capture = mock_cli(
         output=_PII_DENY_RESULT,
-        extra={"PII_CHECKER_HOOK_POLICY": "ask"},
+        extra={"PII_CHECKER_MODE": "ask"},
     )
 
     output = _stdout_json(
@@ -454,7 +422,7 @@ def test_cli_failure_fails_open(mock_cli) -> None:
     assert "sk-live-secret" not in proc.stderr
 
 
-def test_invalid_legacy_mode_reports_observe_fallback(mock_cli) -> None:
+def test_invalid_mode_reports_observe_fallback(mock_cli) -> None:
     env, _capture = mock_cli(
         output=_PII_WARN_RESULT,
         extra={"PII_CHECKER_MODE": "banana"},
@@ -470,4 +438,4 @@ def test_invalid_legacy_mode_reports_observe_fallback(mock_cli) -> None:
     output = _stdout_json(proc)
 
     assert output["decision"] == "allow"
-    assert "Invalid PII_CHECKER_MODE" in output["systemMessage"]
+    assert "invalid PII_CHECKER_MODE" in output["systemMessage"]

@@ -62,21 +62,15 @@ def _environment_bool(name: str, default: bool) -> bool:
 
 
 def _policy() -> str:
-    if "PII_CHECKER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("PII_CHECKER_HOOK_POLICY")
-        policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
-        if normalize_hook_policy(raw, "") == "":
-            print("[pii-checker] invalid hook policy; using observe", file=sys.stderr)
-        return policy
     raw = os.environ.get("PII_CHECKER_MODE")
-    policy = normalize_hook_policy(raw, "observe")
+    policy = env_hook_policy("PII_CHECKER_MODE", "observe")
     if "PII_CHECKER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
-        print("[pii-checker] invalid legacy mode; using observe", file=sys.stderr)
+        print("[pii-checker] invalid PII_CHECKER_MODE; using observe", file=sys.stderr)
     return policy
 
 
 def _mode() -> str:
-    """Compatibility alias for callers that still inspect the legacy mode."""
+    """Return the configured PII Checker mode."""
     return _policy()
 
 

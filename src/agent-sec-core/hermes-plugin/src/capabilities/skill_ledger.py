@@ -368,21 +368,12 @@ class SkillLedgerCapability(AgentSecCoreCapability):
 
     @staticmethod
     def _read_policy(config: dict) -> str:
-        if "SKILL_LEDGER_HOOK_POLICY" in os.environ:
-            raw_policy = os.environ.get("SKILL_LEDGER_HOOK_POLICY")
-            policy = env_hook_policy("SKILL_LEDGER_HOOK_POLICY", _DEFAULT_POLICY)
-            if normalize_hook_policy(raw_policy, "") == "":
-                logger.warning(
-                    "[agent-sec-core] skill-ledger invalid environment policy; using ask"
-                )
-            return policy
-
         if "SKILL_LEDGER_MODE" in os.environ:
             raw_policy = os.environ.get("SKILL_LEDGER_MODE")
             policy = env_hook_policy("SKILL_LEDGER_MODE", _DEFAULT_POLICY)
             if normalize_hook_policy(raw_policy, "") == "":
                 logger.warning(
-                    "[agent-sec-core] skill-ledger invalid legacy policy; using ask"
+                    "[agent-sec-core] skill-ledger invalid SKILL_LEDGER_MODE; using ask"
                 )
             return policy
 

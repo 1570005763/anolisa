@@ -189,16 +189,15 @@ Qwen Code extension 会扫描用户输入、工具输入、成功及失败的工
 
 ```bash
 # 在可执行阻断的 hook 边界显式阻断 scanner deny verdict
-export PII_CHECKER_HOOK_POLICY=block
+export PII_CHECKER_MODE=block
 ./qwen-code-extension/scripts/deploy.sh
 ```
 
 | 环境变量 | 默认值 | 行为 |
 |----------|--------|------|
 | `PII_CHECKER_HOOK_ENABLED` | `true` | 设为 `false` 时在读取输入前跳过 PII hook |
-| `PII_CHECKER_HOOK_POLICY` | `observe` | `observe` 静默审计；`warn` 告警；`ask`/`block` 按宿主能力执行或 fallback |
+| `PII_CHECKER_MODE` | `observe` | `observe` 静默审计；`warn` 告警；`ask`/`block` 按宿主能力执行或 fallback；`debug` 等价于 `observe`，`deny` 等价于 `block` |
 | `PII_CHECKER_ENABLED` | - | 仅兼容 Qwen 旧 enabled 变量；新开关缺失时生效 |
-| `PII_CHECKER_MODE` | - | 六个宿主均兼容的旧 policy 变量；`debug` 等价于 `observe`，`deny` 等价于 `block` |
 | `PII_CHECKER_INCLUDE_LOW_CONFIDENCE` | `false` | 开启后传递 `--include-low-confidence` |
 | `PII_CHECKER_TIMEOUT` | `5` | scanner 超时秒数，最大 8 秒 |
 
@@ -365,10 +364,10 @@ agent-sec-cli skill-ledger show "${QWEN_HOME:-$HOME/.qwen}/skills/<skill>"
 为 `ask`；请在启动 Qwen Code 的可信环境中设置 policy：
 
 ```bash
-SKILL_LEDGER_HOOK_POLICY=observe qwen  # 仅观察
-SKILL_LEDGER_HOOK_POLICY=warn qwen   # 返回非阻断诊断后继续
-SKILL_LEDGER_HOOK_POLICY=ask qwen    # 使用前请求确认（默认）
-SKILL_LEDGER_HOOK_POLICY=block qwen  # exposure warning 非空时拒绝
+SKILL_LEDGER_MODE=observe qwen  # 仅观察
+SKILL_LEDGER_MODE=warn qwen   # 返回非阻断诊断后继续
+SKILL_LEDGER_MODE=ask qwen    # 使用前请求确认（默认）
+SKILL_LEDGER_MODE=block qwen  # exposure warning 非空时拒绝
 ```
 
 Qwen Code 0.19.9 会将非阻断 `systemMessage` 记录到 session debug 日志，但不在 TTY

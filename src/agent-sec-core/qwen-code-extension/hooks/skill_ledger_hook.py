@@ -90,18 +90,12 @@ def _diagnostic(
 
 
 def _read_policy(input_data: dict[str, Any]) -> str:
-    """Return the configured hook policy, defaulting invalid values to ask."""
-    if "SKILL_LEDGER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("SKILL_LEDGER_HOOK_POLICY")
-        policy = env_hook_policy("SKILL_LEDGER_HOOK_POLICY", _DEFAULT_POLICY)
-        if normalize_hook_policy(raw, "") == "":
-            _diagnostic("invalid_policy", input_data, detail="using ask")
-        return policy
+    """Return the configured Skill Ledger mode, defaulting invalid values to ask."""
     raw = os.environ.get("SKILL_LEDGER_MODE")
-    policy = normalize_hook_policy(raw, _DEFAULT_POLICY)
+    policy = env_hook_policy("SKILL_LEDGER_MODE", _DEFAULT_POLICY)
     if "SKILL_LEDGER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
         _diagnostic(
-            "invalid_policy", input_data, detail="invalid legacy mode; using ask"
+            "invalid_policy", input_data, detail="invalid SKILL_LEDGER_MODE; using ask"
         )
     return policy
 

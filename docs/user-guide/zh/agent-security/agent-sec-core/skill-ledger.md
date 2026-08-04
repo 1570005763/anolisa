@@ -287,10 +287,13 @@ Hermes 布局下 activation 流程携带的是嵌套身份（`category/skill`）
 ### 统一宿主 Hook 控制
 
 宿主 adapter 使用 `SKILL_LEDGER_HOOK_ENABLED` 作为总开关，使用
-`SKILL_LEDGER_HOOK_POLICY` 选择行为。开关默认 `true`；policy 默认 `ask`，支持
+`SKILL_LEDGER_MODE` 选择行为。开关默认 `true`；policy 默认 `ask`，支持
 `observe`、`warn`、`ask`、`block`。`observe` 执行检查和审计但不显示用户提示；旧值
 `debug` 映射为 `observe`，旧值 `deny` 映射为 `block`。环境变量 policy 优先于
 Hermes/OpenClaw capability 配置。
+
+宿主 Agent 在加载插件时读取这些变量。修改后需重启承载该 hook 的 Agent 进程；
+hook 和 agent-sec-core 并不是需要单独重启的 policy 服务。
 
 hook 无法请求确认时，`ask` fallback 为 `warn`；hook 无法在当前边界执行阻断时，
 `block` 同样 fallback 为 `warn`，且不得声称已经阻断。设置
@@ -311,7 +314,7 @@ hook 无法请求确认时，`ask` fallback 为 `warn`；hook 无法在当前边
 
 Codex 和 Qoder CLI 是低层完整性门禁，均在完成 canonical path 和根目录边界校验后执行 `skill-ledger check <skill_dir>`。Codex 在 `UserPromptSubmit` 解析 `$skill-name`；该边界无法请求确认，因此 `ask` fallback 为 `warn`。Qoder CLI 为 `Skill` tool 注册独立的 `PreToolUse` hook，根据事件中的绝对 `cwd` 建立 user → project 目录表，并解析 `SKILL.md` frontmatter `name`（无 frontmatter 时回退目录名）。Qoder frontmatter 存在但 `name` 缺失、歧义或使用 hook 无法安全解析的 YAML scalar 时，不会降级为非本地 Skill，而是按当前 policy 处理。`pass` 静默放行；`none` / `drifted` / `warn` / `deny` / `tampered` 以及 `error` 按 `observe` / `warn` / `ask` / `block` policy 静默审计、提示后放行、在支持的边界请求确认或阻断。Qoder CLI 不可用、执行失败、超时或输出不可解析也按该四档 policy 处理，而不是固定 fail-open；旧值 `debug` 仅作为 `observe` 的兼容别名。
 
-六个 adapter 均默认启用 Skill Ledger，policy 为 `ask`；copilot-shell、Codex、Qoder CLI 和 Qwen Code 在默认 manifest 注册各自的 hook 边界。OpenClaw 和 Hermes 还可使用 capability 配置，`SKILL_LEDGER_HOOK_POLICY` 仍作为部署级覆盖。除上述明确说明的 Qoder CLI 低层门禁外，其它兼容 hook 在 CLI 基础设施异常时保持 fail-open，避免阻断 Skill 加载。
+六个 adapter 均默认启用 Skill Ledger，policy 为 `ask`；copilot-shell、Codex、Qoder CLI 和 Qwen Code 在默认 manifest 注册各自的 hook 边界。OpenClaw 和 Hermes 还可使用 capability 配置，`SKILL_LEDGER_MODE` 仍作为部署级覆盖。除上述明确说明的 Qoder CLI 低层门禁外，其它兼容 hook 在 CLI 基础设施异常时保持 fail-open，避免阻断 Skill 加载。
 
 copilot-shell hook 当前仅覆盖 project / user / system 三类目录：`<cwd>/.copilot-shell/skills/`、`~/.copilot-shell/skills/`、`/usr/share/anolisa/skills/`。若 Skill 来自 custom、extension、remote 或其它路径，hook 会 fail-open 并跳过 skill-ledger 检查；OpenClaw 插件则按读取到的 `SKILL.md` 路径提取 Skill 目录。
 
@@ -340,9 +343,9 @@ policy = "ask"
 enable_block = false
 ```
 
-**copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `ask`；如需 observe-only、warning-only 或强拒绝，可设置 `SKILL_LEDGER_HOOK_POLICY=observe` / `warn` / `block`。旧值 `debug` 仍作为 `observe` 的别名。该环境变量应由可信宿主或部署环境设置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；如需防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源。
+**copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `ask`；如需 observe-only、warning-only 或强拒绝，可设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`。`debug` 仍作为 `observe` 的别名。该环境变量应由可信宿主或部署环境设置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；如需防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源。
 
-**Qoder CLI 配置方式**：安装 `qoder-plugin` 后，plugin 自动注册 matcher 为 `Skill` 的 `PreToolUse` hook。默认 policy 为 `ask`；可由可信启动环境设置 `SKILL_LEDGER_HOOK_POLICY=observe` / `warn` / `block`，并通过 `SKILL_LEDGER_TIMEOUT` 调整 CLI 超时（默认 5 秒）。旧值 `debug` 仍作为 `observe` 的别名。hook 覆盖 `~/.qoder/skills/` 和 `<cwd>/.qoder/skills/` 下的本地 Skill，用户级同名 Skill 优先；仅在两个目录表都可信解析且没有匹配时，才把调用视为内置、plugin 或 remote Skill，放行并记录 debug。hook 不自动执行 `init` 或 `scan`，未签名 Skill 会以 `none` 状态进入 policy；完成审查后需显式执行 `agent-sec-cli skill-ledger scan <skill_dir>`。
+**Qoder CLI 配置方式**：安装 `qoder-plugin` 后，plugin 自动注册 matcher 为 `Skill` 的 `PreToolUse` hook。默认 policy 为 `ask`；可由可信启动环境设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`，并通过 `SKILL_LEDGER_TIMEOUT` 调整 CLI 超时（默认 5 秒）。`debug` 仍作为 `observe` 的别名。hook 覆盖 `~/.qoder/skills/` 和 `<cwd>/.qoder/skills/` 下的本地 Skill，用户级同名 Skill 优先；仅在两个目录表都可信解析且没有匹配时，才把调用视为内置、plugin 或 remote Skill，放行并记录 debug。hook 不自动执行 `init` 或 `scan`，未签名 Skill 会以 `none` 状态进入 policy；完成审查后需显式执行 `agent-sec-cli skill-ledger scan <skill_dir>`。
 
 Skill Ledger 全局 `activationPolicy` 属于 SkillFS/daemon activation；这里的 hook `policy` 只控制宿主 hook/capability 的用户可见行为和日志等级。
 

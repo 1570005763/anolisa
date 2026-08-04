@@ -190,16 +190,15 @@ sudo yum install agent-sec-core
 ### Protect Qwen Code from PII leakage
 
 The Qwen Code extension scans user input, tool input/output, and final model output
-with `PII_CHECKER_HOOK_POLICY=observe` by default. Set the policy to `block` to enforce
+with `PII_CHECKER_MODE=observe` by default. Set the policy to `block` to enforce
 high-risk scanner `deny` verdicts at supported decision points. Use
 `PII_CHECKER_HOOK_ENABLED=false` to disable the hook before it reads input or invokes
-the scanner. All six host adapters retain the legacy `PII_CHECKER_MODE` policy variable;
-`debug` maps to `observe`, and `deny` maps to `block`. Qwen Code additionally accepts the
+the scanner. `debug` maps to `observe`, and `deny` maps to `block`. Qwen Code additionally accepts the
 legacy `PII_CHECKER_ENABLED` switch when the new enabled switch is absent. Failed tool outputs
 are audit-only in Qwen Code 0.19.9, and scanner failures remain fail-open.
 
 ```bash
-export PII_CHECKER_HOOK_POLICY=block
+export PII_CHECKER_MODE=block
 ./qwen-code-extension/scripts/deploy.sh
 ```
 
@@ -308,7 +307,7 @@ agent-sec-cli skill-ledger status
 The bundled Qoder CLI plugin registers a `PreToolUse` hook for the `Skill`
 tool. It resolves user Skills from `~/.qoder/skills/` before project Skills
 from `<cwd>/.qoder/skills/`, runs a read-only `skill-ledger check`, and applies the
-`SKILL_LEDGER_HOOK_POLICY=observe|warn|ask|block` policy (default: `ask`). Set
+`SKILL_LEDGER_MODE=observe|warn|ask|block` policy (default: `ask`). Set
 `SKILL_LEDGER_HOOK_ENABLED=false` to bypass the hook. The legacy `debug` value is an
 alias for `observe`, while `deny` is an alias for `block`. Each
 check carries Qoder trace identifiers into the security audit log.

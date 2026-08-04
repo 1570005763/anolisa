@@ -20,7 +20,6 @@ pii_checker_hook = load_standalone_hook("qwen_pii_checker_hook", _HOOK_PATH)
 def _clean_environment(monkeypatch):
     for name in (
         "PII_CHECKER_HOOK_ENABLED",
-        "PII_CHECKER_HOOK_POLICY",
         "PII_CHECKER_ENABLED",
         "PII_CHECKER_MODE",
         "PII_CHECKER_INCLUDE_LOW_CONFIDENCE",
@@ -282,31 +281,8 @@ def test_new_enabled_switch_overrides_legacy_disabled_value(monkeypatch, capsys,
     assert calls == [True]
 
 
-def test_new_policy_overrides_conflicting_legacy_mode(monkeypatch, capsys):
-    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("PII_CHECKER_MODE", "block")
-    monkeypatch.setattr(
-        pii_checker_hook.subprocess,
-        "run",
-        lambda args, **kwargs: SimpleNamespace(
-            returncode=0,
-            stdout=json.dumps(_scan_result("deny", "token=[REDACTED]")),
-            stderr="",
-        ),
-    )
-
-    output, _stderr = _run_main(
-        monkeypatch,
-        capsys,
-        _base("PreToolUse", tool_input={"token": "raw-secret-value"}),
-    )
-
-    assert pii_checker_hook._policy() == "observe"
-    assert output == {}
-
-
 def test_warn_policy_warns_and_continues(monkeypatch, capsys):
-    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "warn")
+    monkeypatch.setenv("PII_CHECKER_MODE", "warn")
     monkeypatch.setattr(
         pii_checker_hook.subprocess,
         "run",
@@ -328,7 +304,7 @@ def test_warn_policy_warns_and_continues(monkeypatch, capsys):
 
 
 def test_ask_policy_requests_pre_tool_approval(monkeypatch, capsys):
-    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "ask")
+    monkeypatch.setenv("PII_CHECKER_MODE", "ask")
     monkeypatch.setattr(
         pii_checker_hook.subprocess,
         "run",
@@ -349,7 +325,7 @@ def test_ask_policy_requests_pre_tool_approval(monkeypatch, capsys):
 
 
 def test_ask_policy_falls_back_to_warning_without_confirmation(monkeypatch, capsys):
-    monkeypatch.setenv("PII_CHECKER_HOOK_POLICY", "ask")
+    monkeypatch.setenv("PII_CHECKER_MODE", "ask")
     monkeypatch.setattr(
         pii_checker_hook.subprocess,
         "run",
@@ -731,9 +707,8 @@ def test_redacted_evidence_is_deduplicated_bounded_and_shortened():
     assert evidence[0].endswith("...")
 
 
-def test_invalid_legacy_mode_reports_observe_fallback(monkeypatch, capsys):
-    monkeypatch.delenv("PII_CHECKER_HOOK_POLICY", raising=False)
+def test_invalid_mode_reports_observe_fallback(monkeypatch, capsys):
     monkeypatch.setenv("PII_CHECKER_MODE", "banana")
 
     assert pii_checker_hook._policy() == "observe"
-    assert "invalid legacy mode; using observe" in capsys.readouterr().err
+    assert "invalid PII_CHECKER_MODE; using observe" in capsys.readouterr().err
