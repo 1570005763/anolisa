@@ -377,12 +377,18 @@ enabled = true
 timeout = 10
 include_low_confidence = false
 warning_ttl_seconds = 300
+policy = "observe"
 ```
 
 - `enabled = false` → 能力完全不注册
-- `enable_block = false` → 检测到风险时仅记 WARNING 日志，不阻断工具调用
-- `enable_block = true` → 检测到 deny/warn 时阻断工具调用
-- `pii-scan-user-input` 仅扫描本轮用户输入，warning-only，不扫描 tool output
+- `code-scan.enable_block = false` → 检测到风险时仅记 WARNING 日志，不阻断工具调用
+- `code-scan.enable_block = true` → 检测到 deny/warn 时阻断工具调用
+- `pii-scan-user-input.policy` 支持 `observe`、`warn`、`ask`、`block`
+- PII scanner 覆盖本轮用户输入、tool 参数/结果和最终模型回复；不扫描 history、memory
+  或 RAG context
+- `block + deny` 在 `pre_tool_call` 返回原生 block；`ask` 以及
+  `pre_llm_call` / `post_tool_call` 的不可阻断边界 fallback 为 warn
+- 最终模型回复中的 PII 继续由 `transform_llm_output` 使用脱敏文本替换
 
 ### 7. 测试
 
