@@ -13,7 +13,7 @@ Protection direction:
     curl-ing a phone number to an external endpoint or writing PII to a file.
     This is the only point to enforce PII policy before the tool executes.
 
-Policy (controlled by PII_CHECKER_HOOK_POLICY, default: observe):
+Policy (controlled by PII_CHECKER_MODE, default: observe):
   - observe: silent pass-through, only audit trail via agent-sec-cli events.
              Even if PII is detected, content will NOT be blocked.
   - warn: surface scanner findings through systemMessage and continue.
@@ -21,7 +21,7 @@ Policy (controlled by PII_CHECKER_HOOK_POLICY, default: observe):
   - block: block scanner "deny" at a controllable boundary; post-tool blocking
            cannot undo side effects that already occurred.
 
-Legacy PII_CHECKER_MODE is supported; debug maps to observe and deny maps to block.
+The compatibility values debug and deny map to observe and block, respectively.
 
 Protocol note: Codex supports non-blocking systemMessage warnings but does not
 support "redact and pass" for these hook points. A warning therefore forwards
@@ -49,21 +49,14 @@ from trace_context import with_trace_context
 
 _HOOK_ENABLED = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
 MODE = os.environ.get("PII_CHECKER_MODE")
-_POLICY_FROM_ENV = "PII_CHECKER_HOOK_POLICY" in os.environ
 
 
 def _read_policy() -> str:
-    """Read the canonical policy, falling back to the legacy mode."""
-    if "PII_CHECKER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("PII_CHECKER_HOOK_POLICY")
-        policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
-        if normalize_hook_policy(raw, "") == "":
-            print("[pii-checker] invalid hook policy; using observe", file=sys.stderr)
-        return policy
+    """Read the configured PII Checker mode."""
     raw = os.environ.get("PII_CHECKER_MODE")
-    policy = normalize_hook_policy(raw, "observe")
+    policy = env_hook_policy("PII_CHECKER_MODE", "observe")
     if "PII_CHECKER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
-        print("[pii-checker] invalid legacy mode; using observe", file=sys.stderr)
+        print("[pii-checker] invalid PII_CHECKER_MODE; using observe", file=sys.stderr)
     return policy
 
 
@@ -71,8 +64,8 @@ _POLICY = _read_policy()
 
 
 def _effective_policy() -> str:
-    """Return policy while preserving legacy module-level test overrides."""
-    return _POLICY if _POLICY_FROM_ENV else normalize_hook_policy(MODE, _POLICY)
+    """Return policy while preserving module-level test overrides."""
+    return normalize_hook_policy(MODE, _POLICY)
 
 
 try:

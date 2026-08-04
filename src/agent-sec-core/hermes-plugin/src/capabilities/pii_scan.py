@@ -57,20 +57,11 @@ class PiiScanCapability(AgentSecCoreCapability):
     def _on_register(self, config: dict) -> None:
         """Read pii-scan specific config."""
         self._hook_enabled = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
-        if "PII_CHECKER_HOOK_POLICY" in os.environ:
-            self._policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
-            if (
-                normalize_hook_policy(os.environ.get("PII_CHECKER_HOOK_POLICY"), "")
-                == ""
-            ):
-                logger.warning(
-                    "[agent-sec-core] pii-checker invalid environment policy; using observe"
-                )
-        elif "PII_CHECKER_MODE" in os.environ:
+        if "PII_CHECKER_MODE" in os.environ:
             self._policy = env_hook_policy("PII_CHECKER_MODE", "observe")
             if normalize_hook_policy(os.environ.get("PII_CHECKER_MODE"), "") == "":
                 logger.warning(
-                    "[agent-sec-core] pii-checker invalid legacy policy; using observe"
+                    "[agent-sec-core] pii-checker invalid PII_CHECKER_MODE; using observe"
                 )
         else:
             raw_policy = config.get("policy")

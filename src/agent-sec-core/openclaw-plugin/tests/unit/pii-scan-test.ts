@@ -90,7 +90,6 @@ const denyFinding = {
 describe("pii-scan-user-input", () => {
   beforeEach(() => {
     delete process.env.PII_CHECKER_HOOK_ENABLED;
-    delete process.env.PII_CHECKER_HOOK_POLICY;
     delete process.env.PII_CHECKER_MODE;
     lastCliArgs = undefined;
     lastCliOpts = undefined;
@@ -98,7 +97,6 @@ describe("pii-scan-user-input", () => {
 
   afterEach(() => {
     delete process.env.PII_CHECKER_HOOK_ENABLED;
-    delete process.env.PII_CHECKER_HOOK_POLICY;
     delete process.env.PII_CHECKER_MODE;
     _resetCliMock();
   });
@@ -397,8 +395,7 @@ describe("pii-scan-user-input", () => {
   });
 
   it("lets the environment policy override capability configuration", async () => {
-    process.env.PII_CHECKER_HOOK_POLICY = "observe";
-    process.env.PII_CHECKER_MODE = "deny";
+    process.env.PII_CHECKER_MODE = "observe";
     const { beforeDispatch, logs } = registerHandlers(policyConfig("block"));
     mockCli(scanResult("deny", [denyFinding]));
 
@@ -408,7 +405,23 @@ describe("pii-scan-user-input", () => {
     assert.ok(!logs.some((log) => log.includes("[pii-checker] DENY")));
   });
 
-  it("lets the legacy mode override capability configuration", async () => {
+  it("invalid environment mode falls back to observe", async () => {
+    process.env.PII_CHECKER_MODE = "blcok";
+    const { beforeDispatch, logs } = registerHandlers(policyConfig("block"));
+    mockCli(scanResult("deny", [denyFinding]));
+
+    const result = await beforeDispatch.handler({ content: "password=secret" });
+
+    assert.equal(result, undefined);
+    assert.ok(
+      logs.some((log) =>
+        log.includes("[WARN] [pii-checker] invalid PII_CHECKER_MODE; using observe"),
+      ),
+    );
+    assert.ok(!logs.some((log) => log.includes("[pii-checker] DENY")));
+  });
+
+  it("maps deny in the environment mode to block", async () => {
     process.env.PII_CHECKER_MODE = "deny";
     const { beforeDispatch } = registerHandlers(policyConfig("observe"));
     mockCli(scanResult("deny", [denyFinding]));

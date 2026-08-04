@@ -552,7 +552,7 @@ class TestOutputMapping:
         assert "test-skill" in output["reason"]
 
     def test_debug_policy_logs_message_without_prompt(self, mock_cli_env):
-        """SKILL_LEDGER_HOOK_POLICY=debug keeps message-based prompts silent."""
+        """SKILL_LEDGER_MODE=debug keeps message-based prompts silent."""
         env = mock_cli_env["make_env"](
             json.dumps(
                 {
@@ -561,7 +561,7 @@ class TestOutputMapping:
                 }
             )
         )
-        env["SKILL_LEDGER_HOOK_POLICY"] = "debug"
+        env["SKILL_LEDGER_MODE"] = "debug"
         output, stderr = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -571,7 +571,7 @@ class TestOutputMapping:
         assert "Latest skill status is deny" in stderr
 
     def test_warn_policy_returns_allow_with_reason(self, mock_cli_env):
-        """SKILL_LEDGER_HOOK_POLICY=warn turns message into allow + reason."""
+        """SKILL_LEDGER_MODE=warn turns message into allow + reason."""
         env = mock_cli_env["make_env"](
             json.dumps(
                 {
@@ -580,7 +580,7 @@ class TestOutputMapping:
                 }
             )
         )
-        env["SKILL_LEDGER_HOOK_POLICY"] = "warn"
+        env["SKILL_LEDGER_MODE"] = "warn"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -589,7 +589,7 @@ class TestOutputMapping:
         assert "Latest skill status is deny" in output["reason"]
 
     def test_block_policy_returns_block_with_reason(self, mock_cli_env):
-        """SKILL_LEDGER_HOOK_POLICY=block rejects execution with the summary message."""
+        """SKILL_LEDGER_MODE=block rejects execution with the summary message."""
         env = mock_cli_env["make_env"](
             json.dumps(
                 {
@@ -598,7 +598,7 @@ class TestOutputMapping:
                 }
             )
         )
-        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
+        env["SKILL_LEDGER_MODE"] = "block"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -618,7 +618,7 @@ class TestOutputMapping:
                 }
             )
         )
-        env["SKILL_LEDGER_HOOK_POLICY"] = "block"
+        env["SKILL_LEDGER_MODE"] = "block"
         output = _run_hook(
             _make_skill_event("test-skill", mock_cli_env["cwd"]),
             env_override=env,
@@ -662,16 +662,8 @@ class TestOutputMapping:
         assert output == {"decision": "allow"}
 
 
-def test_invalid_legacy_mode_reports_ask_fallback(monkeypatch, capsys):
-    monkeypatch.delenv("SKILL_LEDGER_HOOK_POLICY", raising=False)
+def test_invalid_mode_reports_ask_fallback(monkeypatch, capsys):
     monkeypatch.setenv("SKILL_LEDGER_MODE", "banana")
 
     assert skill_ledger_hook._read_policy() == "ask"
-    assert "invalid legacy SKILL_LEDGER_MODE; using ask" in capsys.readouterr().err
-
-
-def test_new_policy_overrides_legacy_mode(monkeypatch):
-    monkeypatch.setenv("SKILL_LEDGER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("SKILL_LEDGER_MODE", "deny")
-
-    assert skill_ledger_hook._read_policy() == "observe"
+    assert "invalid SKILL_LEDGER_MODE; using ask" in capsys.readouterr().err

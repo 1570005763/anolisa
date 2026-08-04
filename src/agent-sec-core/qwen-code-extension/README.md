@@ -50,10 +50,10 @@ Skill Ledger hook 是同步的 `PreToolUse` hook，只处理模型调用 Qwen Co
 环境变量后，可切换为静默审计、非阻断诊断、用户确认或阻断：
 
 ```bash
-SKILL_LEDGER_HOOK_POLICY=observe qwen
-SKILL_LEDGER_HOOK_POLICY=warn qwen
-SKILL_LEDGER_HOOK_POLICY=ask qwen
-SKILL_LEDGER_HOOK_POLICY=block qwen
+SKILL_LEDGER_MODE=observe qwen
+SKILL_LEDGER_MODE=warn qwen
+SKILL_LEDGER_MODE=ask qwen
+SKILL_LEDGER_MODE=block qwen
 ```
 
 支持的来源按 Qwen Code 优先级为项目 `.qwen/skills`、个人
@@ -117,16 +117,15 @@ JSON、`error` 或未知 verdict 均 fail-open。
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PII_CHECKER_HOOK_ENABLED` | `true` | 仅识别 `true` / `false`；`false` 时在读取输入和调用 CLI 前短路 |
-| `PII_CHECKER_HOOK_POLICY` | `observe` | `observe` 静默审计；支持 `warn` / `ask` / `block`；兼容 `debug` / `deny` 别名 |
+| `PII_CHECKER_MODE` | `observe` | `observe` 静默审计；支持 `warn` / `ask` / `block`；兼容 `debug` / `deny` 别名 |
 | `PII_CHECKER_ENABLED` | `true` | 旧开关；未设置新开关时继续兼容 `false`、`0`、`no`、`off` |
-| `PII_CHECKER_MODE` | `observe` | 旧 policy 变量；未设置新 policy 时继续兼容；`debug` 映射为 `observe`，`deny` 映射为 `block` |
 | `PII_CHECKER_INCLUDE_LOW_CONFIDENCE` | `false` | 开启后传递 `--include-low-confidence` |
 | `PII_CHECKER_TIMEOUT` | `5` | 子进程超时秒数，最大 8 秒；非法或非正值回退到 5 秒 |
 
 例如，显式开启阻断后再部署或启动 Qwen Code：
 
 ```bash
-export PII_CHECKER_HOOK_POLICY=block
+export PII_CHECKER_MODE=block
 export PII_CHECKER_TIMEOUT=5
 ./qwen-code-extension/scripts/deploy.sh
 ```

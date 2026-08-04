@@ -100,17 +100,11 @@ def _allow_or_warn(reason: str, _policy: str) -> str:
 
 
 def _read_policy() -> str:
-    """Return the configured hook policy."""
-    if "SKILL_LEDGER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("SKILL_LEDGER_HOOK_POLICY")
-        policy = env_hook_policy("SKILL_LEDGER_HOOK_POLICY", _DEFAULT_POLICY)
-        if normalize_hook_policy(raw, "") == "":
-            _debug("invalid SKILL_LEDGER_HOOK_POLICY; using ask")
-        return policy
+    """Return the configured Skill Ledger mode."""
     raw = os.environ.get("SKILL_LEDGER_MODE")
-    policy = normalize_hook_policy(raw, _DEFAULT_POLICY)
+    policy = env_hook_policy("SKILL_LEDGER_MODE", _DEFAULT_POLICY)
     if "SKILL_LEDGER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
-        _debug("invalid legacy SKILL_LEDGER_MODE; using ask")
+        _debug("invalid SKILL_LEDGER_MODE; using ask")
     return policy
 
 

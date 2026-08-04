@@ -101,15 +101,14 @@ do_install() {
     info "   - observability_hook.py  (UserPromptSubmit + PreToolUse + PostToolUse + Stop)"
     echo ""
     info "启动命令（可选环境变量）："
-    info "  CODE_SCANNER_MODE=deny PROMPT_SCANNER_MODE=deny SKILL_LEDGER_HOOK_POLICY=block PII_CHECKER_HOOK_POLICY=block codex"
+    info "  CODE_SCANNER_MODE=deny PROMPT_SCANNER_MODE=deny SKILL_LEDGER_MODE=block PII_CHECKER_MODE=block codex"
     info ""
     info "  CODE_SCANNER_MODE    - 代码扫描透出模式"
     info "  PROMPT_SCANNER_MODE  - 提示词注入检测透出模式"
-    info "  SKILL_LEDGER_HOOK_POLICY - Skill Ledger hook policy（默认 ask）"
-    info "  PII_CHECKER_HOOK_POLICY  - PII Checker hook policy（默认 observe）"
+    info "  SKILL_LEDGER_MODE   - Skill Ledger hook policy（默认 ask）"
+    info "  PII_CHECKER_MODE    - PII Checker hook policy（默认 observe）"
     info ""
     info "  Hook policy 可选值: observe | warn | ask | block"
-    info "  旧 SKILL_LEDGER_MODE / PII_CHECKER_MODE 继续兼容"
     echo "============================================"
 }
 

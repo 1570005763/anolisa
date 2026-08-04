@@ -116,7 +116,7 @@ def _run_pii_checker_hook(
                 }
             ),
             "PII_CHECKER_HOOK_ENABLED": "true",
-            "PII_CHECKER_HOOK_POLICY": policy,
+            "PII_CHECKER_MODE": policy,
         }
     )
     proc = subprocess.run(

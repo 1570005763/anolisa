@@ -24,17 +24,11 @@ _HOOK_ENABLED = env_flag_enabled("PII_CHECKER_HOOK_ENABLED", True)
 
 
 def _read_policy() -> str:
-    """Read the canonical policy, falling back to the legacy mode."""
-    if "PII_CHECKER_HOOK_POLICY" in os.environ:
-        raw = os.environ.get("PII_CHECKER_HOOK_POLICY")
-        policy = env_hook_policy("PII_CHECKER_HOOK_POLICY", "observe")
-        if normalize_hook_policy(raw, "") == "":
-            print("[pii-checker] invalid hook policy; using observe", file=sys.stderr)
-        return policy
+    """Read the configured PII Checker mode."""
     raw = os.environ.get("PII_CHECKER_MODE")
-    policy = normalize_hook_policy(raw, "observe")
+    policy = env_hook_policy("PII_CHECKER_MODE", "observe")
     if "PII_CHECKER_MODE" in os.environ and normalize_hook_policy(raw, "") == "":
-        print("[pii-checker] invalid legacy mode; using observe", file=sys.stderr)
+        print("[pii-checker] invalid PII_CHECKER_MODE; using observe", file=sys.stderr)
     return policy
 
 

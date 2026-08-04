@@ -141,15 +141,14 @@ def test_environment_enabled_overrides_disabled_capability(
 def test_environment_policy_overrides_capability_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv("SKILL_LEDGER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("SKILL_LEDGER_MODE", "deny")
+    monkeypatch.setenv("SKILL_LEDGER_MODE", "observe")
 
     capability = _make_capability(tmp_path, policy="block")
 
     assert capability._policy == "observe"
 
 
-def test_legacy_mode_overrides_capability_policy(
+def test_environment_mode_deny_alias_overrides_capability_policy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("SKILL_LEDGER_MODE", "deny")

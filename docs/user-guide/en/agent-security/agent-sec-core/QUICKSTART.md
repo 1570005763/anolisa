@@ -190,16 +190,15 @@ only redacted evidence.
 
 ```bash
 # Explicitly block scanner deny verdicts at enforceable hook boundaries
-export PII_CHECKER_HOOK_POLICY=block
+export PII_CHECKER_MODE=block
 ./qwen-code-extension/scripts/deploy.sh
 ```
 
 | Environment variable | Default | Behavior |
 |----------------------|---------|----------|
 | `PII_CHECKER_HOOK_ENABLED` | `true` | Set to `false` to skip the PII hook before input is read |
-| `PII_CHECKER_HOOK_POLICY` | `observe` | `observe` audits silently; `warn` warns; `ask`/`block` use host-specific enforcement or fallback |
+| `PII_CHECKER_MODE` | `observe` | `observe` audits silently; `warn` warns; `ask`/`block` use host-specific enforcement or fallback; `debug` aliases `observe`, and `deny` aliases `block` |
 | `PII_CHECKER_ENABLED` | - | Legacy Qwen-only enabled variable, used when the new switch is absent |
-| `PII_CHECKER_MODE` | - | Legacy policy variable retained by all six hosts; `debug` aliases `observe`, and `deny` aliases `block` |
 | `PII_CHECKER_INCLUDE_LOW_CONFIDENCE` | `false` | Passes `--include-low-confidence` when enabled |
 | `PII_CHECKER_TIMEOUT` | `5` | Scanner timeout in seconds, capped at 8 seconds |
 
@@ -370,10 +369,10 @@ including when blocking is enabled. The default policy is `ask`; set the policy
 in the trusted environment that starts Qwen Code:
 
 ```bash
-SKILL_LEDGER_HOOK_POLICY=observe qwen  # observe only
-SKILL_LEDGER_HOOK_POLICY=warn qwen   # emit a non-blocking diagnostic; continue
-SKILL_LEDGER_HOOK_POLICY=ask qwen    # ask before use (default)
-SKILL_LEDGER_HOOK_POLICY=block qwen  # deny a non-empty exposure warning
+SKILL_LEDGER_MODE=observe qwen  # observe only
+SKILL_LEDGER_MODE=warn qwen   # emit a non-blocking diagnostic; continue
+SKILL_LEDGER_MODE=ask qwen    # ask before use (default)
+SKILL_LEDGER_MODE=block qwen  # deny a non-empty exposure warning
 ```
 
 Qwen Code 0.19.9 records non-blocking `systemMessage` values in the session debug log

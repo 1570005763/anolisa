@@ -211,7 +211,7 @@ Hermes 没有可靠的原生确认协议，因此 `ask` 显式 fallback 为 `war
 `block + deny` 在
 `pre_tool_call` 返回原生 block；`pre_llm_call` / `post_tool_call` 的不可阻断边界
 fallback 为 `warn`。model output 保留现有脱敏行为。环境变量 policy 优先于
-capability 配置，旧变量 `PII_CHECKER_MODE` 继续兼容。
+capability 配置；对应环境变量为 `PII_CHECKER_MODE`。
 
 - 挂在 `pre_llm_call`、`pre_tool_call`、`post_tool_call`、`transform_llm_output`、`on_session_end`
 - 扫描本轮用户输入、tool 参数、tool 返回结果和最终模型回复；不扫描 history、memory 或 RAG context

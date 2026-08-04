@@ -793,19 +793,11 @@ class TestUnknownMode:
         assert "execution continues" in output["systemMessage"]
 
 
-def test_invalid_legacy_mode_reports_ask_fallback(monkeypatch, capsys):
-    monkeypatch.delenv("SKILL_LEDGER_HOOK_POLICY", raising=False)
+def test_invalid_mode_reports_ask_fallback(monkeypatch, capsys):
     monkeypatch.setenv("SKILL_LEDGER_MODE", "banana")
 
     assert skill_ledger_hook._read_policy() == "ask"
-    assert "invalid legacy mode; using ask" in capsys.readouterr().err
-
-
-def test_new_policy_overrides_legacy_mode(monkeypatch):
-    monkeypatch.setenv("SKILL_LEDGER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("SKILL_LEDGER_MODE", "deny")
-
-    assert skill_ledger_hook._read_policy() == "observe"
+    assert "invalid SKILL_LEDGER_MODE; using ask" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

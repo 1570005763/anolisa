@@ -69,7 +69,7 @@ def mock_cli(tmp_path: Path):
             "HOME": str(home),
             "PATH": os.pathsep.join(path_entries),
             "PYTHONPATH": str(_PLUGIN_DIR / "hooks"),
-            "SKILL_LEDGER_HOOK_POLICY": "ask",
+            "SKILL_LEDGER_MODE": "ask",
             "SKILL_LEDGER_TIMEOUT": "5",
             "_MOCK_CLI_OUTPUT": output,
             "_MOCK_CLI_RC": str(rc),
@@ -175,13 +175,6 @@ def test_hook_disabled_short_circuits_before_work(
     skill_ledger_hook.main()
 
     assert capsys.readouterr().out == ""
-
-
-def test_new_policy_overrides_legacy_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SKILL_LEDGER_HOOK_POLICY", "observe")
-    monkeypatch.setenv("SKILL_LEDGER_MODE", "deny")
-
-    assert skill_ledger_hook._read_policy() == "observe"
 
 
 def test_project_skill_resolves_to_canonical_path_with_trace_context(
@@ -440,7 +433,7 @@ def test_pass_is_silent_for_every_policy(policy: str, mock_cli, tmp_path: Path) 
     _make_skill(project / ".qoder" / "skills", "clean")
     env, _capture, _home = mock_cli(
         output=json.dumps({"status": "pass"}),
-        extra={"SKILL_LEDGER_HOOK_POLICY": policy},
+        extra={"SKILL_LEDGER_MODE": policy},
     )
 
     proc = _run_hook(_event(project, "clean"), env)
@@ -455,7 +448,7 @@ def test_warn_policy_allows_with_system_message(mock_cli, tmp_path: Path) -> Non
     _make_skill(project / ".qoder" / "skills", "warned")
     env, _capture, _home = mock_cli(
         output=json.dumps({"status": "warn", "findings": [{"secret": "raw"}]}),
-        extra={"SKILL_LEDGER_HOOK_POLICY": "warn"},
+        extra={"SKILL_LEDGER_MODE": "warn"},
     )
 
     output = _stdout_json(_run_hook(_event(project, "warned"), env))
@@ -472,7 +465,7 @@ def test_block_policy_denies_pre_tool_use(mock_cli, tmp_path: Path) -> None:
     _make_skill(project / ".qoder" / "skills", "blocked")
     env, _capture, _home = mock_cli(
         output=json.dumps({"status": "deny", "findings": [{}]}),
-        extra={"SKILL_LEDGER_HOOK_POLICY": "block"},
+        extra={"SKILL_LEDGER_MODE": "block"},
     )
 
     output = _stdout_json(_run_hook(_event(project, "blocked"), env))
@@ -489,7 +482,7 @@ def test_debug_policy_allows_with_sanitized_stderr(mock_cli, tmp_path: Path) -> 
             {"status": "deny", "findings": [{"secret": "finding-secret"}]}
         ),
         extra={
-            "SKILL_LEDGER_HOOK_POLICY": "debug",
+            "SKILL_LEDGER_MODE": "debug",
             "_MOCK_CLI_STDERR": "raw-cli-secret",
         },
     )
@@ -581,7 +574,7 @@ def test_infrastructure_error_respects_enforcement_policy(
     project.mkdir()
     _make_skill(project / ".qoder" / "skills", "infra-error")
     env, _capture, _home = mock_cli(
-        output="not-json", extra={"SKILL_LEDGER_HOOK_POLICY": policy}
+        output="not-json", extra={"SKILL_LEDGER_MODE": policy}
     )
 
     output = _stdout_json(_run_hook(_event(project, "infra-error"), env))
@@ -609,23 +602,7 @@ def test_invalid_timeout_falls_back_to_default(mock_cli, tmp_path: Path) -> None
     assert capture.exists()
 
 
-def test_invalid_policy_falls_back_to_ask(mock_cli, tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    _make_skill(project / ".qoder" / "skills", "unsigned")
-    env, _capture, _home = mock_cli(
-        output=json.dumps({"status": "none"}),
-        extra={"SKILL_LEDGER_HOOK_POLICY": "invalid"},
-    )
-
-    proc = _run_hook(_event(project, "unsigned"), env)
-    output = _stdout_json(proc)
-
-    assert _permission(output)["permissionDecision"] == "ask"
-    assert "invalid SKILL_LEDGER_HOOK_POLICY" in proc.stderr
-
-
-def test_invalid_legacy_mode_falls_back_to_ask(mock_cli, tmp_path: Path) -> None:
+def test_invalid_mode_falls_back_to_ask(mock_cli, tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
     _make_skill(project / ".qoder" / "skills", "unsigned")
@@ -633,13 +610,12 @@ def test_invalid_legacy_mode_falls_back_to_ask(mock_cli, tmp_path: Path) -> None
         output=json.dumps({"status": "none"}),
         extra={"SKILL_LEDGER_MODE": "invalid"},
     )
-    env.pop("SKILL_LEDGER_HOOK_POLICY")
 
     proc = _run_hook(_event(project, "unsigned"), env)
     output = _stdout_json(proc)
 
     assert _permission(output)["permissionDecision"] == "ask"
-    assert "invalid legacy SKILL_LEDGER_MODE" in proc.stderr
+    assert "invalid SKILL_LEDGER_MODE" in proc.stderr
 
 
 def test_drift_notice_contains_counts_not_file_names(mock_cli, tmp_path: Path) -> None:
