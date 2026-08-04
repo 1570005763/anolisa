@@ -261,6 +261,7 @@ agent-sec-cli verify
 ## Skill Ledger
 
 基于 Ed25519 的 Skill 目录完整性账本。在 `.skill-meta/` 中记录文件哈希、版本链和扫描结果，通过 `agent-sec-cli skill-ledger` 子命令统一管理。
+对于已有 manifest，Skill Ledger 会先验真、再检查文件漂移；已有但未签名的 manifest 会报告为 `tampered`。
 
 ### 核心命令
 

@@ -95,6 +95,7 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 {
   "version": 1,
   "versionId": "v000001",
+  // 显式父版本 ID；新链段根为 null。
   "previousVersionId": null,
 
   "skillName": "github",
@@ -125,8 +126,8 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
   // ── 防篡改字段 ──────────────────────────────────────
   "manifestHash": "sha256:...",
 
-  // 前一版本 manifest 的签名值（v000001 时为 null）。
-  // 构成密码学版本链：篡改任何历史 manifest 将导致后续版本链断裂。
+  // previousVersionId 所指 manifest 的签名值；新链段根为 null。
+  // 两个 previous 字段必须同时为空或同时存在。
   "previousManifestSignature": null,
 
   // 对 manifestHash 的 Ed25519 数字签名。
@@ -141,11 +142,13 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 
 ### 关键规则
 
-**版本链**：当 skill 目录中文件发生变化（fileHashes 不匹配）时，`certify` 会创建新版本并签名。正常写入时 `latest.json` 指向最新版本。每个签名 manifest 的 `previousManifestSignature` 引用前一版本的签名值，形成密码学链；历史链完整性由 `audit` 深度校验。
+**版本链**：当已验真的 skill 目录中文件发生变化（fileHashes 不匹配）时，`scan` / `certify` 会创建新版本并签名。正常写入时 `latest.json` 指向最新版本。每个非链段根 manifest 通过 `previousVersionId` 和 `previousManifestSignature` 显式引用一个较早、已验真的版本；恢复过程可跳过损坏的物理相邻版本。若历史中没有满足 schema、身份、manifestHash、签名和 snapshot 校验的父版本，新版本会将两个 previous 字段都置为 `null`，成为签名确认的新链段根。`audit` 按显式引用深度校验，不把磁盘上的相邻版本自动视为父子关系。
 
-**fileHashes**：遍历 skill_dir 文件（排除 `.skill-meta/`、`.git/`，跳过符号链接），逐文件 SHA-256，按相对路径为 key 存入 map。`check` 时重新计算并逐条比对，可精确报告哪些文件被添加、删除或修改。
+**fileHashes**：遍历 skill_dir 文件（排除 `.skill-meta/`、`.git/`，跳过符号链接），逐文件 SHA-256，按相对路径为 key 存入 map。`check` 只在 manifest 通过 schema、manifestHash、签名和已签名身份校验后重新计算并逐条比对，可精确报告哪些文件被添加、删除或修改。
 
 **manifestHash**：对 manifest 中除 `manifestHash`、`signature` 之外的所有字段做 Canonical JSON 序列化（键排序、无多余空格），取 SHA-256。`signature` 是对 `manifestHash` 的数字签名。两层设计：`manifestHash` 用于快速一致性校验，`signature` 提供密码学防篡改保护。
+
+**身份边界**：latest 还必须指向最新已验真的版本 artifact，且与对应版本 JSON 完全一致，防止旧的合法签名被回放成当前状态。无效 artifact 仍由 audit 报告，但不能凭借一个超大文件名阻断后续恢复。manifest v1 只签署 `skillName`，不包含 canonical path，因此不能区分不同根目录下 basename 相同的 Skill。
 
 **userDecision**：用户对某个具体签名版本的运行态决策，字段为：
 - `action`：`allow` / `always_allow` / `block` / `rollback`
@@ -347,13 +350,13 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 判定流程（按优先级）：
 
 1. **无 manifest** → 返回 `none`；不创建版本、manifest 或 snapshot
-2. **fileHashes 不匹配** → 返回 `drifted`（附 added/removed/modified 详情）
-3. **签名验证失败** → 返回 `tampered`
-4. **签名有效** → 按 `scanStatus` 返回 `deny` / `warn` / `none` / `pass`
+2. **manifest JSON/schema、manifestHash、签名、已签名身份或 latest/版本 artifact 上下文无效** → 返回 `tampered`
+3. **manifest 验真成功但 fileHashes 不匹配** → 返回 `drifted`（附 added/removed/modified 详情）；这表示 live root 与上次签名版本存在尚未扫描的内容分歧，不是 scanner 已确认的风险结论
+4. **manifest 验真成功且 fileHashes 匹配** → 按 `scanStatus` 返回 `deny` / `warn` / `none` / `pass`
 
-输出为单行 JSON。`check` 始终只读，不需要私钥，也不会签名；后续已签名 manifest 的验签仅需公钥。除 Codex 和 Qoder CLI 的低层调用前门禁外，宿主 hook 的用户提示入口是 `show`，不是直接解析 `check.status`。
+输出为单行 JSON。`check` 始终只读，不需要私钥，也不会签名；后续已签名 manifest 的验签仅需公钥。`tampered` 输出只携带从已解析根目录获得的安全身份，不把 manifest 控制的版本、时间、文件数、哈希或用户决策作为可信 metadata 返回。除 Codex 和 Qoder CLI 的低层调用前门禁外，宿主 hook 的用户提示入口是 `show`，不是直接解析 `check.status`。
 
-> **关键设计：fileHashes 先于签名验证。** 文件已变更时无论签名有效与否均为 `drifted`。`tampered` 仅在内容未变但 manifest 被伪造时触发（如 `scanStatus` 被篡改），是真正的元数据安全事件。
+> **关键设计：manifest 验真先于 fileHashes。** 只有通过 schema、manifestHash、签名和身份校验的 manifest 才能参与 live root 比对。已有 manifest 缺少签名时也返回 `tampered`，不保留 unsigned legacy 补签语义；因此元数据篡改与文件漂移同时存在时，结果仍是 `tampered`。
 
 **`skill-ledger scan <skill_dir> [--force] [--scanners <name,...>]`** — 快速扫描并签名入账
 
@@ -365,10 +368,12 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 
 - 无 manifest、无扫描结果、缺少部分默认 scanner 结果时，只运行缺失 scanner。
 - `drifted` 时按当前文件创建新版本并运行请求的 scanner。
-- `tampered` 时用户显式执行 `scan` 即表示按当前文件重新建立可信记录；CLI 忽略已损坏 manifest 的可信性，重新扫描并写入新的签名 manifest，最终状态只按本次扫描结果聚合为 `pass` / `warn` / `deny`。
+- `tampered`（包括缺少签名）时用户显式执行 `scan` 即表示按当前文件重新建立可信记录；CLI 不原地补签，也不继承损坏 manifest 的 scans、状态或用户决策，而是重新扫描并写入新版本。
 - 已有对应 scanner 结果且文件未变时跳过该 scanner。
 
 `scan --all` 对所有发现的 Skill 执行相同补齐逻辑；若没有任何 scanner 需要执行，不写 manifest，只报告 `noop`。`--force` 会强制重跑请求 scanner 并重签 manifest。
+
+新版本只会链接历史中最近的完整可信 artifact：候选的 schema、`versionId`/文件名、`skillName`、manifestHash、签名与 snapshot 必须全部匹配。版本号从该可信父版本之后选择首个未被版本 JSON 或 snapshot 占用的编号；没有可信父版本时从 `v000001` 起选择首个空槽。这样既不覆盖损坏或部分写入的证据，也不允许无效 latest 或孤立的超大编号控制恢复可用性。无可信父版本时两个 previous 字段均为 `null`；只有可信父版本的 `always_allow` 决策可以继承。
 
 **`skill-ledger certify <skill_dir> --findings <findings.json> [--scanner <name>] [--scanner-version <ver>] [--delete-findings]`** — 导入外部 findings
 
@@ -380,7 +385,7 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 
 | 阶段 | 职责 | 关键行为 |
 |------|------|---------|
-| **一：对齐** | 确保 manifest 与磁盘文件一致 | 无 manifest、drifted 或 tampered 时按当前文件创建新版本；`check` 只读，不创建版本 |
+| **一：验真与对齐** | 先验证 manifest 真实性，再与磁盘文件对齐 | 无 manifest、drifted 或 tampered 时按当前文件创建新版本；tampered 数据不被继承或原地重签；`check` 只读，不创建版本 |
 | **二：导入** | 获取扫描结果 | 读取外部 findings 文件，输出经 parser 归一化为 `NormalizedFinding[]` |
 | **三：签名** | 更新 manifest 并签名 | 合并 scan 条目 → 聚合 `scanStatus`（取最严重级别）→ 重算 `manifestHash` → Ed25519 签名 → 原子写入 |
 
@@ -438,7 +443,7 @@ agent-sec-cli skill-ledger decide <skill_dir> --clear
 
 **`skill-ledger export <skill_dir> --version latest|active|v000001 --output <path>`** — 导出签名 snapshot 供审查
 
-`export` 会把目标版本的 `snapshot/`、`manifest.json` 和 `findings.json` 导出到指定目录。pending stub 不是真实 active version，因此在 pending 状态下 `--version active` 会报错；用户应使用 `--version latest` 审查被隐藏的风险版本。
+`export` 会把目标版本的 `snapshot/`、`manifest.json` 和 `findings.json` 导出到指定目录。pending stub 不是真实 active version，因此在 pending 状态下 `--version active` 会报错；用户应使用 `--version latest` 审查未暴露的 latest 版本。
 
 **`skill-ledger status [--verbose]`** — 查询整体安全状况（系统级概览）
 
@@ -455,7 +460,7 @@ agent-sec-cli skill-ledger decide <skill_dir> --clear
 
 **`skill-ledger audit <skill_dir>`** — 深度校验版本链完整性
 
-遍历 `versions/` 逐版本验证 manifestHash、签名、`previousManifestSignature` 链接完整性。可选 `--verify-snapshots` 校验快照文件哈希，并拒绝 snapshot 中的 symlink、特殊文件和 `.skill-meta` / `.git` 元数据路径。输出结构化校验结果。
+遍历 `versions/` 中由版本 JSON 或 snapshot 目录保留的编号槽位，逐版本验证 schema、manifestHash、签名和 `skillName` / `versionId` 身份；只有 snapshot 而缺少同编号 JSON 也会作为坏历史报告。随后按 `previousVersionId` 查找显式父版本并核对 `previousManifestSignature`。两个 previous 字段必须同时为空或同时存在；显式父版本必须存在、编号更早且通过验真。两个字段都为空的已签名版本可作为新链段根，因此恢复版本不需要伪装成物理相邻坏版本的后继。坏历史仍会使整体 audit 失败。可选 `--verify-snapshots` 校验快照文件哈希，并拒绝 snapshot 中的 symlink、特殊文件和 `.skill-meta` / `.git` 元数据路径。输出结构化校验结果。
 
 ### 扫描能力架构
 
@@ -667,7 +672,7 @@ OpenClaw、copilot-shell、Hermes、Codex 和 Qwen Code 遇到 CLI 不可用、�
 
 ### 向后兼容
 
-若 `check` 遇到无签名的 `.skill-meta/`（升级前遗留数据），视为 `none` 而非 `tampered`。首次执行 `scan` 或 `certify` 后将自动补签。Codex 和 Qoder CLI 直接消费 `check`；其它宿主 hook 通过 `show` 间接获得该状态，不直接以 `check` 输出作为用户提示依据。
+`.skill-meta/latest.json` 不存在时返回 `none`；已验真且与当前文件匹配的 manifest 也会按其 `scanStatus=none` 返回 `none`。已有 manifest 缺少签名或验签失败时一律视为 `tampered`；不保留旧 unsigned manifest 的原地补签兼容。用户显式执行 `scan` 或 `certify` 时会重新扫描并创建新的签名版本。Codex 和 Qoder CLI 直接消费 `check`；其它宿主 hook 通过 `show` 间接获得该状态，不直接以 `check` 输出作为用户提示依据。
 
 ---
 

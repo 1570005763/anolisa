@@ -261,6 +261,7 @@ For the complete guide (manual key management, custom skills, CI/CD, troubleshoo
 ## Skill Ledger
 
 Ed25519-based integrity ledger for skill directories. Tracks file hashes, version chains, and scan results in `.skill-meta/` manifests — all managed via the `agent-sec-cli skill-ledger` subcommand.
+For an existing manifest, authenticity is verified before file drift; an unsigned existing manifest is reported as `tampered`.
 
 ### Key Commands
 
