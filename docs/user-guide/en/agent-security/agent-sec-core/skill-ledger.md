@@ -330,7 +330,7 @@ Codex and Qoder CLI are low-level integrity gates that run `skill-ledger check <
 
 All six adapters enable Skill Ledger by default with policy `ask`; copilot-shell, Codex, Qoder CLI, and Qwen Code register their corresponding hook boundaries in their default manifests. OpenClaw and Hermes can also take capability configuration, while `SKILL_LEDGER_MODE` remains the deployment-level override. Apart from the explicitly documented Qoder CLI low-level gate above, the other compatibility hooks remain fail-open when the CLI infrastructure misbehaves, avoiding blocked Skill loads.
 
-The copilot-shell hook currently covers three directory classes — project / user / system: `<cwd>/.copilot-shell/skills/`, `~/.copilot-shell/skills/`, `/usr/share/anolisa/skills/`. Skills from custom, extension, remote, or other paths make the hook fail open and skip the skill-ledger check; the OpenClaw plugin extracts the Skill directory from the `SKILL.md` path it reads.
+The copilot-shell hook currently covers three directory classes — project / user / system: `<cwd>/.copilot-shell/skills/`, `~/.copilot-shell/skills/`, and the RPM and raw-install system roots `/usr/share/anolisa/skills/` and `/usr/local/share/anolisa/skills/`. Skills from custom, extension, remote, or other paths make the hook fail open and skip the skill-ledger check; the OpenClaw plugin extracts the Skill directory from the `SKILL.md` path it reads.
 
 For batch certification or post-install certification, complete directory resolution and certification before letting the Agent read uncertified Skill content: avoid proactively reading an uncertified Skill's `SKILL.md` or auxiliary files before batch certification; after a successful install, locate the final local directory, confirm it contains `SKILL.md`, then run quick-scan certification.
 
@@ -412,7 +412,7 @@ Note: a hook's `ask` confirmation only lets the current host operation continue 
 
 #### Configuring Skill Directories (for batch scans)
 
-Five built-in directories are included by default: `~/.openclaw/skills/*`, `~/.copilot-shell/skills/*`, `~/.hermes/skills/**`, `~/.qoder/skills/*`, `/usr/share/anolisa/skills/*`. Project-level Qoder directories are not relative defaults; after an explicit `scan` or `certify` on a project Skill, its absolute directory is written to `managedSkillDirs` via the auto-memoization mechanism. To add other directories, create or edit `~/.config/agent-sec/skill-ledger/config.json`:
+Six built-in directories are included by default: `~/.openclaw/skills/*`, `~/.copilot-shell/skills/*`, `~/.hermes/skills/**`, `~/.qoder/skills/*`, `/usr/share/anolisa/skills/*`, `/usr/local/share/anolisa/skills/*`. Project-level Qoder directories are not relative defaults; after an explicit `scan` or `certify` on a project Skill, its absolute directory is written to `managedSkillDirs` via the auto-memoization mechanism. To add other directories, create or edit `~/.config/agent-sec/skill-ledger/config.json`:
 
 ```json
 {
