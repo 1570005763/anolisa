@@ -242,6 +242,40 @@ class TestCheckStateMachine(SkillDirTestCase):
         self.assertEqual(result["status"], "none")
         self.assertIsNone(result["fileCount"])
 
+    def test_missing_latest_with_version_artifacts_is_tampered(self):
+        """Removing latest cannot downgrade a populated ledger to none."""
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "pass", "message": "ok"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+        os.remove(self._manifest_path())
+
+        with patch(
+            "agent_sec_cli.skill_ledger.core.checker.compute_file_hashes",
+            side_effect=AssertionError("missing latest must fail before live hashing"),
+        ):
+            checked = check(self.skill_dir, self.backend)
+            manifest_only = manifest_only_status(self.skill_dir, self.backend)
+
+        for result in (checked, manifest_only):
+            self.assertEqual(result["status"], "tampered")
+            self.assertEqual(
+                result["reason"],
+                "latest.json is missing while version artifacts exist",
+            )
+            for field in (
+                "versionId",
+                "createdAt",
+                "updatedAt",
+                "fileCount",
+                "manifestHash",
+                "userDecision",
+            ):
+                self.assertIsNone(result[field])
+            self.assertNotIn("added", result)
+            self.assertNotIn("removed", result)
+            self.assertNotIn("modified", result)
+
     def test_unchanged_after_certify_pass(self):
         """certify with all-pass findings → check returns pass with enriched metadata."""
         findings_path = self._write_findings(
@@ -498,6 +532,40 @@ class TestCheckStateMachine(SkillDirTestCase):
         self.assertIsNone(result["versionId"])
         self.assertEqual(summary["latestStatus"], "tampered")
         self.assertEqual(summary["reasonCode"], "tampered")
+
+    def test_invalid_artifact_suppresses_older_always_allow_decision(self):
+        """An invalid artifact blocks reuse of an older allowing decision."""
+        findings_path = self._write_findings(
+            [{"rule": "r1", "level": "deny", "message": "risk"}]
+        )
+        certify(self.skill_dir, self.backend, findings_path=findings_path)
+        decided = decide_skill(
+            self.skill_dir,
+            self.backend,
+            action="always_allow",
+        )
+        self.assertEqual(decided["activation"]["activeVersionId"], "v000001")
+
+        Path(
+            self.skill_dir,
+            ".skill-meta",
+            "versions",
+            "v000002.snapshot",
+        ).mkdir()
+        self._write_file("run.sh", "#!/bin/bash\necho changed\n")
+        recovered = certify(
+            self.skill_dir,
+            self.backend,
+            findings_path=findings_path,
+        )
+        self.assertEqual(recovered["versionId"], "v000003")
+        clear_decision(self.skill_dir, self.backend)
+
+        summary = build_exposure_summary(self.skill_dir, self.backend)
+
+        self.assertIsNone(summary["activeVersionId"])
+        self.assertIsNone(summary["userDecision"])
+        self.assertEqual(summary["reasonCode"], "latest_risk_pending_decision")
 
     def test_tampered_diagnostics_do_not_echo_manifest_values(self):
         """Signature and schema failures return stable public diagnostics."""

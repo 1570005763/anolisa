@@ -53,7 +53,7 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 
 **组件职责**：
 
-- **skill-ledger CLI**：核心基础设施。提供 `init`（初始化密钥并可为已覆盖 Skill 建立快速扫描 baseline）、`scan`（运行内置快速扫描器并签名入账）、`check`（只读检查 JSON + 验签 + 比哈希 + 输出状态，可供宿主 hook/capability 调用）、`certify`（导入外部 findings 并签名）等子命令。`scan` / `certify` 写入的 manifest 经 Ed25519 数字签名保护，防止篡改；`check` 在无 manifest 时返回 `none`，不创建版本或 snapshot。确定性逻辑不依赖 LLM，不可被 prompt injection 绕过。
+- **skill-ledger CLI**：核心基础设施。提供 `init`（初始化密钥并可为已覆盖 Skill 建立快速扫描 baseline）、`scan`（运行内置快速扫描器并签名入账）、`check`（只读检查 JSON + 验签 + 比哈希 + 输出状态，可供宿主 hook/capability 调用）、`certify`（导入外部 findings 并签名）等子命令。`scan` / `certify` 写入的 manifest 经 Ed25519 数字签名保护，防止篡改；当 `latest.json` 缺失时，`check` 仅在历史版本 artifact 也不存在时将该缺失判为 `none`，历史 artifact 仍存在则返回 `tampered`；latest 验真且与当前文件匹配时，仍按 `scanStatus` 返回状态（包括 `none`）。`check` 不创建版本或 snapshot。确定性逻辑不依赖 LLM，不可被 prompt injection 绕过。
 - **Scanner Registry**：可扩展扫描框架。通过配置注册扫描器（`builtin`/`cli`/`skill`/`api` 四种调用类型）和结果解析器（将异构扫描输出归一化为统一 `NormalizedFinding` 格式）。本版本默认注册 `skill-vetter`（`type: "skill"`，由 Agent 深度扫描后通过 `certify --findings` 消费）、`code-scanner` 和 `static-scanner`（均为 `type: "builtin"`，可由 `scan` 自动调用）。当前仅实现 `findings-array` parser；`cli`/`api` adapter 及其它 parser 类型为预留扩展点。旧名称 `skill-code-scanner`、`cisco-static-scanner` 仅作为兼容 alias 读取，不再作为公开名称展示或写入新 manifest。
 - **skill-ledger Skill**：一个 Skill，三个阶段。Phase 1 做环境准备与状态查看；Phase 2 默认执行快速扫描认证（`scan` 调用内置 `code-scanner` 与 `static-scanner`）；Phase 3 在用户显式要求或确认后执行 Agent 驱动深度扫描（`skill-vetter`），再用 `certify --findings ... --delete-findings` 写入版本链。
 - **SkillFS + daemon activation**：推荐运行态入口。SkillFS 捕获 Skill 文件变化后调用 daemon 的 `skill_ledger.skillfs_notify_change` 接口，daemon 根据签名 manifest 和 activation policy 刷新 `.skill-meta/activation.json`，并尽力同步写入 xattr。
@@ -168,7 +168,7 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 | T1 | Skill 自我漂白 | 恶意 Skill 通过 shell 命令覆写自身 `.skill-meta/`，伪装为 pass |
 | T2 | Agent 篡改历史 | 被劫持的 Agent 利用 shell 权限伪造整个 `.skill-meta/` 目录树 |
 | T3 | 供应链更新攻击 | Skill 更新包中携带预制的 `.skill-meta/`，试图跳过扫描 |
-| T4 | 降级攻击 | 用旧版 `latest.json` 替换当前版本，隐藏 deny 扫描结果 |
+| T4 | 降级攻击 | 删除 `latest.json` 或用旧版 latest 替换当前版本，试图隐藏 deny 扫描结果 |
 
 **防御原则**：签名权与文件访问权分离。签名私钥位于 `~/.local/share/agent-sec/skill-ledger/`（skill 目录外部），即使完全控制 skill 目录也无法伪造有效签名。
 
@@ -177,7 +177,7 @@ AI Agent 通过加载 Skill（结构化指令 + 辅助脚本）扩展能力。Sk
 | T1 | Skill 可写 `.skill-meta/` 但无签名私钥 → 签名验证失败 → `tampered` |
 | T2 | 同上——Agent 无签名私钥（私钥位于 skill 目录外部，启用口令保护时更安全） |
 | T3 | 外部预制的 `.skill-meta/` 密钥指纹不匹配本机 → `tampered` |
-| T4 | 当前 hook 热路径的 `check` 只校验 `latest.json` 本身，不遍历 `versions/`；回滚检测依赖 `audit`，会发现 `latest.json` 未指向最高版本或历史链断裂 |
+| T4 | `check` 在历史 artifact 存在时要求 `latest.json` 存在，并将其绑定到最新已验真的版本 artifact；删除或回放 latest 均返回 `tampered`，`audit` 继续负责完整历史审计 |
 
 #### 可插拔签名后端
 
@@ -349,14 +349,14 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 
 判定流程（按优先级）：
 
-1. **无 manifest** → 返回 `none`；不创建版本、manifest 或 snapshot
-2. **manifest JSON/schema、manifestHash、签名、已签名身份或 latest/版本 artifact 上下文无效** → 返回 `tampered`
+1. **`latest.json` 不存在，且 `versions/` 下没有版本 JSON 或 snapshot artifact** → 返回 `none`；不创建版本、manifest 或 snapshot
+2. **`latest.json` 缺失但版本 artifact 仍存在，或 manifest JSON/schema、manifestHash、签名、已签名身份或 latest/版本 artifact 上下文无效** → 返回 `tampered`
 3. **manifest 验真成功但 fileHashes 不匹配** → 返回 `drifted`（附 added/removed/modified 详情）；这表示 live root 与上次签名版本存在尚未扫描的内容分歧，不是 scanner 已确认的风险结论
 4. **manifest 验真成功且 fileHashes 匹配** → 按 `scanStatus` 返回 `deny` / `warn` / `none` / `pass`
 
 输出为单行 JSON。`check` 始终只读，不需要私钥，也不会签名；后续已签名 manifest 的验签仅需公钥。`tampered` 输出只携带从已解析根目录获得的安全身份，不把 manifest 控制的版本、时间、文件数、哈希或用户决策作为可信 metadata 返回。除 Codex 和 Qoder CLI 的低层调用前门禁外，宿主 hook 的用户提示入口是 `show`，不是直接解析 `check.status`。
 
-> **关键设计：manifest 验真先于 fileHashes。** 只有通过 schema、manifestHash、签名和身份校验的 manifest 才能参与 live root 比对。已有 manifest 缺少签名时也返回 `tampered`，不保留 unsigned legacy 补签语义；因此元数据篡改与文件漂移同时存在时，结果仍是 `tampered`。
+> **关键设计：manifest 验真先于 fileHashes。** 只有通过 schema、manifestHash、签名和身份校验的 manifest 才能参与 live root 比对。已有 manifest 缺少签名时也返回 `tampered`，不保留 unsigned legacy 补签语义；删除 `latest.json` 不能把仍有版本 artifact 的已纳管 Ledger 降级为 `none`。因此元数据篡改与文件漂移同时存在时，结果仍是 `tampered`。
 
 **`skill-ledger scan <skill_dir> [--force] [--scanners <name,...>]`** — 快速扫描并签名入账
 
@@ -366,7 +366,7 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 
 默认采用补齐式扫描：
 
-- 无 manifest、无扫描结果、缺少部分默认 scanner 结果时，只运行缺失 scanner。
+- 未纳管（`latest.json` 与历史版本 artifact 均不存在）、无扫描结果、缺少部分默认 scanner 结果时，只运行缺失 scanner。
 - `drifted` 时按当前文件创建新版本并运行请求的 scanner。
 - `tampered`（包括缺少签名）时用户显式执行 `scan` 即表示按当前文件重新建立可信记录；CLI 不原地补签，也不继承损坏 manifest 的 scans、状态或用户决策，而是重新扫描并写入新版本。
 - 已有对应 scanner 结果且文件未变时跳过该 scanner。
@@ -385,7 +385,7 @@ GPG 仍是**分发签名**（sign-skill.sh → trusted-keys → verifier.py）�
 
 | 阶段 | 职责 | 关键行为 |
 |------|------|---------|
-| **一：验真与对齐** | 先验证 manifest 真实性，再与磁盘文件对齐 | 无 manifest、drifted 或 tampered 时按当前文件创建新版本；tampered 数据不被继承或原地重签；`check` 只读，不创建版本 |
+| **一：验真与对齐** | 先验证 manifest 真实性，再与磁盘文件对齐 | 未纳管（latest 与历史 artifact 均不存在）、drifted 或 tampered 时按当前文件创建新版本；tampered 数据不被继承或原地重签；`check` 只读，不创建版本 |
 | **二：导入** | 获取扫描结果 | 读取外部 findings 文件，输出经 parser 归一化为 `NormalizedFinding[]` |
 | **三：签名** | 更新 manifest 并签名 | 合并 scan 条目 → 聚合 `scanStatus`（取最严重级别）→ 重算 `manifestHash` → Ed25519 签名 → 原子写入 |
 
@@ -672,7 +672,7 @@ OpenClaw、copilot-shell、Hermes、Codex 和 Qwen Code 遇到 CLI 不可用、�
 
 ### 向后兼容
 
-`.skill-meta/latest.json` 不存在时返回 `none`；已验真且与当前文件匹配的 manifest 也会按其 `scanStatus=none` 返回 `none`。已有 manifest 缺少签名或验签失败时一律视为 `tampered`；不保留旧 unsigned manifest 的原地补签兼容。用户显式执行 `scan` 或 `certify` 时会重新扫描并创建新的签名版本。Codex 和 Qoder CLI 直接消费 `check`；其它宿主 hook 通过 `show` 间接获得该状态，不直接以 `check` 输出作为用户提示依据。
+`.skill-meta/latest.json` 不存在且没有任何版本 JSON/snapshot artifact 时返回 `none`；若历史 artifact 仍存在，则返回 `tampered`。已验真且与当前文件匹配的 manifest 也会按其 `scanStatus=none` 返回 `none`。已有 manifest 缺少签名或验签失败时一律视为 `tampered`；不保留旧 unsigned manifest 的原地补签兼容。用户显式执行 `scan` 或 `certify` 时会重新扫描并创建新的签名版本。Codex 和 Qoder CLI 直接消费 `check`；其它宿主 hook 通过 `show` 间接获得该状态，不直接以 `check` 输出作为用户提示依据。
 
 ---
 

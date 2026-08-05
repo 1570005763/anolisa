@@ -3,11 +3,12 @@
 Implements ``agent-sec-cli skill-ledger check <skill_dir>``:
 
 1. Read ``latest.json``
-2. Missing → ``{"status": "none"}``
-3. Manifest present → verify its hash, signature, and signed identity
-4. Invalid → ``{"status": "tampered", "reason": ...}``
-5. Valid → compare current fileHashes; mismatch → ``{"status": "drifted", ...}``
-6. Match → dispatch ``scanStatus`` as ``deny`` / ``warn`` / ``none`` / ``pass``
+2. Missing with no version artifacts → ``{"status": "none"}``
+3. Missing with version artifacts → ``{"status": "tampered", "reason": ...}``
+4. Manifest present → verify its hash, signature, and signed identity
+5. Invalid → ``{"status": "tampered", "reason": ...}``
+6. Valid → compare current fileHashes; mismatch → ``{"status": "drifted", ...}``
+7. Match → dispatch ``scanStatus`` as ``deny`` / ``warn`` / ``none`` / ``pass``
 """
 
 import json
@@ -31,6 +32,7 @@ from agent_sec_cli.skill_ledger.core.manifest_helpers import (
 )
 from agent_sec_cli.skill_ledger.core.version_chain import (
     latest_json_path,
+    list_version_artifact_ids,
     load_latest_manifest,
     snapshot_dir_path,
 )
@@ -101,6 +103,12 @@ def _load_authenticated_manifest(
         manifest = None
 
     if manifest is None:
+        if list_version_artifact_ids(io_skill_dir):
+            return None, {
+                **_safe_metadata(root),
+                "status": "tampered",
+                "reason": "latest.json is missing while version artifacts exist",
+            }
         return None, {**_safe_metadata(root), "status": "none"}
 
     try:
