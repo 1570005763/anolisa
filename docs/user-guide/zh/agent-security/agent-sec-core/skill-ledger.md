@@ -48,14 +48,14 @@ agent-sec-cli skill-ledger check /path/to/your-skill
 
 | 状态 | 含义 |
 |------|------|
-| `none` 🆕 | latest manifest 不存在，或已验真且与当前文件匹配的 manifest 为 `scanStatus=none` |
+| `none` 🆕 | `latest.json` 与任何版本 JSON/snapshot artifact 均不存在，或已验真且与当前文件匹配的 manifest 为 `scanStatus=none` |
 | `pass` ✅ | manifest 验真成功 + 文件未变 + 扫描通过 |
 | `drifted` 🔄 | manifest 验真成功，但 live Skill 与已签名 fileHashes 不同；这是尚未扫描的内容分歧，不是 scanner 已确认的风险结论 |
 | `warn` ⚠️ | manifest 验真成功，但上次扫描存在低风险发现 |
 | `deny` 🚨 | manifest 验真成功，但上次扫描存在高危发现 |
-| `tampered` 🔴 | 已有 manifest 的 schema、哈希、签名、已签名身份或 latest/版本 artifact 一致性校验失败，包括缺少签名或回放旧的已签名 latest |
+| `tampered` 🔴 | Ledger metadata 的 schema、哈希、签名、已签名身份或 latest/版本 artifact 一致性校验失败，包括历史 artifact 仍存在但 `latest.json` 缺失、缺少签名或回放旧的已签名 latest |
 
-Skill Ledger 会先验证已有 manifest 的真实性，并将 `latest.json` 绑定到最新已验真的版本 artifact，再将其中的文件哈希与当前 Skill 比较。因此，即使当前文件同时发生变化，缺少签名、签名无效或回放旧的已签名 latest 仍返回 `tampered`；只有已验真的当前 manifest 才可能返回 `drifted`。
+Skill Ledger 会先验证已有 manifest 的真实性，并将 `latest.json` 绑定到最新已验真的版本 artifact，再将其中的文件哈希与当前 Skill 比较。仅当 `latest.json` 和版本 JSON/snapshot artifact 均不存在时，缺少 latest 才表示 `none`；若历史 artifact 仍存在，则 Ledger 不完整，返回 `tampered`。因此，即使当前文件同时发生变化，缺少签名、签名无效或回放旧的已签名 latest 仍返回 `tampered`；只有已验真的当前 manifest 才可能返回 `drifted`。
 
 ### 3. 快速扫描 + 签名认证
 
@@ -349,7 +349,7 @@ enable_block = false
 
 **copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `ask`；如需 observe-only、warning-only 或强拒绝，可设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`。`debug` 仍作为 `observe` 的别名。该环境变量应由可信宿主或部署环境设置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；如需防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源。
 
-**Qoder CLI 配置方式**：安装 `qoder-plugin` 后，plugin 自动注册 matcher 为 `Skill` 的 `PreToolUse` hook。默认 policy 为 `ask`；可由可信启动环境设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`，并通过 `SKILL_LEDGER_TIMEOUT` 调整 CLI 超时（默认 5 秒）。`debug` 仍作为 `observe` 的别名。hook 覆盖 `~/.qoder/skills/` 和 `<cwd>/.qoder/skills/` 下的本地 Skill，用户级同名 Skill 优先；仅在两个目录表都可信解析且没有匹配时，才把调用视为内置、plugin 或 remote Skill，放行并记录 debug。hook 不自动执行 `init` 或 `scan`。没有 latest manifest 的 Skill 以 `none` 状态进入 policy；已有 latest manifest 缺少签名或签名无效时则以 `tampered` 进入。完成审查后需显式执行 `agent-sec-cli skill-ledger scan <skill_dir>`。
+**Qoder CLI 配置方式**：安装 `qoder-plugin` 后，plugin 自动注册 matcher 为 `Skill` 的 `PreToolUse` hook。默认 policy 为 `ask`；可由可信启动环境设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`，并通过 `SKILL_LEDGER_TIMEOUT` 调整 CLI 超时（默认 5 秒）。`debug` 仍作为 `observe` 的别名。hook 覆盖 `~/.qoder/skills/` 和 `<cwd>/.qoder/skills/` 下的本地 Skill，用户级同名 Skill 优先；仅在两个目录表都可信解析且没有匹配时，才把调用视为内置、plugin 或 remote Skill，放行并记录 debug。hook 不自动执行 `init` 或 `scan`。`latest.json` 与任何版本 JSON/snapshot artifact 均不存在的 Skill 以 `none` 状态进入 policy；历史 artifact 仍存在但 `latest.json` 缺失，或已有 latest manifest 缺少签名、签名无效时，则以 `tampered` 进入。完成审查后需显式执行 `agent-sec-cli skill-ledger scan <skill_dir>`。
 
 Skill Ledger 全局 `activationPolicy` 属于 SkillFS/daemon activation；这里的 hook `policy` 只控制宿主 hook/capability 的用户可见行为和日志等级。
 

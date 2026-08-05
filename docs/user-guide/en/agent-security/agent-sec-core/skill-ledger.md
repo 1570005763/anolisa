@@ -48,14 +48,14 @@ Outputs JSON; the key field is `status`:
 
 | Status | Meaning |
 |--------|---------|
-| `none` 🆕 | No latest manifest exists, or an authenticated matching manifest has `scanStatus=none` |
+| `none` 🆕 | Neither `latest.json` nor any version JSON/snapshot artifact exists, or an authenticated matching manifest has `scanStatus=none` |
 | `pass` ✅ | Manifest authenticity valid + files unchanged + scan passed |
 | `drifted` 🔄 | Manifest authenticity valid, but the live Skill differs from the signed file hashes; this is an unscanned divergence, not a scanner-confirmed risk verdict |
 | `warn` ⚠️ | Manifest authenticity valid, but the last scan has low-risk findings |
 | `deny` 🚨 | Manifest authenticity valid, but the last scan has high-risk findings |
-| `tampered` 🔴 | An existing manifest failed schema, hash, signature, signed-identity, or latest/version-artifact consistency validation, including a missing signature or signed latest replay |
+| `tampered` 🔴 | Ledger metadata failed schema, hash, signature, signed-identity, or latest/version-artifact consistency validation, including a missing `latest.json` while version artifacts remain, a missing signature, or signed latest replay |
 
-Skill Ledger authenticates an existing manifest and binds `latest.json` to the newest verified version artifact before comparing its file hashes with the live Skill. A missing or invalid signature, or replay of an older signed latest pointer, is therefore `tampered`, even when the live files have also changed; only a verified current manifest can produce `drifted`.
+Skill Ledger authenticates an existing manifest and binds `latest.json` to the newest verified version artifact before comparing its file hashes with the live Skill. A missing `latest.json` is `none` only when no version JSON or snapshot artifact remains; otherwise the incomplete ledger is `tampered`. A missing or invalid signature, or replay of an older signed latest pointer, is also `tampered`, even when the live files have changed; only a verified current manifest can produce `drifted`.
 
 ### 3. Quick Scan + Signed Certification
 
@@ -363,7 +363,7 @@ enable_block = false
 
 **Configuring copilot-shell**: the default Cosh manifest already registers the `skill-ledger` hook. The default policy is `ask`; for observe-only, warning-only, or hard denial, set `SKILL_LEDGER_MODE=observe` / `warn` / `block`. The `debug` value remains an alias for `observe`. This environment variable should be set by a trusted host or deployment environment — not by Skills, project scripts, or untrusted shell startup logic; to prevent policy downgrades via a tampered local shell profile, it should eventually move to a trusted host configuration source.
 
-**Configuring Qoder CLI**: after installing `qoder-plugin`, the plugin automatically registers a `PreToolUse` hook with matcher `Skill`. The default policy is `ask`; a trusted launch environment may set `SKILL_LEDGER_MODE=observe` / `warn` / `block` and adjust the CLI timeout via `SKILL_LEDGER_TIMEOUT` (default 5 seconds). The `debug` value remains an alias for `observe`. The hook covers local Skills under `~/.qoder/skills/` and `<cwd>/.qoder/skills/`, with user-level Skills of the same name taking precedence; only when both directory tables resolve trustworthily with no match is the call treated as a built-in, plugin, or remote Skill — passed and logged at debug. The hook never runs `init` or `scan` automatically. A Skill with no latest manifest enters the policy as `none`; if a latest manifest exists but its signature is missing or invalid, it enters as `tampered`. After review, run `agent-sec-cli skill-ledger scan <skill_dir>` explicitly.
+**Configuring Qoder CLI**: after installing `qoder-plugin`, the plugin automatically registers a `PreToolUse` hook with matcher `Skill`. The default policy is `ask`; a trusted launch environment may set `SKILL_LEDGER_MODE=observe` / `warn` / `block` and adjust the CLI timeout via `SKILL_LEDGER_TIMEOUT` (default 5 seconds). The `debug` value remains an alias for `observe`. The hook covers local Skills under `~/.qoder/skills/` and `<cwd>/.qoder/skills/`, with user-level Skills of the same name taking precedence; only when both directory tables resolve trustworthily with no match is the call treated as a built-in, plugin, or remote Skill — passed and logged at debug. The hook never runs `init` or `scan` automatically. A Skill with neither `latest.json` nor any version JSON/snapshot artifact enters the policy as `none`. A missing `latest.json` while history remains, or an existing latest manifest with a missing or invalid signature, enters as `tampered`. After review, run `agent-sec-cli skill-ledger scan <skill_dir>` explicitly.
 
 The global Skill Ledger `activationPolicy` belongs to SkillFS/daemon activation; the hook `policy` here only controls the user-visible behavior and log level of host hooks/capabilities.
 

@@ -333,11 +333,11 @@ skill-ledger 是面向 Agent Skill 的安全认证与完整性治理能力。适
 | 状态  | 含义  | 建议处置 |
 | --- | --- | --- |
 | `pass` | manifest 验真成功 + 文件未变 + 扫描通过 | 可正常使用 |
-| `none` | 无 latest manifest，或已验真 manifest 的 `scanStatus=none` | 完成首次扫描 + 认证再使用 |
+| `none` | `latest.json` 与任何版本 JSON/snapshot artifact 均不存在，或已验真 manifest 的 `scanStatus=none` | 完成首次扫描 + 认证再使用 |
 | `drifted` | manifest 验真成功，但 live 文件与已签名版本不同（含新增/删除/修改）；这是尚未扫描的内容分歧，不是 scanner 已确认的风险结论 | 重新扫描 + 认证，或手工恢复预期文件后再扫描 |
 | `warn` | 扫描存在低风险发现 | 审查并按需重新扫描 |
 | `deny` | 扫描存在高危发现 | 立即修复或禁用该 Skill |
-| `tampered` | 已有 manifest 的 schema、哈希、签名、已签名身份或 latest/版本 artifact 上下文无效（含缺少签名或回放旧 latest） | 审计后执行 `scan`，或用 `certify --findings` 创建新的可信记录 |
+| `tampered` | Ledger metadata 的 schema、哈希、签名、已签名身份或 latest/版本 artifact 上下文无效（含历史 artifact 仍存在但 `latest.json` 缺失、缺少签名或回放旧 latest） | 审计后执行 `scan`，或用 `certify --findings` 创建新的可信记录 |
 
 #### 安全扫描能力（skill-vetter）
 
@@ -545,7 +545,7 @@ agent-sec-cli skill-ledger check /path/to/your-skill
 agent-sec-cli skill-ledger check --all
 ```
 
-`check` 始终只读。无 latest manifest 时返回 `none`，但不创建基线；执行 `scan`、`certify` 或带 baseline 的 `init` 后，后续检查才会报告已签名状态和文件变更。
+`check` 始终只读。`latest.json` 与任何版本 JSON/snapshot artifact 均不存在时返回 `none`，但不创建基线；历史 artifact 仍存在但 latest 缺失时返回 `tampered`。执行 `scan`、`certify` 或带 baseline 的 `init` 后，后续检查才会报告已签名状态和文件变更。
 
 | 参数  | 说明  |
 | --- | --- |
@@ -1247,7 +1247,7 @@ Suggested actions:
 
 ### Q6：Skill 状态出现 `tampered` 怎么办？
 
-**A**：`tampered` 表示已有 manifest 未通过 schema、manifestHash、签名、已签名身份或 latest/版本 artifact 上下文校验，与 Skill 文件是否同时变更无关。建议：
+**A**：`tampered` 表示 Ledger metadata 不完整（例如历史 artifact 仍存在但 `latest.json` 缺失），或未通过 schema、manifestHash、签名、已签名身份及 latest/版本 artifact 上下文校验，与 Skill 文件是否同时变更无关。建议：
 
 1.  立即停用相关 Skill；
     

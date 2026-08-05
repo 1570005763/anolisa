@@ -29,6 +29,7 @@ from agent_sec_cli.skill_ledger.core.manifest_helpers import (
 )
 from agent_sec_cli.skill_ledger.core.version_chain import (
     create_snapshot,
+    list_version_artifact_ids,
     load_latest_manifest,
     next_version_id,
     save_manifest,
@@ -268,7 +269,7 @@ def _classify_manifest(
     if corrupted:
         return "tampered"
     if manifest is None:
-        return "missing"
+        return "tampered" if list_version_artifact_ids(skill_dir) else "missing"
 
     valid, _ = verify_latest_manifest_artifact(
         skill_dir,

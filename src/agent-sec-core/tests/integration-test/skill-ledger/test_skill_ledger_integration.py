@@ -939,17 +939,17 @@ def test_scan_recovers_tampered_latest_with_audit_event_and_valid_chain(ws):
     assert scan_event_result["audit_events"][0]["to_status"] == out["scanStatus"]
 
 
-def test_certify_recovers_tampered_latest_with_audit_event(ws):
-    """certify records tampered recovery when imported findings are signed."""
-    skill = make_skill(ws.skills_dir, "certify-tamper-recover", {"main.py": "# ok\n"})
-    event_data = ws.root / "events_certify_tamper_recover"
+def test_certify_recovers_missing_latest_with_audit_event(ws):
+    """certify treats a missing latest with history as tampered recovery."""
+    skill = make_skill(ws.skills_dir, "certify-missing-latest", {"main.py": "# ok\n"})
+    event_data = ws.root / "events_certify_missing_latest"
     event_data.mkdir()
     env = ws.env({"AGENT_SEC_DATA_DIR": str(event_data)})
     reset_security_event_writers()
 
     first_findings = write_findings_file(
         ws.fixtures,
-        "certify-tamper-recover-first.json",
+        "certify-missing-latest-first.json",
         [{"rule": "ok", "level": "pass", "message": "pass"}],
     )
     r1 = run_skill_ledger(
@@ -958,13 +958,20 @@ def test_certify_recovers_tampered_latest_with_audit_event(ws):
     assert r1.returncode == 0, f"initial certify failed: {r1.stderr}"
 
     latest = skill / ".skill-meta" / "latest.json"
-    data = json.loads(latest.read_text())
-    data["scanStatus"] = "deny"
-    latest.write_text(json.dumps(data))
+    trusted_v1 = read_latest_manifest(skill)
+    latest.unlink()
+
+    checked = run_skill_ledger(["check", str(skill)], env_extra=env)
+    assert checked.returncode == 1
+    checked_out = parse_json_output(checked.stdout)
+    assert checked_out["status"] == "tampered"
+    assert (
+        checked_out["reason"] == "latest.json is missing while version artifacts exist"
+    )
 
     second_findings = write_findings_file(
         ws.fixtures,
-        "certify-tamper-recover-second.json",
+        "certify-missing-latest-second.json",
         [{"rule": "ok", "level": "pass", "message": "pass"}],
     )
     r2 = run_skill_ledger(
@@ -975,7 +982,16 @@ def test_certify_recovers_tampered_latest_with_audit_event(ws):
     event = out["auditEvents"][0]
     assert event["type"] == "tampered_recovered"
     assert event["operation"] == "certify"
+    assert event["fromStatus"] == "tampered"
     assert event["toStatus"] == out["scanStatus"]
+    recovered = read_latest_manifest(skill)
+    assert recovered["versionId"] == "v000002"
+    assert recovered["previousVersionId"] == "v000001"
+    assert recovered["previousManifestSignature"] == trusted_v1["signature"]["value"]
+
+    audit_result = run_skill_ledger(["audit", str(skill)], env_extra=env)
+    assert audit_result.returncode == 0, audit_result.stderr
+    assert parse_json_output(audit_result.stdout)["valid"] is True
 
     events = read_security_events(event_data)
     reset_security_event_writers()
