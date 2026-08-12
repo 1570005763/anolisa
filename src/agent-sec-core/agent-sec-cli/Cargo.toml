@@ -25,7 +25,7 @@ ureq = { version = "2.10", features = ["json"] }
 
 [package]
 name = "agent-sec-cli"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 description = "Agent Security Core CLI - Native Rust extensions"
 license = "Apache-2.0"
