@@ -75,7 +75,7 @@ def validate_jwt(value: str) -> bool:
         return False
 
     decoded_parts: list[bytes] = []
-    for part in parts:
+    for index, part in enumerate(parts):
         if len(part) % 4 == 1:
             return False
         padded = part + "=" * (-len(part) % 4)
@@ -85,10 +85,14 @@ def validate_jwt(value: str) -> bool:
             )
         except (binascii.Error, ValueError):
             return False
-        if not decoded or (
-            base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != part
-        ):
+        if not decoded:
             return False
+        # Preserve canonical JSON segments while accepting signature aliases
+        # that permissive JWT libraries decode to the same bytes.
+        if index < 2:
+            canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+            if canonical != part:
+                return False
         decoded_parts.append(decoded)
 
     json_parts: list[object] = []

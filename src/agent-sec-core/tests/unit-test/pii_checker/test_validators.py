@@ -101,6 +101,24 @@ def test_jwt_type_header_is_optional():
     assert validate_jwt(_jwt({"alg": "HS256"}, {"sub": "123"}))
 
 
+def test_jwt_only_accepts_noncanonical_signature_with_equivalent_bytes():
+    token = _jwt({"alg": "HS256"}, {"sub": "123"}, signature=b"\0" * 32)
+    header, payload, canonical_signature = token.split(".")
+    noncanonical_payload = f"{payload[:-1]}R"
+    noncanonical_signature = f"{canonical_signature[:-1]}B"
+
+    assert payload.endswith("Q")
+    assert base64.urlsafe_b64decode(f"{payload}==") == base64.urlsafe_b64decode(
+        f"{noncanonical_payload}=="
+    )
+    assert canonical_signature.endswith("A")
+    assert base64.urlsafe_b64decode(f"{canonical_signature}=") == (
+        base64.urlsafe_b64decode(f"{noncanonical_signature}=")
+    )
+    assert validate_jwt(f"{header}.{payload}.{noncanonical_signature}")
+    assert not validate_jwt(f"{header}.{noncanonical_payload}.{canonical_signature}")
+
+
 def test_jwt_invalid_structure():
     assert not validate_jwt("not.a.jwt")
 
