@@ -1,0 +1,25 @@
+FROM alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4:latest
+
+ARG REVISION=unknown
+
+RUN sed -i -e "s/cloud.aliyuncs/aliyun/g" /etc/yum.repos.d/*.repo
+
+COPY rpms/ /tmp/rpms/
+
+RUN rpm_files="$(find /tmp/rpms -type f -name '*.rpm' -print)" \
+    && test -n "$rpm_files" \
+    && dnf localinstall -y $rpm_files \
+    && dnf install -y attr bash coreutils findutils grep jq procps-ng sed util-linux \
+    && agent-sec-cli --version \
+    && agent-sec-daemon --help \
+    && dnf clean all \
+    && rm -rf /tmp/rpms /var/cache/dnf/*
+
+LABEL org.opencontainers.image.title="ANOLISA agent-sec-core ACK E2E" \
+      org.opencontainers.image.description="Pinned agent-sec-core image for ACK E2E validation" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.source="https://github.com/alibaba/anolisa" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+ENTRYPOINT ["/usr/bin/agent-sec-daemon"]
+CMD ["serve"]

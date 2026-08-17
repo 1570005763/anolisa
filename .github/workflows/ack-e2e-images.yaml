@@ -1,0 +1,186 @@
+name: Test / ACK E2E images
+
+on:
+  push:
+    branches:
+      - ack-e2e-265b133-20260817
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  PRODUCT_SHA: 265b133b0e54d786ef5b792828f8109d9ea751b9
+  IMAGE_TAG: main-265b133-20260817
+  RUSTUP_DIST_SERVER: https://static.rust-lang.org
+  RUSTUP_UPDATE_ROOT: https://static.rust-lang.org/rustup
+  SEC_CORE_IMAGE: ghcr.io/1570005763/anolisa-sec-core-e2e
+  SKILLFS_IMAGE: ghcr.io/1570005763/anolisa-skillfs-e2e
+
+jobs:
+  build-skillfs:
+    name: Build SkillFS linux/amd64 image
+    runs-on: ubuntu-22.04
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SkillFS
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: src/skillfs
+          file: src/skillfs/container/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.SKILLFS_IMAGE }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            VERSION=${{ env.IMAGE_TAG }}
+            REVISION=${{ env.PRODUCT_SHA }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.PRODUCT_SHA }}
+            org.opencontainers.image.source=https://github.com/alibaba/anolisa
+          cache-from: type=gha,scope=ack-e2e-skillfs-amd64
+          cache-to: type=gha,scope=ack-e2e-skillfs-amd64,mode=max
+
+  build-sec-core-rpm:
+    name: Build agent-sec-core RPM
+    runs-on: ubuntu-22.04
+    container:
+      image: alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          sed -i -e "s/cloud.aliyuncs/aliyun/g" /etc/yum.repos.d/*.repo
+          dnf install -y tar git rpm-build systemd-rpm-macros gcc make clang llvm \
+            openssl-devel libseccomp-devel bubblewrap python3-pip
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.0
+
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          python-version: 3.11.6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build RPMs
+        run: ./scripts/rpm-build.sh agent-sec-core
+
+      - name: Verify RPM payload
+        run: |
+          test -n "$(find scripts/rpmbuild/RPMS -type f -name '*.rpm' -print -quit)"
+          find scripts/rpmbuild/RPMS -type f -name '*.rpm' -print -exec rpm -qip {} \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ack-e2e-sec-core-rpms-${{ env.PRODUCT_SHA }}
+          path: scripts/rpmbuild/RPMS/**/*.rpm
+          retention-days: 7
+          if-no-files-found: error
+
+  build-sec-core-image:
+    name: Build agent-sec-core linux/amd64 image
+    needs: build-sec-core-rpm
+    runs-on: ubuntu-22.04
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ack-e2e-sec-core-rpms-${{ env.PRODUCT_SHA }}
+          path: .ack-e2e/rpms
+
+      - name: Verify downloaded RPMs
+        run: |
+          test -n "$(find .ack-e2e/rpms -type f -name '*.rpm' -print -quit)"
+          find .ack-e2e/rpms -type f -name '*.rpm' -print
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push agent-sec-core
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .ack-e2e
+          file: .ack-e2e/Dockerfile.sec-core
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.SEC_CORE_IMAGE }}:${{ env.IMAGE_TAG }}
+          build-args: |
+            REVISION=${{ env.PRODUCT_SHA }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.PRODUCT_SHA }}
+            org.opencontainers.image.source=https://github.com/alibaba/anolisa
+          cache-from: type=gha,scope=ack-e2e-sec-core-amd64
+          cache-to: type=gha,scope=ack-e2e-sec-core-amd64,mode=max
+
+  verify-anonymous-pull:
+    name: Verify anonymous digest pulls
+    needs:
+      - build-skillfs
+      - build-sec-core-image
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Pull images without registry credentials
+        env:
+          SEC_CORE_DIGEST: ${{ needs.build-sec-core-image.outputs.digest }}
+          SKILLFS_DIGEST: ${{ needs.build-skillfs.outputs.digest }}
+        run: |
+          rm -f "$HOME/.docker/config.json"
+          for image in \
+            "${SKILLFS_IMAGE}@${SKILLFS_DIGEST}" \
+            "${SEC_CORE_IMAGE}@${SEC_CORE_DIGEST}"; do
+            public=false
+            for attempt in $(seq 1 60); do
+              if docker manifest inspect "$image" >/dev/null 2>&1; then
+                public=true
+                break
+              fi
+              echo "Waiting for anonymous package access: attempt ${attempt}/60"
+              sleep 10
+            done
+            test "$public" = true
+          done
+          docker pull "${SKILLFS_IMAGE}@${SKILLFS_DIGEST}"
+          docker pull "${SEC_CORE_IMAGE}@${SEC_CORE_DIGEST}"
+          docker image inspect "${SKILLFS_IMAGE}@${SKILLFS_DIGEST}" \
+            --format '{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
+          docker image inspect "${SEC_CORE_IMAGE}@${SEC_CORE_DIGEST}" \
+            --format '{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
+
+      - name: Record immutable references
+        env:
+          SEC_CORE_DIGEST: ${{ needs.build-sec-core-image.outputs.digest }}
+          SKILLFS_DIGEST: ${{ needs.build-skillfs.outputs.digest }}
+        run: |
+          echo "SkillFS: ${SKILLFS_IMAGE}@${SKILLFS_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo "agent-sec-core: ${SEC_CORE_IMAGE}@${SEC_CORE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
