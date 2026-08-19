@@ -222,11 +222,24 @@ Blaze captures a running sandbox through
 
 Capture requires both the selected backend and the storage provider to
 advertise full-checkpoint support. The built-in file provider captures the
-writable root filesystem, and the built-in mock backend supplies a complete
-development implementation. Firecracker, Bubblewrap, and the other process
-backends do not advertise capture support in this release. An unsupported
-combination returns HTTP 501 before the sandbox is paused or its lifecycle
-record is changed.
+writable root filesystem. Firecracker captures guest memory and device state
+through its own snapshot API, and the built-in mock backend supplies a complete
+development implementation. Bubblewrap and the other process backends do not
+advertise capture support in this release. An unsupported combination returns
+HTTP 501 before the sandbox is paused or its lifecycle record is changed.
+
+A Firecracker checkpoint records the exact version of the running virtual machine
+monitor, because a snapshot can only be loaded back by that same version. Keep
+the recorded version installed for as long as you intend to restore from a
+checkpoint: upgrading the Firecracker binary does not invalidate stored
+checkpoints, but it does mean they can no longer be restored until that version is
+available again.
+
+Because that recorded version is what makes a checkpoint restorable at all, capture
+refuses a Firecracker sandbox whose monitor does not report one, before the sandbox
+is paused. A stored checkpoint without a recorded version therefore cannot be
+produced, and the same shape is rejected if it appears in a manifest that is read
+back.
 
 For a supported running sandbox, Blaze holds the sandbox operation lock,
 validates its current checkpoint parent, pauses the backend, and captures three
@@ -294,9 +307,22 @@ POST /v1/sandboxes/{id}/rollback/{checkpoint_id}
 
 Restore requires a verified full checkpoint, an exact match for the sandbox's
 policy, image, backend, and backend version, plus explicit restore support from
-both the backend adapter and storage provider. The built-in mock adapter and
-file provider implement this contract. Other backend adapters return HTTP 501
-before stopping the current runtime until they implement restore.
+both the backend adapter and storage provider. The Firecracker adapter, the
+built-in mock adapter, and the file provider implement this contract. Other
+backend adapters return HTTP 501 before stopping the current runtime until they
+implement restore.
+
+Restoring a Firecracker sandbox replaces its virtual machine monitor with a new
+process that loads the captured memory and device state, so the process
+identifier changes while the sandbox identifier does not. The replacement is
+started with the same host shape the checkpoint was taken with — its network slot,
+guest transport, and console recording — because the snapshot refers to those
+devices by name. Console output and monitor diagnostics recorded before the
+restore are kept rather than overwritten.
+
+A restore is refused before the running sandbox is stopped whenever the installed
+Firecracker version does not match the one the checkpoint recorded, so a version
+mismatch costs you nothing.
 
 A `checkpoint_id` that is not in canonical form is rejected with HTTP 400, and a
 canonical identifier that names no committed checkpoint is reported as HTTP 404.
