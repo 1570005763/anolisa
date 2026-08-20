@@ -442,6 +442,9 @@ policy = "observe"
 
 Hermes supports `observe` and native `block` only. Existing `warn` / `ask` values map to
 `observe` with a host diagnostic; `enable_block=false` also maps to `observe` for legacy config.
+In Hermes `observe` mode, a non-empty exposure summary is logged at `INFO`, while `deny` and
+`tampered` statuses or a `reasonCode=tampered` activation result are elevated to `WARNING`.
+These log levels do not block the Skill or write content into the assistant response.
 
 **Configuring copilot-shell**: the default Cosh manifest already registers the `skill-ledger` hook. The default policy is `ask`; for observe-only, warning-only, or hard denial, set `SKILL_LEDGER_MODE=observe` / `warn` / `block`. The `debug` value remains an alias for `observe`. This environment variable should be set by a trusted host or deployment environment — not by Skills, project scripts, or untrusted shell startup logic; to prevent policy downgrades via a tampered local shell profile, it should eventually move to a trusted host configuration source.
 
