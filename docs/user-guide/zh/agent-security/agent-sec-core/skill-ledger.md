@@ -415,6 +415,9 @@ policy = "observe"
 
 Hermes 只支持 `observe` 和原生 `block`。已有 `warn` / `ask` 值会降级为 `observe` 并写
 宿主诊断；旧配置中的 `enable_block=false` 同样映射为 `observe`。
+Hermes `observe` 模式下，非空 exposure summary 写 `INFO`；`deny` / `tampered` 状态或
+`reasonCode=tampered` 的激活结果提升为 `WARNING`。这些日志等级不会阻断 Skill，也不会
+向助手回复写入内容。
 
 **copilot-shell 配置方式**：默认 Cosh manifest 已注册 `skill-ledger` hook。默认 policy 为 `ask`；如需 observe-only、warning-only 或强拒绝，可设置 `SKILL_LEDGER_MODE=observe` / `warn` / `block`。`debug` 仍作为 `observe` 的别名。该环境变量应由可信宿主或部署环境设置，不应由 Skill、项目脚本或不可信 shell 启动逻辑设置；如需防止本地 shell profile 被篡改后降级策略，后续应迁移到可信宿主配置源。
 

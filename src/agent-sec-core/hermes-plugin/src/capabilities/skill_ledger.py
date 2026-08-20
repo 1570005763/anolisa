@@ -24,6 +24,8 @@ _DEFAULT_HERMES_SKILLS_DIR = Path("~/.hermes/skills")
 _POLICY_DEBUG = "observe"
 _POLICY_BLOCK = "block"
 _DEFAULT_POLICY = _POLICY_DEBUG
+_WARNING_LOG_STATUSES = frozenset({"deny", "tampered"})
+_WARNING_LOG_REASON_CODES = frozenset({"tampered"})
 _SKIP_DIRS = frozenset({".git", ".github", ".hub", ".archive", ".skill-meta"})
 _UNSUPPORTED_HERMES_NOTICE = "暂不支持Hermes场景，请自行关注skill安全性。"
 _REMOVED_WARNING_CONFIGS = ("max_warnings_per_turn", "max_warning_contexts")
@@ -119,7 +121,21 @@ class SkillLedgerCapability(AgentSecCoreCapability):
         skill_name = str(summary.get("skillName") or skill_dir.name)
         message = f"Skill '{skill_name}': {message}"
         if self._policy == _POLICY_DEBUG:
-            logger.debug("[agent-sec-core] skill-ledger %s", message)
+            latest_status = summary.get("latestStatus")
+            normalized_status = (
+                latest_status.strip().lower() if isinstance(latest_status, str) else ""
+            )
+            reason_code = summary.get("reasonCode")
+            normalized_reason_code = (
+                reason_code.strip().lower() if isinstance(reason_code, str) else ""
+            )
+            log = (
+                logger.warning
+                if normalized_status in _WARNING_LOG_STATUSES
+                or normalized_reason_code in _WARNING_LOG_REASON_CODES
+                else logger.info
+            )
+            log("[agent-sec-core] skill-ledger %s", message)
             return None
 
         logger.warning("[agent-sec-core] skill-ledger %s", message)

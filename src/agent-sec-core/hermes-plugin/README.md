@@ -103,7 +103,9 @@ Observability hook 默认开启。启动 Hermes 前设置
 
 ## 可用 Hook 列表
 
-Hermes 支持的 hook 及其回调签名：
+Hermes 支持的 hook 及其回调签名如下。该表描述 Hermes 框架 API，不代表本插件全部
+注册；本插件的实际 hook 范围以 `src/plugin.yaml` 和各 capability 的
+`get_hooks_define()` 为准。
 
 | Hook | 签名 | 返回值 |
 |------|------|--------|
@@ -138,7 +140,10 @@ Hermes `skill-ledger` capability 当前只覆盖默认本地技能目录。检�
 skill root 时跳过检查、不调用 CLI、不阻断，并通过宿主 logger 记录诊断。
 
 - `enabled = false`：完全不注册 Hermes hook。
-- `policy = "observe"`：默认策略；summary `message` 非空、CLI 失败或 JSON 解析失败都 fail-open，只写日志。旧值 `debug` 仍作为别名兼容。
+- `policy = "observe"`：默认策略；summary `message` 非空时 fail-open，`deny` / `tampered`
+  状态或 `reasonCode=tampered` 写 WARNING，其它情况写 INFO；CLI 失败或 JSON 解析失败仍
+  fail-open 并写 debug 诊断。
+  旧值 `debug` 仍作为别名兼容。
 - `policy = "block"`：summary `message` 非空时直接返回 Hermes block 结果。
 - `policy = "warn"` / `policy = "ask"`：Hermes 没有插件可用的原生 advisory/确认
   通道，两者兼容降级为 `observe`，并在注册时写一次宿主诊断。
