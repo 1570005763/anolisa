@@ -369,7 +369,7 @@ def test_hermes_hooks_do_not_advertise_synthetic_warning_delivery() -> None:
         "pre_llm_call",
         "pre_tool_call",
         "post_tool_call",
-        "transform_llm_output",
+        "post_llm_call",
     ]
     assert skill.hooks == ["pre_tool_call"]
     assert skill.mode == "observe"

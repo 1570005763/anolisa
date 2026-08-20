@@ -1,4 +1,4 @@
-"""PII-scan capability for Hermes input and output lifecycle hooks."""
+"""PII-scan capability for Hermes input and tool lifecycle hooks."""
 
 from __future__ import annotations
 
@@ -22,13 +22,10 @@ _USER_INPUT_SOURCE = "user_input"
 _TOOL_INPUT_SOURCE = "tool_input"
 _TOOL_OUTPUT_SOURCE = "tool_output"
 _MODEL_OUTPUT_SOURCE = "model_output"
-_MODEL_OUTPUT_WITHHELD = (
-    "[pii-checker] 模型输出包含敏感信息且未生成可用脱敏结果，原始回复已停止交付。"
-)
 
 
 class PiiScanCapability(AgentSecCoreCapability):
-    """Scan Hermes input and output boundaries and enforce the configured policy."""
+    """Scan Hermes input and tool boundaries and enforce the configured policy."""
 
     id = "pii-scan-user-input"
     name = "PII Checker"
@@ -71,7 +68,7 @@ class PiiScanCapability(AgentSecCoreCapability):
             "pre_llm_call": self._on_pre_llm_call,
             "pre_tool_call": self._on_pre_tool_call,
             "post_tool_call": self._on_post_tool_call,
-            "transform_llm_output": self._on_transform_llm_output,
+            "post_llm_call": self._on_post_llm_call,
         }
 
     def _on_pre_llm_call(self, messages=None, **kwargs):
@@ -86,6 +83,25 @@ class PiiScanCapability(AgentSecCoreCapability):
         self._scan_and_handle(
             user_text,
             source=_USER_INPUT_SOURCE,
+            can_block=False,
+            security_trace_context=trace_context(kwargs),
+        )
+        return None
+
+    def _on_post_llm_call(
+        self,
+        assistant_response: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        """Audit the finalized model output without changing its delivery."""
+        if not self._hook_enabled:
+            return None
+        text = self._value_to_text(assistant_response)
+        if not text.strip():
+            return None
+        self._scan_and_handle(
+            text,
+            source=_MODEL_OUTPUT_SOURCE,
             can_block=False,
             security_trace_context=trace_context(kwargs),
         )
@@ -135,53 +151,6 @@ class PiiScanCapability(AgentSecCoreCapability):
         )
         return None
 
-    def _on_transform_llm_output(
-        self,
-        response_text: str = "",
-        session_id: str = "",
-        **kwargs,
-    ):
-        """Enforce PII redaction on the final model output."""
-        if not self._hook_enabled:
-            return None
-        if not isinstance(response_text, str) or not response_text.strip():
-            return None
-
-        scan = self._scan_text(
-            response_text,
-            source=_MODEL_OUTPUT_SOURCE,
-            security_trace_context=trace_context({"session_id": session_id, **kwargs}),
-        )
-        if scan is None:
-            return None
-
-        verdict = self._safe_string(scan.get("verdict")) or "pass"
-        findings = self._as_list(scan.get("findings"))
-        if verdict == "pass" or not findings:
-            return None
-        if verdict not in {"warn", "deny"}:
-            logger.warning(
-                f"[agent-sec-core] {self.id} UNKNOWN model output verdict={verdict}, fail-open"
-            )
-            return None
-        if self._policy != "block":
-            logger.info(
-                f"[agent-sec-core] {self.id} {verdict.upper()} model output observed"
-            )
-            return None
-
-        redacted_text = self._safe_string(scan.get("redacted_text"))
-        if redacted_text:
-            logger.warning(
-                f"[agent-sec-core] {self.id} {verdict.upper()} model output redacted"
-            )
-            return redacted_text
-        logger.warning(
-            f"[agent-sec-core] {self.id} {verdict.upper()} model output redaction "
-            "missing redacted_text; dropping raw output"
-        )
-        return _MODEL_OUTPUT_WITHHELD
-
     def _scan_text(
         self,
         text: str,
@@ -195,7 +164,6 @@ class PiiScanCapability(AgentSecCoreCapability):
             "--stdin",
             "--format",
             "json",
-            "--redact-output",
             "--source",
             source,
         ]
