@@ -56,19 +56,21 @@ def _cli_status(
     *,
     exit_code: int = 0,
     message: str | None | object = _DEFAULT_MESSAGE,
+    reason_code: str | None = None,
 ) -> CliResult:
     if message is _DEFAULT_MESSAGE:
         message = None if status == "pass" else f"summary message for status={status}"
     if not isinstance(message, str):
         message = None
+    payload = {
+        "latestStatus": status,
+        "skillName": "test-skill",
+        "message": message,
+    }
+    if reason_code is not None:
+        payload["reasonCode"] = reason_code
     return CliResult(
-        stdout=json.dumps(
-            {
-                "latestStatus": status,
-                "skillName": "test-skill",
-                "message": message,
-            }
-        ),
+        stdout=json.dumps(payload),
         stderr="",
         exit_code=exit_code,
     )
@@ -189,21 +191,42 @@ def test_hook_disabled_short_circuits_before_resolving(mock_cli, monkeypatch, tm
 
 
 class TestSkillLedgerHooks:
-    @pytest.mark.parametrize("status", ["none", "drifted", "warn", "deny", "tampered"])
+    @pytest.mark.parametrize(
+        ("status", "reason_code", "expected_level"),
+        [
+            ("none", "latest_unscanned", "INFO"),
+            ("drifted", "root_drift", "INFO"),
+            ("warn", "normal", "INFO"),
+            ("deny", "latest_risk_pending_decision", "WARNING"),
+            ("tampered", "tampered", "WARNING"),
+            ("pass", "tampered", "WARNING"),
+            ("warn", "tampered", "WARNING"),
+        ],
+    )
     @patch("hermes_plugin_src.capabilities.skill_ledger.call_agent_sec_cli")
-    def test_observe_logs_and_allows_without_user_content(
-        self, mock_cli, status, tmp_path, caplog
+    def test_observe_logs_by_risk_and_allows_without_user_content(
+        self, mock_cli, status, reason_code, expected_level, tmp_path, caplog
     ):
         root = tmp_path / "skills"
         _make_skill(root, "test-skill")
         cap = _make_capability(root, policy="observe")
-        mock_cli.return_value = _cli_status(status)
+        mock_cli.return_value = _cli_status(
+            status,
+            reason_code=reason_code,
+            message=f"summary message for status={status}",
+        )
 
-        with caplog.at_level("DEBUG", logger="agent-sec-core"):
+        with caplog.at_level("INFO", logger="agent-sec-core"):
             result = cap._on_pre_tool_call("skill_view", {"name": "test-skill"})
 
         assert result is None
         assert f"status={status}" in caplog.text
+        matching_records = [
+            record
+            for record in caplog.records
+            if f"status={status}" in record.getMessage()
+        ]
+        assert [record.levelname for record in matching_records] == [expected_level]
         assert "transform_llm_output" not in cap.get_hooks_define()
 
     @pytest.mark.parametrize("status", ["none", "drifted", "warn", "deny", "tampered"])
