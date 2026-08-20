@@ -70,10 +70,11 @@ verdict 和 finding schema；宿主只观察 finding 还是阻断操作，由该
 ## 宿主 Hook Policy
 
 设置 `PII_CHECKER_HOOK_ENABLED=false` 可完全跳过宿主 PII hook。启用后，
-`PII_CHECKER_MODE` 支持 `observe`、`warn`、`ask`、`block`，默认 `observe`。
-当宿主或 hook 事件无法执行确认或阻断时，`ask`/`block` fallback 为 `warn`；后置 hook
-不会声称撤销已经发生的外部副作用。环境变量 policy 优先于 Hermes/OpenClaw capability
-配置。`debug` 映射为 `observe`，`deny` 映射为 `block`。仅 Qwen Code 在未设置
+有原生提示能力的宿主支持 `observe`、`warn`、`ask`、`block`，默认 `observe`。Hermes
+只支持 `observe` / `block`；旧 `warn` / `ask` 会降级为 `observe` 并写宿主诊断，绝不
+把 advisory 注入助手最终回复。其它宿主或 hook 事件无法执行确认/阻断时可 fallback 为
+`warn`；后置 hook 不会声称撤销已经发生的外部副作用。环境变量 policy 优先于
+Hermes/OpenClaw capability 配置。`debug` 映射为 `observe`，`deny` 映射为 `block`。仅 Qwen Code 在未设置
 `PII_CHECKER_HOOK_ENABLED` 时额外兼容旧开关 `PII_CHECKER_ENABLED`。
 
 `PII_CHECKER_HOOK_ENABLED` 和 `PII_CHECKER_MODE` 被全部六个宿主读取。另有两个变量只被部分

@@ -9,4 +9,3 @@ provides_hooks:
   - post_tool_call
   - post_llm_call
   - transform_llm_output
-  - on_session_end

@@ -77,10 +77,12 @@ only observes a finding or blocks an operation depends on that host's configured
 
 Set `PII_CHECKER_HOOK_ENABLED=false` to skip host PII hooks entirely. When enabled,
 `PII_CHECKER_MODE` accepts `observe`, `warn`, `ask`, or `block` and defaults to
-`observe`. `ask` or `block` falls back to `warn` when the host or hook event cannot enforce
-that action; post-execution hooks never claim to undo an external side effect. The environment
-policy overrides Hermes/OpenClaw capability configuration. `debug` maps to `observe`, and
-`deny` maps to `block`. Qwen Code additionally accepts the legacy `PII_CHECKER_ENABLED` switch when
+`observe` on hosts with native notice support. Hermes accepts only `observe` and `block`;
+legacy `warn` / `ask` values fall back to `observe` with a host diagnostic. It never injects
+advisories through the final assistant response. On other hosts, an unsupported `ask` or
+`block` boundary may fall back to `warn`; post-execution hooks never claim to undo an external
+side effect. The environment policy overrides Hermes/OpenClaw capability configuration. `debug`
+maps to `observe`, and `deny` maps to `block`. Qwen Code additionally accepts the legacy `PII_CHECKER_ENABLED` switch when
 `PII_CHECKER_HOOK_ENABLED` is absent.
 
 `PII_CHECKER_HOOK_ENABLED` and `PII_CHECKER_MODE` are read by all six hosts. Two further
