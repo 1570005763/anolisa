@@ -543,14 +543,12 @@ enable_block = false    # false=observe, true=block
 [capabilities.pii-scan-user-input]
 enabled = true
 timeout = 10
-policy = "observe"      # observe (default) | warn | ask | block
+policy = "observe"      # observe (default) | block
 include_low_confidence = false
-warning_ttl_seconds = 300
 
 [capabilities.prompt-scan-user-input]
 enabled = true
 timeout = 15
-warning_ttl_seconds = 300
 
 [capabilities.observability]
 enabled = true
@@ -559,12 +557,14 @@ timeout = 5
 [capabilities.skill-ledger]
 enabled = true
 timeout = 5
-policy = "ask"          # observe | warn | ask (default) | block
+policy = "observe"      # observe (default) | block
 ```
 
 `timeout` is a required key for every Hermes capability. `prompt-scan-user-input`
-is non-blocking by design: it warns through `transform_llm_output` and has no
-`enable_block` or `policy` field. Its `timeout = 15` value is Hermes capability
+is audit-only and does not register `transform_llm_output`; it has no `enable_block`
+or `policy` field. Hermes maps legacy `warn` / `ask` policies for PII Checker and
+Skill Ledger to `observe` with a host diagnostic. PII `transform_llm_output` is
+reserved for redaction enforcement under `block`. The `timeout = 15` value is Hermes capability
 configuration, not `PROMPT_SCANNER_TIMEOUT`; Hermes does not read the prompt
 scanner timeout environment variable.
 

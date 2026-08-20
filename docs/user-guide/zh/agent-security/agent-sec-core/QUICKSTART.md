@@ -523,14 +523,12 @@ enable_block = false    # false=观察模式, true=阻断
 [capabilities.pii-scan-user-input]
 enabled = true
 timeout = 10
-policy = "observe"      # observe（默认）| warn | ask | block
+policy = "observe"      # observe（默认）| block
 include_low_confidence = false
-warning_ttl_seconds = 300
 
 [capabilities.prompt-scan-user-input]
 enabled = true
 timeout = 15
-warning_ttl_seconds = 300
 
 [capabilities.observability]
 enabled = true
@@ -539,11 +537,13 @@ timeout = 5
 [capabilities.skill-ledger]
 enabled = true
 timeout = 5
-policy = "ask"          # observe | warn | ask（默认）| block
+policy = "observe"      # observe（默认）| block
 ```
 
 `timeout` 是 Hermes 每个 capability 的必填项。`prompt-scan-user-input` 本身是非阻断
-设计：它通过 `transform_llm_output` 告警，没有 `enable_block` 或 `policy` 字段。
+的 audit-only 能力，不注册 `transform_llm_output`，也没有 `enable_block` 或 `policy`
+字段。PII Checker 和 Skill Ledger 的旧 `warn` / `ask` policy 会降级为 `observe` 并写
+宿主诊断；PII 的 `transform_llm_output` 只在 `block` 下用于脱敏 enforcement。
 这里的 `timeout = 15` 是 Hermes capability 配置，不是 `PROMPT_SCANNER_TIMEOUT`；
 Hermes 不读取 prompt scanner timeout 环境变量。
 

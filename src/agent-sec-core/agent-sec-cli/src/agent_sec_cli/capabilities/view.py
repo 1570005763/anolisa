@@ -134,6 +134,7 @@ def _prompt_scan_mode() -> EnvSpec:
 
 _CODE_MODES_INTERACTIVE = {"observe", "ask", "block"}
 _CODE_MODES_BLOCK_ONLY = {"observe", "block"}
+_HERMES_NATIVE_MODES = {"observe", "block"}
 _PROMPT_MODES = {"observe", "deny"}
 
 _QODER_HOOKS = {
@@ -226,15 +227,14 @@ _OPENCLAW_HOOKS = {
 
 _HERMES_HOOKS = {
     "code-scan": ("pre_tool_call",),
-    "prompt-scan": ("pre_llm_call", "transform_llm_output", "on_session_end"),
+    "prompt-scan": ("pre_llm_call",),
     "pii-check": (
         "pre_llm_call",
         "pre_tool_call",
         "post_tool_call",
         "transform_llm_output",
-        "on_session_end",
     ),
-    "skill-ledger": ("pre_tool_call", "transform_llm_output"),
+    "skill-ledger": ("pre_tool_call",),
     "observability": (
         "pre_llm_call",
         "pre_api_request",
@@ -316,6 +316,20 @@ AGENT_SPECS: dict[str, dict[str, CapabilitySpec]] = {
         include_prompt_mode=False,
     ),
 }
+AGENT_SPECS["hermes"]["pii-check"] = CapabilitySpec(
+    _HERMES_HOOKS["pii-check"],
+    (
+        _hook_enabled("PII_CHECKER_HOOK_ENABLED"),
+        _mode("PII_CHECKER_MODE", "observe", _HERMES_NATIVE_MODES),
+    ),
+)
+AGENT_SPECS["hermes"]["skill-ledger"] = CapabilitySpec(
+    _HERMES_HOOKS["skill-ledger"],
+    (
+        _hook_enabled("SKILL_LEDGER_HOOK_ENABLED"),
+        _mode("SKILL_LEDGER_MODE", "observe", _HERMES_NATIVE_MODES),
+    ),
+)
 AGENT_SPECS["qoder"]["pii-check"] = CapabilitySpec(
     _QODER_HOOKS["pii-check"],
     (
