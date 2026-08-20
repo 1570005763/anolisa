@@ -359,6 +359,37 @@ def test_static_timeout_defaults_match_runtime_constants() -> None:
     assert _single_record("hermes", "prompt-scan").timeout == "15"
 
 
+def test_hermes_hooks_do_not_advertise_synthetic_warning_delivery() -> None:
+    prompt = _single_record("hermes", "prompt-scan")
+    pii = _single_record("hermes", "pii-check")
+    skill = _single_record("hermes", "skill-ledger")
+
+    assert prompt.hooks == ["pre_llm_call"]
+    assert pii.hooks == [
+        "pre_llm_call",
+        "pre_tool_call",
+        "post_tool_call",
+        "transform_llm_output",
+    ]
+    assert skill.hooks == ["pre_tool_call"]
+    assert skill.mode == "observe"
+
+
+@pytest.mark.parametrize("capability", ["pii-check", "skill-ledger"])
+@pytest.mark.parametrize("mode", ["warn", "ask"])
+def test_hermes_unsupported_advisory_modes_fall_back_to_observe(
+    capability: str,
+    mode: str,
+) -> None:
+    env_name = "PII_CHECKER_MODE" if capability == "pii-check" else "SKILL_LEDGER_MODE"
+
+    record = _single_record("hermes", capability, {env_name: mode})
+
+    assert record.mode == "observe"
+    assert record.env[env_name]["effective"] == "observe"
+    assert any(env_name in diagnostic for diagnostic in record.diagnostics)
+
+
 def test_pii_include_low_confidence_is_only_exposed_for_supported_hooks() -> None:
     env = {"PII_CHECKER_INCLUDE_LOW_CONFIDENCE": "true"}
     qoder = _single_record("qoder", "pii-check", env)
