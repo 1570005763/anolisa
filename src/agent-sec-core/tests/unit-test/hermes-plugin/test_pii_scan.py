@@ -32,12 +32,8 @@ def _make_capability(*, include_low_confidence: bool = False) -> PiiScanCapabili
 def _scan_result(
     verdict: str,
     findings: list[dict] | None = None,
-    *,
-    redacted_text: str | None = None,
 ) -> CliResult:
     payload: dict = {"verdict": verdict, "findings": findings or []}
-    if redacted_text is not None:
-        payload["redacted_text"] = redacted_text
     return CliResult(stdout=json.dumps(payload), stderr="", exit_code=0)
 
 
@@ -57,12 +53,12 @@ def capability() -> PiiScanCapability:
 
 
 class TestPiiScanCapability:
-    def test_registers_enforcement_hooks_without_session_cleanup(self, capability):
+    def test_registers_lifecycle_hooks_without_output_transform(self, capability):
         assert list(capability.get_hooks_define()) == [
             "pre_llm_call",
             "pre_tool_call",
             "post_tool_call",
-            "transform_llm_output",
+            "post_llm_call",
         ]
 
     @pytest.mark.parametrize("policy", ["warn", "ask", "invalid"])
@@ -117,17 +113,6 @@ class TestPiiScanCapability:
         cap._on_register({})
 
         assert cap._on_pre_llm_call(user_message="password=secret") is None
-        mock_cli.assert_not_called()
-
-    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
-    def test_disabled_transform_returns_none_without_scanning(
-        self, mock_cli, capability
-    ):
-        capability._hook_enabled = False
-
-        result = capability._on_transform_llm_output("alice@example.com")
-
-        assert result is None
         mock_cli.assert_not_called()
 
     @pytest.mark.parametrize("verdict", ["warn", "deny"])
@@ -252,63 +237,29 @@ class TestPiiScanCapability:
         assert result is None
 
     @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
-    def test_observe_model_output_never_mutates_response(self, mock_cli, capability):
-        mock_cli.return_value = _scan_result(
-            "warn",
-            [_GENERAL_FINDING],
-            redacted_text="Contact a***@example.com",
-        )
+    def test_model_output_findings_are_audit_only(
+        self, mock_cli, capability, monkeypatch
+    ):
+        _register_policy(capability, monkeypatch, "block")
+        mock_cli.return_value = _scan_result("deny", [_HIGH_FINDING])
 
-        result = capability._on_transform_llm_output("Contact alice@example.com")
+        result = capability._on_post_llm_call(
+            assistant_response="API_KEY=sk-abcdefghijklmnop1234",
+            session_id="session-1",
+        )
 
         assert result is None
-        mock_cli.assert_called_once()
+        assert "model_output" in mock_cli.call_args.args[0]
+        assert mock_cli.call_args.kwargs["stdin"] == "API_KEY=sk-abcdefghijklmnop1234"
+        assert mock_cli.call_args.kwargs["trace_context"] == {
+            "agent_name": "hermes",
+            "session_id": "session-1",
+        }
 
     @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
-    def test_block_model_output_returns_only_redacted_text(
-        self, mock_cli, capability, monkeypatch
-    ):
-        _register_policy(capability, monkeypatch, "block")
-        mock_cli.return_value = _scan_result(
-            "warn",
-            [_GENERAL_FINDING],
-            redacted_text="Contact a***@example.com",
-        )
-
-        result = capability._on_transform_llm_output("Contact alice@example.com")
-
-        assert result == "Contact a***@example.com"
-        assert "[pii-checker]" not in result
-        assert "alice@example.com" not in result
-
-    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
-    def test_block_model_output_without_redaction_returns_safe_replacement(
-        self, mock_cli, capability, monkeypatch
-    ):
-        _register_policy(capability, monkeypatch, "block")
-        mock_cli.return_value = _scan_result("deny", [_HIGH_FINDING], redacted_text="")
-
-        result = capability._on_transform_llm_output("API key: raw-secret")
-
-        assert result == (
-            "[pii-checker] 模型输出包含敏感信息且未生成可用脱敏结果，"
-            "原始回复已停止交付。"
-        )
-        assert "raw-secret" not in result
-
-    @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
-    def test_model_output_scan_does_not_require_session_key(
-        self, mock_cli, capability, monkeypatch
-    ):
-        _register_policy(capability, monkeypatch, "block")
-        mock_cli.return_value = _scan_result(
-            "warn",
-            [_GENERAL_FINDING],
-            redacted_text="redacted",
-        )
-
-        assert capability._on_transform_llm_output("raw") == "redacted"
-        assert mock_cli.call_args.kwargs["trace_context"] == {"agent_name": "hermes"}
+    def test_empty_model_output_skips_scan(self, mock_cli, capability):
+        assert capability._on_post_llm_call(assistant_response="  ") is None
+        mock_cli.assert_not_called()
 
     @pytest.mark.parametrize(
         "cli_result",
@@ -322,7 +273,7 @@ class TestPiiScanCapability:
     def test_cli_failures_fail_open(self, mock_cli, cli_result, capability):
         mock_cli.return_value = cli_result
 
-        assert capability._on_transform_llm_output("assistant response") is None
+        assert capability._on_pre_llm_call(user_message="hello") is None
 
     @pytest.mark.parametrize("verdict", ["error", "unknown"])
     @patch("hermes_plugin_src.capabilities.pii_scan.call_agent_sec_cli")
@@ -332,4 +283,4 @@ class TestPiiScanCapability:
         _register_policy(capability, monkeypatch, "block")
         mock_cli.return_value = _scan_result(verdict, [_GENERAL_FINDING])
 
-        assert capability._on_transform_llm_output("assistant response") is None
+        assert capability._on_pre_llm_call(user_message="hello") is None

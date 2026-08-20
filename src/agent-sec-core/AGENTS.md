@@ -314,7 +314,9 @@ hermes-plugin 是面向 [Hermes Agent](https://hermes-agent.nousresearch.com/) �
 
 - **Fail-open** — 任何异常都不阻塞 agent 运行，hook 内部捕获所有异常返回 `None` 放行
 - **零运行时依赖** — 仅使用 Python 3.11 标准库（tomllib、json、subprocess、logging、dataclasses）
-- **可配置行为** — 默认 observe（仅日志），需显式 `enable_block = true` 才阻断
+- **可配置行为** — 默认 observe（仅日志）。Code Scanner 使用
+  `enable_block = true` 启用阻断；PII Checker 和 Skill Ledger 使用
+  `policy = "block"` 在 Hermes 原生支持的 hook 边界阻断
 
 **目录结构：**
 
@@ -401,7 +403,8 @@ class MyCapability(AgentSecCoreCapability):
 | `pre_tool_call` | 工具执行前 | `(tool_name, args, **kwargs)` | 返回 `{"action": "block", "message": str}` |
 | `post_tool_call` | 工具执行后 | `(tool_name, result, **kwargs)` | 无阻断 |
 | `pre_llm_call` | LLM 调用前 | `(messages, **kwargs)` | 注入 context |
-| `transform_llm_output` | 最终回复交付前 | `(response_text, session_id, **kwargs)` | 替换最终回复 |
+| `post_llm_call` | LLM turn 完成后 | `(assistant_response, **kwargs)` | 无阻断 |
+| `transform_llm_output` | 响应完成后的输出变换（本插件不注册） | `(response_text, session_id, **kwargs)` | 替换 hook 返回值 |
 
 ### 6. 配置（config.toml）
 
@@ -423,10 +426,9 @@ policy = "observe"
 - `code-scan.enable_block = true` → 检测到 deny/warn 时阻断工具调用
 - Hermes 原生 policy 仅支持 `observe`、`block`；旧 `warn`、`ask` 配置降级为
   `observe` 并写宿主诊断
-- PII scanner 覆盖本轮用户输入、tool 参数/结果和最终模型回复；不扫描 history、memory
-  或 RAG context
+- PII scanner 覆盖本轮用户输入、tool 参数/结果和最终模型回复；模型回复只在
+  `post_llm_call` 审计，不修改或阻断；不扫描 history、memory 或 RAG context
 - `block + deny` 在 `pre_tool_call` 返回原生 block；其它不可阻断边界仅审计
-- `transform_llm_output` 只用于最终模型回复的 PII 脱敏或停止原文交付，不注入告警
 
 ### 7. 测试
 

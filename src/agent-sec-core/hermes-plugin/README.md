@@ -211,17 +211,15 @@ CLI 调用方式和 `openclaw-plugin` 保持一致：helper 将一条 JSON paylo
 默认 `policy = "observe"`，只扫描和审计，不修改用户回复。
 Hermes 没有插件可用的原生 advisory/确认协议，因此 `warn` / `ask` 降级为
 `observe` 并写宿主诊断。`block + deny` 在 `pre_tool_call` 返回原生 block；
-`pre_llm_call` / `post_tool_call` 等不可阻断边界只审计。model output 在 `block`
-策略下保留脱敏 enforcement。环境变量 policy 优先于
-capability 配置；对应环境变量为 `PII_CHECKER_MODE`。
+`pre_llm_call` / `post_tool_call` / `post_llm_call` 等不可阻断边界只审计。模型输出通过
+`post_llm_call` 扫描并记录安全事件和宿主日志；Hermes 没有插件可用的 pre-stream
+model-output gate，因此不会修改或阻断模型输出。环境变量 policy 优先于 capability 配置；
+对应环境变量为 `PII_CHECKER_MODE`。
 
-- 挂在 `pre_llm_call`、`pre_tool_call`、`post_tool_call`、`transform_llm_output`
+- 挂在 `pre_llm_call`、`pre_tool_call`、`post_tool_call`、`post_llm_call`
 - 扫描本轮用户输入、tool 参数、tool 返回结果和最终模型回复；不扫描 history、memory 或 RAG context
-- 调用 `agent-sec-cli scan-pii --stdin --format json --redact-output --source <source>`，敏感原文仅通过 stdin 传入子进程
-- tool 参数的 `block + deny` 在执行前阻断；scanner `warn` 和 tool 结果只审计
-- `transform_llm_output` 仅在 `block` 策略下修改最终回复：有 `redacted_text` 时只返回
-  脱敏文本，缺少脱敏结果时返回固定安全替代文本并停止交付原文
-- 未发生实际变换时返回 `None`，不抢占 Hermes 的 first-wins transform 链
+- 调用 `agent-sec-cli scan-pii --stdin --format json --source <source>`，敏感原文仅通过 stdin 传入子进程
+- tool 参数的 `block + deny` 在执行前阻断；scanner `warn`、tool 结果和模型输出只审计
 - 所有异常、超时、非 JSON 输出、未知 verdict 都 fail-open
 
 ### prompt-scan-user-input

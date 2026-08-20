@@ -123,7 +123,9 @@ class TestPromptScanCapability:
         }
 
     @patch("hermes_plugin_src.capabilities.prompt_scan.call_agent_sec_cli")
-    def test_prompt_is_piped_via_stdin(self, mock_cli, capability):
+    def test_prompt_is_piped_via_stdin(self, mock_cli, monkeypatch):
+        monkeypatch.delenv("PROMPT_SCANNER_SCAN_MODE", raising=False)
+        capability = _make_capability()
         mock_cli.return_value = _scan_result("pass")
 
         capability._on_pre_llm_call(user_message="hello")
@@ -139,6 +141,28 @@ class TestPromptScanCapability:
             "user_input",
         ]
         assert mock_cli.call_args.kwargs["stdin"] == "hello"
+
+    @pytest.mark.parametrize(
+        ("raw_mode", "expected_mode"),
+        [
+            ("fast", "fast"),
+            ("strict", "strict"),
+            ("FAST", "fast"),
+            ("invalid", "standard"),
+        ],
+    )
+    @patch("hermes_plugin_src.capabilities.prompt_scan.call_agent_sec_cli")
+    def test_runtime_scan_mode_normalization(
+        self, mock_cli, monkeypatch, raw_mode, expected_mode
+    ):
+        monkeypatch.setenv("PROMPT_SCANNER_SCAN_MODE", raw_mode)
+        cap = _make_capability()
+        mock_cli.return_value = _scan_result("pass")
+
+        cap._on_pre_llm_call(user_message="hello")
+
+        cli_args = mock_cli.call_args.args[0]
+        assert cli_args[cli_args.index("--mode") + 1] == expected_mode
 
     @patch("hermes_plugin_src.capabilities.prompt_scan.call_agent_sec_cli")
     def test_extracts_last_user_message(self, mock_cli, capability):
