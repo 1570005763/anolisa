@@ -232,7 +232,7 @@ _HERMES_HOOKS = {
         "pre_llm_call",
         "pre_tool_call",
         "post_tool_call",
-        "transform_llm_output",
+        "post_llm_call",
     ),
     "skill-ledger": ("pre_tool_call",),
     "observability": (

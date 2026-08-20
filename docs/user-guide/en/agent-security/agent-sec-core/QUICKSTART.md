@@ -563,10 +563,12 @@ policy = "observe"      # observe (default) | block
 `timeout` is a required key for every Hermes capability. `prompt-scan-user-input`
 is audit-only and does not register `transform_llm_output`; it has no `enable_block`
 or `policy` field. Hermes maps legacy `warn` / `ask` policies for PII Checker and
-Skill Ledger to `observe` with a host diagnostic. PII `transform_llm_output` is
-reserved for redaction enforcement under `block`. The `timeout = 15` value is Hermes capability
-configuration, not `PROMPT_SCANNER_TIMEOUT`; Hermes does not read the prompt
-scanner timeout environment variable.
+Skill Ledger to `observe` with a host diagnostic. Hermes does not register a PII
+model-output transform; it audits model output at `post_llm_call`, while `block` applies only at
+the native `pre_tool_call` boundary.
+The `timeout = 15` value is Hermes capability configuration, not
+`PROMPT_SCANNER_TIMEOUT`; Hermes does not read the prompt scanner timeout environment
+variable.
 
 ### Qwen Code
 

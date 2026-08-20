@@ -543,9 +543,10 @@ policy = "observe"      # observe（默认）| block
 `timeout` 是 Hermes 每个 capability 的必填项。`prompt-scan-user-input` 本身是非阻断
 的 audit-only 能力，不注册 `transform_llm_output`，也没有 `enable_block` 或 `policy`
 字段。PII Checker 和 Skill Ledger 的旧 `warn` / `ask` policy 会降级为 `observe` 并写
-宿主诊断；PII 的 `transform_llm_output` 只在 `block` 下用于脱敏 enforcement。
-这里的 `timeout = 15` 是 Hermes capability 配置，不是 `PROMPT_SCANNER_TIMEOUT`；
-Hermes 不读取 prompt scanner timeout 环境变量。
+宿主诊断。Hermes 不注册 PII model-output transform；`block` 只在原生
+`pre_tool_call` 边界生效，模型输出则在 `post_llm_call` 执行 audit-only 扫描。这里的
+`timeout = 15` 是 Hermes capability 配置，不是
+`PROMPT_SCANNER_TIMEOUT`；Hermes 不读取 prompt scanner timeout 环境变量。
 
 ### Qwen Code
 

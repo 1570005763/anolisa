@@ -11,14 +11,15 @@ from .base import AgentSecCoreCapability
 
 logger = logging.getLogger("agent-sec-core")
 
-_RAW_SCAN_MODE = os.environ.get("PROMPT_SCANNER_SCAN_MODE", "standard").strip().lower()
-_SCAN_MODE = _RAW_SCAN_MODE
-if _SCAN_MODE not in {"fast", "standard", "strict"}:
-    _SCAN_MODE = "standard"
-logger.info(
-    "Prompt scanner scan mode: raw=%r, effective=%r", _RAW_SCAN_MODE, _SCAN_MODE
-)
+_VALID_SCAN_MODES = {"fast", "standard", "strict"}
 _USER_INPUT_SOURCE = "user_input"
+
+
+def _normalize_scan_mode(raw_mode: str | None) -> str:
+    scan_mode = (raw_mode or "standard").strip().lower()
+    if scan_mode not in _VALID_SCAN_MODES:
+        return "standard"
+    return scan_mode
 
 
 class PromptScanCapability(AgentSecCoreCapability):
@@ -34,6 +35,13 @@ class PromptScanCapability(AgentSecCoreCapability):
     def __init__(self) -> None:
         super().__init__()
         self._hook_enabled: bool = True
+        raw_scan_mode = os.environ.get("PROMPT_SCANNER_SCAN_MODE")
+        self._scan_mode = _normalize_scan_mode(raw_scan_mode)
+        logger.info(
+            "Prompt scanner scan mode: raw=%r, effective=%r",
+            raw_scan_mode,
+            self._scan_mode,
+        )
 
     def _on_register(self, config: dict[str, Any]) -> None:
         """Read prompt-scan specific config."""
@@ -111,7 +119,7 @@ class PromptScanCapability(AgentSecCoreCapability):
         args = [
             "scan-prompt",
             "--mode",
-            _SCAN_MODE,
+            self._scan_mode,
             "--format",
             "json",
             "--source",

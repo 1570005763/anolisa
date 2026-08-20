@@ -776,8 +776,9 @@ openclaw gateway restart
 
 Hermes 默认使用 `observe`，PII/凭据风险只进入 agent-sec-core 安全事件和宿主日志，
 不会通过最终回复合成 UI 告警。设置 `PII_CHECKER_MODE=block` 后，deny 级 tool 参数可在
-`pre_tool_call` 使用 Hermes 原生 block；最终模型回复命中 PII 时只交付脱敏文本。用户输入
-和 tool 结果等不可阻断边界仍只审计。
+`pre_tool_call` 使用 Hermes 原生 block；用户输入和 tool 结果等不可阻断边界仍只审计。
+模型输出通过 `post_llm_call` 执行 audit-only 扫描；Hermes 没有插件可用的 pre-stream
+output gate，因此该适配层不会修改或阻断模型输出。
 
 ### 5\. 系统安全基线
 
