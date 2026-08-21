@@ -97,7 +97,8 @@ destruction uses `DELETE /v1/sandboxes/{id}`. Checkpoint capture and history
 use
 `POST /v1/sandboxes/{id}/checkpoint` and
 `GET /v1/sandboxes/{id}/checkpoints`. Restore uses
-`POST /v1/sandboxes/{id}/rollback/{checkpoint_id}`.
+`POST /v1/sandboxes/{id}/rollback/{checkpoint_id}`. Hibernation uses
+`POST /v1/sandboxes/{id}/hibernate` and `POST /v1/sandboxes/{id}/resume`.
 
 ## Host Integration Boundary
 
@@ -242,12 +243,15 @@ produced, and the same shape is rejected if it appears in a manifest that is rea
 back.
 
 For a supported running sandbox, Blaze holds the sandbox operation lock,
-validates its current checkpoint parent, pauses the backend, and captures three
-self-contained files: `vmstate.snap`, `memory.snap`, and `rootfs.snap`. It
-synchronizes and hashes those files, publishes the manifest, atomically updates
-the sandbox checkpoint HEAD, and resumes the backend. Guest operations and
-other lifecycle changes wait for the same operation lock while capture is in
-progress.
+validates its current checkpoint parent, quiesces the backend, and captures
+the payload as two producer-owned subtrees: the backend adapter writes its
+own layout under `backend/` (a VM backend saves its VM state and guest
+memory there), and the storage provider captures the writable root
+filesystem as `storage/rootfs.snap`. Blaze inventories every captured file,
+synchronizes and hashes it, publishes the manifest, atomically updates the
+sandbox checkpoint HEAD, and returns the workload to execution. Guest
+operations and other lifecycle changes wait for the same operation lock while
+capture is in progress.
 
 A successful response contains the complete published manifest. The existing
 `checkpoint_id` and `instance_id` fields identify the same checkpoint and
@@ -257,7 +261,7 @@ sandbox as `id` and `sandbox_id`:
 {
   "checkpoint_id": "ckpt-11111111-1111-4111-8111-111111111111",
   "instance_id": "22222222-2222-4222-8222-222222222222",
-  "format_version": 1,
+  "format_version": 2,
   "id": "ckpt-11111111-1111-4111-8111-111111111111",
   "parent": null,
   "sandbox_id": "22222222-2222-4222-8222-222222222222",
@@ -269,23 +273,30 @@ sandbox as `id` and `sandbox_id`:
   "snapshot_kind": "full",
   "artifacts": [
     {
-      "name": "vmstate.snap",
-      "size_bytes": 4096,
-      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    {
-      "name": "memory.snap",
+      "name": "backend/memory.snap",
       "size_bytes": 8192,
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
     {
-      "name": "rootfs.snap",
+      "name": "backend/vmstate.snap",
+      "size_bytes": 4096,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "storage/rootfs.snap",
       "size_bytes": 8589934592,
       "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   ]
 }
 ```
+
+The `artifacts` inventory lists every captured file under its slash-separated
+path relative to the checkpoint, sorted lexicographically. Its exact contents
+belong to the backend that produced the checkpoint: the example above shows
+the built-in mock backend, while a container-shaped backend may record a whole
+image directory. Checkpoints written before this format (`format_version: 1`)
+remain restorable, but new captures always publish version 2.
 
 Use `GET /v1/sandboxes/{id}/checkpoints` to list committed history. Each list
 entry contains `id`, `parent`, `created_at`, total logical `size_bytes`,
@@ -342,6 +353,62 @@ destruction can finish cleanup. Restore moves checkpoint HEAD but does not
 rewrite `last_checkpoint` or capture history.
 
 Checkpoint deletion and pruning are not provided by this API.
+
+## Hibernation and Resume
+
+Hibernation exists to free the host resources a running sandbox holds — the
+backend process and its memory — during a period when the sandbox is not needed,
+without discarding guest-visible state. Unlike destroy, the sandbox keeps its
+identity and storage; unlike checkpoint capture, the live backend does not keep
+running afterwards.
+
+```http
+POST /v1/sandboxes/{id}/hibernate
+POST /v1/sandboxes/{id}/resume
+```
+
+Hibernation requires a running sandbox whose backend supports full snapshot
+capture, and whose configured adapter can restore the same backend version.
+Blaze verifies this before it changes the lifecycle journal, so an unsupported
+combination returns HTTP 501 with the sandbox still running. Requests against a
+sandbox that is not in the expected state return HTTP 409. Bringing the workload
+to a consistent stop is delegated to the backend's quiesce-for-capture hook,
+whose default pauses the backend; a self-freezing backend overrides that hook
+and does not need separate pause support.
+
+A successful hibernate records intent, quiesces the backend for capture, writes
+the backend payload and guest memory into a private staging directory, flushes
+the retained storage slot, records each artifact's size and SHA-256 digest in a
+manifest, synchronizes the complete image, and only then publishes it and
+commits `Hibernated`. The published image is resolved through the retained
+sandbox directory descriptor, so a replaced or symlinked instance directory
+cannot redirect it.
+
+Resume verifies the manifest identity, the exact file set, and every artifact
+digest before it starts a replacement backend. Blaze takes ownership of that
+backend before waiting for optional guest readiness and commits `Running` only
+after a final liveness check. Corrupted or incomplete artifacts are refused
+before any backend starts.
+
+Failure handling follows the same "before the stop" boundary the restore
+endpoint uses. A failure before Blaze begins stopping the backend resumes the
+original runtime and leaves the sandbox `Running`, with one durability
+exception: if persisting the hibernating intent crosses an uncertain boundary
+(the state rename succeeds but its directory sync fails) or staging the image
+fails after that point, the durable record may no longer agree with the live
+runtime, so the sandbox is retained as `RecoveryRequired` for explicit
+handling rather than reported as `Running`. A resume failure whose cleanup can
+be confirmed returns the sandbox to `Hibernated` so the request can be retried;
+when cleanup cannot be confirmed, the replacement owner and the operation
+journal are retained through `RecoveryRequired` for explicit destroy.
+
+Two durability properties are worth planning for. The storage slot stays
+allocated for the whole hibernated period, and a successful resume keeps the
+most recent hibernation image until the next hibernate replaces it or destroy
+removes it — this trades disk space for a repeatable resume. After a daemon
+restart, a completed hibernation is retained so it can still be resumed, but an
+interrupted hibernate or resume is not completed automatically; it is retained
+as `RecoveryRequired` and waits for explicit destroy.
 
 ## Storage Artifact Synchronization
 

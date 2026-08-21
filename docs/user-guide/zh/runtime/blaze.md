@@ -81,7 +81,8 @@ Blaze 通过 `/v1/sandboxes` 提供沙箱生命周期和客户机操作。客户
 文件。销毁沙箱使用 `DELETE /v1/sandboxes/{id}`。检查点捕获与历史查询分别使用
 `POST /v1/sandboxes/{id}/checkpoint` 和
 `GET /v1/sandboxes/{id}/checkpoints`；恢复使用
-`POST /v1/sandboxes/{id}/rollback/{checkpoint_id}`。
+`POST /v1/sandboxes/{id}/rollback/{checkpoint_id}`；休眠与恢复运行使用
+`POST /v1/sandboxes/{id}/hibernate` 和 `POST /v1/sandboxes/{id}/resume`。
 
 ## 主机集成边界
 
@@ -202,10 +203,12 @@ Firecracker 可执行文件不会让已有检查点失效，但在该版本重�
 同样的形态也会被拒绝。
 
 对于受支持且正在运行的 sandbox，Blaze 会持有该 sandbox 的操作锁，验证当前
-检查点的父项，暂停后端，并捕获三个自包含文件：`vmstate.snap`、`memory.snap`
-和 `rootfs.snap`。随后会同步文件、计算摘要、发布清单、原子更新该 sandbox 的
-检查点 HEAD，再恢复后端。捕获期间，对虚拟机内部执行的命令和文件操作，以及
-其他生命周期变更都会等待同一把操作锁。
+检查点的父项，让后端进入静止状态，并以两棵由生产者各自持有的子树捕获载荷：
+后端适配器在 `backend/` 下写入自己的私有布局（VM 后端在其中保存 VM 状态与
+客户机内存），存储提供程序把可写根文件系统捕获为 `storage/rootfs.snap`。
+随后 Blaze 清点每个捕获文件、同步并计算摘要、发布清单、原子更新该 sandbox 的
+检查点 HEAD，再让工作负载恢复执行。捕获期间，对虚拟机内部执行的命令和文件
+操作，以及其他生命周期变更都会等待同一把操作锁。
 
 成功响应包含已发布的完整清单。现有 `checkpoint_id` 和 `instance_id` 字段与
 `id` 和 `sandbox_id` 分别指向同一个检查点和 sandbox：
@@ -214,7 +217,7 @@ Firecracker 可执行文件不会让已有检查点失效，但在该版本重�
 {
   "checkpoint_id": "ckpt-11111111-1111-4111-8111-111111111111",
   "instance_id": "22222222-2222-4222-8222-222222222222",
-  "format_version": 1,
+  "format_version": 2,
   "id": "ckpt-11111111-1111-4111-8111-111111111111",
   "parent": null,
   "sandbox_id": "22222222-2222-4222-8222-222222222222",
@@ -226,23 +229,28 @@ Firecracker 可执行文件不会让已有检查点失效，但在该版本重�
   "snapshot_kind": "full",
   "artifacts": [
     {
-      "name": "vmstate.snap",
-      "size_bytes": 4096,
-      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    {
-      "name": "memory.snap",
+      "name": "backend/memory.snap",
       "size_bytes": 8192,
       "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     },
     {
-      "name": "rootfs.snap",
+      "name": "backend/vmstate.snap",
+      "size_bytes": 4096,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "storage/rootfs.snap",
       "size_bytes": 8589934592,
       "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
   ]
 }
 ```
+
+`artifacts` 清单按字典序列出每个捕获文件相对检查点目录的斜杠分隔路径。清单的
+具体内容由产生该检查点的后端决定：上例为内置 mock 后端，容器形态的后端可能记录
+整棵镜像目录。此前格式（`format_version: 1`）的检查点仍可恢复，但新捕获一律
+发布版本 2。
 
 可以通过 `GET /v1/sandboxes/{id}/checkpoints` 查询已提交的历史。每个列表项
 包含 `id`、`parent`、`created_at`、总逻辑大小 `size_bytes`、`is_head` 和
@@ -286,6 +294,50 @@ sandbox 完全一致；后端适配器和存储提供程序还必须明确声明
 清理。恢复会移动检查点 HEAD，但不会改写 `last_checkpoint` 或捕获历史。
 
 该接口不提供检查点删除或清理能力。
+
+## 休眠与恢复运行
+
+休眠解决的问题是：一个沙箱暂时不需要使用时，希望把它占用的宿主资源——后端
+进程及其内存——先释放出来，但又不能丢掉客户机里已有的状态。它与销毁的区别是
+沙箱的身份和存储都保留下来；与检查点捕获的区别是捕获之后后端继续运行，而休眠
+之后后端会被停止。
+
+```http
+POST /v1/sandboxes/{id}/hibernate
+POST /v1/sandboxes/{id}/resume
+```
+
+休眠要求沙箱处于运行中，其后端支持完整快照捕获，并且配置的适配器能够恢复
+相同的后端版本。Blaze 会在改动生命周期记录之前完成这些兼容性检查，因此遇到
+不支持的组合会返回 HTTP 501，沙箱仍照常运行。对状态不符合预期的沙箱发起
+请求会返回 HTTP 409。把工作负载带到一致停止点的方式，交给后端的“捕获前
+静止（quiesce）”钩子：其默认行为是暂停后端，而自冻结后端会覆盖该钩子，
+因而无需单独支持暂停。
+
+一次成功的休眠依次完成：记录操作意图、为捕获而静止后端、把后端载荷和客户机
+内存写入私有暂存目录、刷新保留下来的存储空间、在清单中记录每个文件的大小与
+SHA-256 摘要、把整份镜像同步落盘，最后才发布镜像并提交 `Hibernated` 状态。
+发布后的镜像通过保留的沙箱目录描述符定位，因此即使实例目录被替换或被改成
+符号链接，也无法把它指向别处。
+
+恢复运行会先校验清单记录的身份、文件集合是否完全一致以及每个文件的摘要，确认
+无误后才启动替代后端。Blaze 先取得该后端的归属，再等待可选的客户机通信就绪，
+只有最后一次存活检查也通过，才提交 `Running`。文件损坏或缺失会在任何后端启动
+之前就被拒绝。
+
+失败处理沿用与恢复接口相同的“停止之前”边界：如果失败发生在 Blaze 开始停止
+后端之前，原运行实例会被重新恢复，沙箱保持 `Running`——但有一个持久化例外：
+若持久化休眠意图时跨越了不确定边界（状态改名成功但其目录同步失败），或此后
+暂存镜像失败，则持久化记录可能已与存活的运行实例不一致，此时沙箱会保留为
+`RecoveryRequired` 等待显式处理，而不再报告为 `Running`。恢复运行失败但残留
+可以确认清理干净时，沙箱回到 `Hibernated`，可以重试；无法确认清理结果时，
+替代后端的归属和操作记录会通过 `RecoveryRequired` 保留，等待显式销毁。
+
+有两点持久化特性需要在容量规划时考虑。休眠期间存储空间会一直保留不被回收；
+恢复成功后，最近一次的休眠镜像也会保留，直到下一次休眠覆盖它或销毁将其删除
+——这是用磁盘空间换取可重复恢复的能力。daemon 重启后，已经完成的休眠会保留
+下来以便继续恢复，但中断的休眠或恢复操作不会自动续做，而是以
+`RecoveryRequired` 保留，等待显式销毁。
 
 ## 存储制品同步
 
