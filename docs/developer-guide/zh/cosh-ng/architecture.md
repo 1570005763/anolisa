@@ -147,9 +147,6 @@ slash command、Web/channel 和 remote capability 都不在这个 profile 中。
 permit contract 仍可供后续 profile 使用，但这个 profile 没有需要 approval 的 side effect。
 
 Direct ACP `doctor`/`run` 是 interoperability entrypoint，不是受治理的 Gateway Runtime。它们
-有意不声明 Task durability、capability admission 或 remote execution。Shell attachment、更广的
-capability profile、Web/channel presentation 和真实 Adapter 的安装证据仍属于独立工作。
-[ACP Task Platform 规划集](../../../../src/cosh-ng/docs/design/acp-task-platform/README_zh.md)记录这些边界与
-验收 Gate；Phase 0-2 总体状态仍为 **NOT ACCEPTED**。
+有意不声明 Task durability、capability admission 或 remote execution。
 
 继续阅读[开发 cosh-ng](getting-started.md)、[IPC 协议](ipc-protocol.md)和[测试](testing.md)。

@@ -185,12 +185,7 @@ profile has no approvable side effect.
 
 The direct ACP `doctor`/`run` path is an interoperability entrypoint rather
 than a governed Gateway Runtime. It intentionally does not claim Task
-durability, capability admission, or remote execution. Shell attachment,
-broader capability profiles, Web/channel presentation, and real-adapter
-installation evidence remain separate work. The
-[ACP Task Platform planning set](../../../../src/cosh-ng/docs/design/acp-task-platform/README.md)
-records those boundaries and acceptance gates; overall Phase 0-2 status remains
-**NOT ACCEPTED**.
+durability, capability admission, or remote execution.
 
 Continue with [Developing cosh-ng](getting-started.md), [IPC protocols](ipc-protocol.md),
 and [Testing](testing.md).
