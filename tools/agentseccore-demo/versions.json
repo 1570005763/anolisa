@@ -1,0 +1,19 @@
+{
+  "image": "agentseccore-demo:20260909",
+  "platform": "linux/amd64",
+  "base_image": "alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4@sha256:5df52514a0231cedc12cc699d99470e8f170ad16dd3d8c7840aa9bab205c91a0",
+  "sec_core_release_source": "725f4533ec2374d7f9720276de7bbfafe95e862b",
+  "agentsight_release_source": "10a792158cf88272b093bbbbe11229a3fe0353a9",
+  "provenance_note": "Official ALinux RPM repository; release source is the same-version reference. A binary build commit is not asserted unless independently embedded in the RPM.",
+  "qoder_version": "1.1.48",
+  "node_version": "22.23.0",
+  "node_i18n_package": "nodejs-full-i18n-22.23.0-1.alnx4.x86_64",
+  "qoder_npm_integrity": "sha512-125hwH/mTtpSUAppHGk/C++XXH8g+9M2bAWCCWYJzfPyWBMsbeT3/ZfJoJrrj/glo9tR4mcFiwyMKqiTj43qHg==",
+  "rpm_base_url": "https://mirrors.aliyun.com/anolisa/alinux-4/x86_64/os/Packages/",
+  "packages": {
+    "agent-sec-cli-0.11.1-1.alnx4.x86_64.rpm": "98a9850125bcd76f81227e07cfe8739e52715aad70f7958c31a8768c82f4955e",
+    "agent-sec-qoder-hook-0.11.1-1.alnx4.x86_64.rpm": "6bccfd20cbd022601c3d7d74c55887f4419d051f4f8e5a5ea7e00b04b447b283",
+    "agent-sec-skills-0.11.1-1.alnx4.x86_64.rpm": "502fdf3c624478a57962905415741a4a0c4f2db529c327f330ef7da0fcf37d5b",
+    "agentsight-0.11.2-1.alnx4.x86_64.rpm": "bb27a850084b75e052c1161bb8843f0ea842bfd4d99e3299e6eb43b44e423f16"
+  }
+}

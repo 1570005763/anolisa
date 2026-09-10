@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!runtime.sh
+!versions.json
+!packages/
+!packages/**
