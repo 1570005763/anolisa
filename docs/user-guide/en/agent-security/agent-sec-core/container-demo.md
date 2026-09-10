@@ -10,14 +10,41 @@ The image runs **Qoder CLI 1.1.48**. `./demo.sh qoder` opens its interactive ter
 
 Use a Linux x86_64 host with Docker installed and running. The image includes the products and scanning dependencies; importing it and scanning locally do not require network access. Qoder CLI authentication and model requests require a working network and valid account. Version 1 supports one demo instance and one participant at a time.
 
+### Install and start with one command (recommended)
+
+Run on a Linux amd64 host with Docker installed, running, and accessible to the current user:
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash
+```
+
+The script downloads the starter, verifies SHA-256, pulls the public image by its fixed digest, starts the container, and runs `doctor`. It installs into `$HOME/agentseccore-demo` by default, with no GitHub login. It checks Docker availability and exits with instructions to install and start Docker if needed.
+
+After installation, run:
+
+```bash
+cd "$HOME/agentseccore-demo"
+./demo.sh qoder
+```
+
+On first use, enter `/login` in Qoder CLI and complete your own account authentication in Chrome. `Authentication: missing` in `doctor` is expected before login. For a remote host, establish the SSH tunnel in step 5 below. If browser callbacks fail, use the Token method in step 2; after saving `demo.env`, run `./demo.sh down` before step 3 so the new configuration takes effect.
+
+Use `bash -s -- /path/to/demo` to choose the installation directory:
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash -s -- /path/to/demo
+```
+
+Rerunning verifies and reuses the same release and existing instance, preserving `demo.env`, authentication, and activity records without resetting the Skill. If the directory contains another release or modified distribution files, the script stops and asks for another directory. Continue below for manual or offline installation.
+
 ### 1. Prepare the demo directory and image
 
-Open [this release](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910) and choose the starter or full offline bundle. Use one method below in an empty directory on the Linux host. Run subsequent shell commands in the directory containing `demo.sh`.
+Open [this release](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910.1) and choose the starter or full offline bundle. Use one method below in an empty directory on the Linux host. Run subsequent shell commands in the directory containing `demo.sh`.
 
 **Option A: pull the image.** The starter includes the launcher, Markdown operation card, and image version information:
 
 ```bash
-curl -fL -o agentseccore-demo-starter.tar.gz https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910/agentseccore-demo-starter-linux-amd64-20260910.tar.gz
+curl -fL -o agentseccore-demo-starter.tar.gz https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/agentseccore-demo-starter-linux-amd64-20260910.1.tar.gz
 tar -xzf agentseccore-demo-starter.tar.gz
 cd agentseccore-demo
 sha256sum --check SHA256SUMS
@@ -29,7 +56,7 @@ sha256sum --check SHA256SUMS
 **Option B: import offline.** Download the full offline bundle from the same release, then run in an empty directory:
 
 ```bash
-tar -xzf agentseccore-demo-linux-amd64-20260910.tar.gz
+tar -xzf agentseccore-demo-linux-amd64-20260910.1.tar.gz
 cd agentseccore-demo
 sha256sum --check SHA256SUMS
 ```

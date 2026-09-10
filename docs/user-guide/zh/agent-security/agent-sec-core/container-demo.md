@@ -10,14 +10,41 @@
 
 使用 Linux x86_64 主机，提前安装并启动 Docker。镜像包包含产品和扫描依赖，导入与本地扫描无需联网；Qoder CLI 认证和模型调用需要可用网络及有效账号。第一版只支持单机单实例体验。
 
+### 一条命令安装并启动（推荐）
+
+在已安装并启动 Docker、且当前用户可访问 Docker 的 Linux amd64 主机执行：
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash
+```
+
+脚本自动下载启动包、校验 SHA-256、按固定 digest 拉取公开镜像、启动容器并运行 `doctor`。默认目录为 `$HOME/agentseccore-demo`，无需 GitHub 登录。脚本检查 Docker 是否可用；缺少 Docker 时会退出并提示先安装、启动 Docker。
+
+安装完成后执行：
+
+```bash
+cd "$HOME/agentseccore-demo"
+./demo.sh qoder
+```
+
+首次在 Qoder CLI 输入 `/login`，按提示用 Chrome 完成本人的账号认证。`doctor` 在登录前显示 `Authentication: missing` 属于预期。容器位于远程主机时按下方步骤 5 建立 SSH 隧道；浏览器登录回调失败时，使用步骤 2 的 Token 方式，保存 `demo.env` 后先执行 `./demo.sh down`，再按步骤 3 启动，让配置生效。
+
+可通过 `bash -s -- /path/to/demo` 指定安装目录：
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash -s -- /path/to/demo
+```
+
+重复执行会校验并复用同版文件与已有实例，保留 `demo.env`、登录状态和体验记录，不会自动复位 Skill。目录中已有其他版本或分发文件被修改时，脚本停止并提示换一个目录。需要手工安装或离线使用时，继续下面的步骤。
+
 ### 1. 准备体验目录和镜像
 
-打开[本版 Release](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910)，选择轻量启动包或完整离线包。在 Linux 主机的空目录中选择以下一种方式，后续 shell 命令均在包含 `demo.sh` 的目录运行。
+打开[本版 Release](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910.1)，选择轻量启动包或完整离线包。在 Linux 主机的空目录中选择以下一种方式，后续 shell 命令均在包含 `demo.sh` 的目录运行。
 
 **方式 A：拉取镜像。** 轻量启动包包含启动脚本、Markdown 操作卡和镜像版本信息：
 
 ```bash
-curl -fL -o agentseccore-demo-starter.tar.gz https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910/agentseccore-demo-starter-linux-amd64-20260910.tar.gz
+curl -fL -o agentseccore-demo-starter.tar.gz https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/agentseccore-demo-starter-linux-amd64-20260910.1.tar.gz
 tar -xzf agentseccore-demo-starter.tar.gz
 cd agentseccore-demo
 sha256sum --check SHA256SUMS
@@ -29,7 +56,7 @@ sha256sum --check SHA256SUMS
 **方式 B：离线导入。** 从同一 Release 下载完整离线包后，在空目录中执行：
 
 ```bash
-tar -xzf agentseccore-demo-linux-amd64-20260910.tar.gz
+tar -xzf agentseccore-demo-linux-amd64-20260910.1.tar.gz
 cd agentseccore-demo
 sha256sum --check SHA256SUMS
 ```

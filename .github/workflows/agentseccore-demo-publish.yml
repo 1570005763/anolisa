@@ -15,7 +15,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: agentseccore-demo-20260910
+  group: agentseccore-demo-20260910.1
   cancel-in-progress: false
 
 jobs:
@@ -25,7 +25,8 @@ jobs:
     timeout-minutes: 15
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: agentseccore-demo-20260910
+      RELEASE_TAG: agentseccore-demo-20260910.1
+      SOURCE_RELEASE_TAG: agentseccore-demo-20260910
       IMAGE: ghcr.io/1570005763/agentseccore-demo:20260910
       IMAGE_ID: sha256:1209b33fb96fd8960f1156b0fa01a0a2953573406c08d6e76439a4cd290f58ae
     steps:
@@ -36,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern image.tar.gz
+          gh release download "$SOURCE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern image.tar.gz
           echo '750ad2e3bb66d3d11a146370e99be93c4917f95edfb8e7fcba046139980b5495  image.tar.gz' | sha256sum --check
           gzip -dc image.tar.gz | docker load
           test "$(docker image inspect agentseccore-demo:20260909 --format '{{.Id}}')" = "$IMAGE_ID"

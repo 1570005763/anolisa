@@ -6,6 +6,14 @@
 
 Staff should complete setup, Qoder CLI authentication, and rehearsal using the [full guide](container-demo.md) before handing over the terminal. It covers Token configuration, startup, readiness checks, and remote access through Chrome.
 
+On a Linux amd64 host with Docker installed and running, install and start with one command:
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash
+```
+
+Then run `cd "$HOME/agentseccore-demo" && ./demo.sh qoder`, enter `/login`, and complete account authentication before the activity.
+
 | Window | Purpose |
 | --- | --- |
 | A | Qoder CLI, for the activity prompts |

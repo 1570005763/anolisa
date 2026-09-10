@@ -10,7 +10,7 @@ import shutil
 import tarfile
 import tempfile
 
-VERSION = "20260910"
+VERSION = "20260910.1"
 IMAGE_SHA256 = "750ad2e3bb66d3d11a146370e99be93c4917f95edfb8e7fcba046139980b5495"
 
 
@@ -84,9 +84,15 @@ def main() -> None:
             "Use `./demo.sh pull` for the starter bundle. The offline bundle includes the image, "
             "which `./demo.sh up` imports automatically. Neither bundle contains credentials.\n"
         )
-        archive_bundle(
-            bundle, args.output / f"agentseccore-demo-starter-linux-amd64-{VERSION}.tar.gz"
-        )
+        starter = args.output / f"agentseccore-demo-starter-linux-amd64-{VERSION}.tar.gz"
+        archive_bundle(bundle, starter)
+        installer = args.output / "install.sh"
+        template = (source / "install.sh").read_text()
+        assert template.count("__STARTER_SHA256__") == 1
+        assert f"release=agentseccore-demo-{VERSION}\n" in template
+        assert f"asset={starter.name}\n" in template
+        installer.write_text(template.replace("__STARTER_SHA256__", digest(starter)))
+        installer.chmod(0o755)
         shutil.copy2(args.image, bundle / "image.tar.gz")
         archive_bundle(bundle, args.output / f"agentseccore-demo-linux-amd64-{VERSION}.tar.gz")
         shutil.copy2(bundle / "image.ref", args.output / "image.ref")

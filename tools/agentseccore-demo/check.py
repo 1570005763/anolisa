@@ -2,6 +2,7 @@
 """Check shell/Python syntax and the repeatable demo modification without Docker."""
 
 import ast
+import hashlib
 import json
 import os
 import pathlib
@@ -11,6 +12,106 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+
+
+def check_install(root: pathlib.Path) -> None:
+    """Check piped installation, safe retries, and failures with a local starter fixture."""
+    if not sys.platform.startswith("linux"):
+        print("SKIP: installer behavior requires Linux; shell syntax is checked on this host")
+        return
+    with tempfile.TemporaryDirectory(prefix="agentseccore-install-check-") as directory:
+        work = pathlib.Path(directory)
+        bundle = work / "bundle"
+        bundle.mkdir()
+        launcher = bundle / "demo.sh"
+        launcher.write_text(
+            '#!/usr/bin/env bash\nprintf "%s\\n" "$1" >> "$CALLS"\n'
+            'if [[ "$1" == pull ]]; then exit "${PULL_EXIT:-0}"; fi\n'
+        )
+        launcher.chmod(0o755)
+        (bundle / "SHA256SUMS").write_text(
+            f"{hashlib.sha256(launcher.read_bytes()).hexdigest()}  demo.sh\n"
+        )
+        starter = work / "starter.tar.gz"
+        with tarfile.open(starter, "w:gz") as archive:
+            archive.add(bundle, arcname="agentseccore-demo")
+        installer = (
+            (root / "install.sh")
+            .read_text()
+            .replace("__STARTER_SHA256__", hashlib.sha256(starter.read_bytes()).hexdigest())
+        )
+        binaries = work / "bin"
+        binaries.mkdir()
+        for name, source in {
+            "curl": (
+                "#!/usr/bin/env bash\nset -eu\n"
+                '[[ "${CURL_EXIT:-0}" == 0 ]] || exit "$CURL_EXIT"\n'
+                "while [[ $# -gt 0 ]]; do\n"
+                '  if [[ "$1" == --output ]]; then cp "$LOCAL_STARTER" "$2"; exit; fi\n'
+                "  shift\ndone\nexit 2\n"
+            ),
+            "docker": '#!/usr/bin/env bash\nexit "${DOCKER_EXIT:-0}"\n',
+        }.items():
+            binary = binaries / name
+            binary.write_text(source)
+            binary.chmod(0o755)
+        calls = work / "calls"
+        environment = dict(
+            os.environ,
+            PATH=str(binaries) + os.pathsep + os.environ["PATH"],
+            LOCAL_STARTER=str(starter),
+            CALLS=str(calls),
+        )
+
+        def run(target: pathlib.Path, success: bool, **changes: str) -> list[str]:
+            calls.write_text("")
+            result = subprocess.run(
+                ["bash", "-s", "--", str(target)],
+                input=installer,
+                env=dict(environment, **changes),
+                cwd=work,
+                capture_output=True,
+                text=True,
+            )
+            assert (result.returncode == 0) == success, result.stdout + result.stderr
+            assert not list(work.glob(".agentseccore-install.*")), "Temporary files leaked"
+            return calls.read_text().splitlines()
+
+        target = work / "installed with spaces"
+        assert run(target, True) == ["pull", "up", "doctor"]
+        private = target / "demo.env"
+        private.write_text("# Private configuration fixture, no credentials\n")
+        private.chmod(0o600)
+        assert run(target, True) == ["pull", "up", "doctor"]
+        assert private.read_text() == "# Private configuration fixture, no credentials\n"
+        assert private.stat().st_mode & 0o777 == 0o600
+        assert run(target, False, PULL_EXIT="1") == ["pull"]
+        (target / "demo.sh").write_text("modified by participant\n")
+        assert not run(target, False)
+        assert (target / "demo.sh").read_text() == "modified by participant\n"
+        collision = work / "other-work"
+        collision.mkdir()
+        (collision / "keep").write_text("keep me")
+        assert not run(collision, False)
+        assert (collision / "keep").read_text() == "keep me"
+        link = work / "symlink"
+        link.symlink_to(collision, target_is_directory=True)
+        assert not run(link, False)
+        corrupt = work / "corrupt.tar.gz"
+        corrupt.write_bytes(starter.read_bytes() + b"corrupted download")
+        for changes in (
+            {"LOCAL_STARTER": str(corrupt)},
+            {"CURL_EXIT": "22"},
+            {"DOCKER_EXIT": "1"},
+        ):
+            fresh = work / "failed-install"
+            assert not run(fresh, False, **changes)
+            assert not fresh.exists()
+        relative = pathlib.Path("relative-install")
+        assert run(relative, True) == ["pull", "up", "doctor"]
+    print(
+        "PASS: piped install, retry preservation, path handling, and failure isolation (fixtures)"
+    )
 
 
 def check_pull(root: pathlib.Path) -> None:
@@ -121,6 +222,7 @@ def main() -> None:
             assert fixture.read_bytes() == expected
     print("PASS: shell syntax, embedded Python syntax, exact payload, and idempotent tampering")
     check_pull(root)
+    check_install(root)
     if len(sys.argv) == 2:
         with tarfile.open(sys.argv[1]) as archive:
             manifest = json.load(archive.extractfile("manifest.json"))

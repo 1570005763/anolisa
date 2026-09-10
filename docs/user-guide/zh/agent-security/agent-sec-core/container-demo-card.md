@@ -6,6 +6,14 @@
 
 工作人员先按[完整指南中的首次准备步骤](container-demo.md)完成环境启动、Qoder CLI 登录和预演，再将终端交给参与者。指南包含 Token 获取、启动命令、登录检查和远程主机的 Chrome 访问方式。
 
+在已安装并启动 Docker 的 Linux amd64 主机，一条命令完成环境安装和启动：
+
+```bash
+curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash
+```
+
+然后执行 `cd "$HOME/agentseccore-demo" && ./demo.sh qoder`，输入 `/login` 并按提示完成账号认证，再开始体验。
+
 | 窗口 | 用途 |
 | --- | --- |
 | A | Qoder CLI，输入体验请求 |
