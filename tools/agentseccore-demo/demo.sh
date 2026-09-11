@@ -46,9 +46,14 @@ up)
         engine start "$container" >/dev/null
     else
         if [[ "$(engine image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)" != "$expected_image" ]]; then
-            [[ -f image.tar.gz && -f SHA256SUMS ]] || die 'Run ./demo.sh pull IMAGE_REFERENCE first, or place image.tar.gz and SHA256SUMS beside demo.sh.'
-            sha256sum --check SHA256SUMS
-            gzip -dc image.tar.gz | engine load
+            if [[ -f image.tar.gz ]]; then
+                sha256sum --check image.tar.gz.sha256
+                gzip -dc image.tar.gz | engine load
+            else
+                reference=$(cat image.ref)
+                [[ "$reference" =~ ^ghcr\.io/1570005763/agentseccore-demo@sha256:[0-9a-f]{64}$ ]] || die 'Invalid pinned image.ref.'
+                bash "$0" pull "$reference"
+            fi
         fi
         [[ "$(engine image inspect --format '{{.Id}}' "$image")" == "$expected_image" ]] || die 'Loaded image identity does not match image.id.'
         env_args=()

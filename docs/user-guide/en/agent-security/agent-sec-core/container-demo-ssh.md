@@ -1,64 +1,63 @@
-# Connect to the ECS experience from your computer
+# Staff: connect to the ECS demo from a local machine
 
 [中文版](../../../zh/agent-security/agent-sec-core/container-demo-ssh.md)
 
-Run the connection script locally to prepare the experience on ECS, forward the AgentSight page, and enter Qoder CLI. It reuses the published container image; follow the [operation card](container-demo-card.md) for the experience itself.
+Staff prepare three local windows; participants follow the same [operation card](container-demo-card.md). The container, Skills, account state, and history live on ECS. The local machine runs only SSH and Chrome.
 
 ## Prerequisites
 
-- Use macOS or Linux with Bash, curl, and OpenSSH. Windows users can run the script in WSL; a native PowerShell script is not provided.
-- Ensure `ssh user@ecs-host` connects to the target ECS. Configure custom ports, private keys, or jump hosts in your local `~/.ssh/config`; an SSH alias can replace the destination.
-- ECS must run Linux amd64 with Docker installed and running, and the SSH user must have Docker access. Initial installation requires ECS access to GitHub and GHCR. Qoder CLI authentication and model requests also require its service network and a valid account.
-- Prepare Chrome on your computer. Each ECS runs one experience instance, shared by participants in turn.
+- Local macOS/Linux with Bash, curl, and OpenSSH; Windows uses WSL, with no native PowerShell support.
+- `ssh user@ecs-host` reaches Linux amd64 ECS. Use an existing `~/.ssh/config` alias for custom ports, keys, or jump hosts. Staff verify the initial host identity.
+- Docker runs on ECS and is accessible to the SSH user. Online installation uses GitHub/GHCR; authentication and model requests need Qoder connectivity and a valid activity account.
+- One ECS runs one instance for sequential participants; no public AgentSight port is required.
 
-## Connect with one command
+## Window A: Qoder CLI and dashboard tunnel
 
-Run in your **local terminal**, replacing `user@ecs-host` with the destination or SSH alias:
-
-```bash
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo.sh \
-  | bash -s -- user@ecs-host
-```
-
-On first use, the script installs the starter bundle in `~/agentseccore-demo` on ECS, verifies files, pulls the pinned image, and starts the container. An existing matching starter installation is verified, started, and checked without downloading the installer or pulling the image again. Reconnecting does not reset the Skill.
-
-In Qoder CLI, confirm the demo directory when prompted and enter `/login` to authenticate your account. SSH host verification, password entry, and Qoder CLI login use their native prompts. If a remote browser login callback fails, configure a Personal Access Token on ECS using the [authentication instructions](container-demo.md). After changing `demo.env`, stop the container and reconnect to apply it.
-
-Open <http://127.0.0.1:17396/#/security> in local Chrome. Keep the Qoder CLI terminal connected. Exiting Qoder CLI closes the SSH tunnel while preserving the remote container, account state, and history.
-
-## Staff commands
-
-For repeated use, save the connection script in your current local directory:
+Run in **local terminal A**, replacing `user@ecs-host` with the actual address or SSH alias:
 
 ```bash
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo.sh \
-  -o ecs-demo.sh
+curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260911.1/ecs-demo.sh -o ecs-demo.sh && \
+  bash ecs-demo.sh user@ecs-host
 ```
 
-Run all commands below in your **local terminal**. Omitting the action opens Qoder CLI.
+Initial preparation and updates from the known old release are automatic. Missing images are pulled even when installation files already exist; correct images are reused. The script stays in the current local directory. Staff then follow the [preparation guide](container-demo.md#staff) for native `/login`, the model check, and rehearsal.
 
-| Purpose | Command |
+To reenter the same environment, run in the local directory containing the saved script:
+
+```bash
+bash ecs-demo.sh user@ecs-host
+```
+
+## Window B: remote control terminal
+
+In **another local terminal B**, in the directory containing the script, run:
+
+```bash
+bash ecs-demo.sh user@ecs-host control
+```
+
+B is now connected by SSH in `~/agentseccore-demo` on ECS. Participants run `./demo.sh tamper` exactly as shown on the operation card, without translating commands or entering host addresses. Keep B connected; exiting it does not stop the container.
+
+## Window C and the next round
+
+Open the actual address printed by A in local Chrome, normally `http://127.0.0.1:17396/#/security`. Keep A connected. Exiting Qoder CLI, or running `./demo.sh reset` in B, closes A's SSH tunnel. Staff rerun the entry command in **A**; B remains the control terminal.
+
+| Staff task (commands run locally) | Command |
 | --- | --- |
-| Prepare and check the environment without opening Qoder CLI | `bash ecs-demo.sh user@ecs-host prepare` |
-| Open Qoder CLI and the page tunnel | `bash ecs-demo.sh user@ecs-host` |
-| Check environment status | `bash ecs-demo.sh user@ecs-host doctor` |
-| Modify the demo Skill from a second terminal | `bash ecs-demo.sh user@ecs-host tamper` |
-| Reset for the next participant | `bash ecs-demo.sh user@ecs-host reset` |
-| Stop the remote container after the event | `bash ecs-demo.sh user@ecs-host down` |
+| Prepare and check only | `bash ecs-demo.sh user@ecs-host prepare` |
+| Check services | `bash ecs-demo.sh user@ecs-host doctor` |
+| Reset without a control window | `bash ecs-demo.sh user@ecs-host reset` |
+| Stop the container after the activity | `bash ecs-demo.sh user@ecs-host down` |
 
-`prepare` supports unattended setup when SSH already has non-interactive authentication and trusted host records. It does not perform Qoder CLI login or model requests. `reset` ends this instance's Qoder CLI session and restores `pass`, also closing the associated tunnel; run the default connection command for the next round. `down` retains instance data.
-
-During the demo, keep the default connection in terminal A, run `tamper` or `reset` in terminal B, and use Chrome as window C. Prompts, approval choices, and expected results for terminal A are in the [operation card](container-demo-card.md).
+`prepare` neither authenticates nor requests a model. Unattended use also requires existing noninteractive SSH authentication and trusted host records. The existing `tamper`, `reset`, and `down` actions remain supported. `down` retains the volume.
 
 ## Troubleshooting
 
-- **Local port 17396 is occupied:** use another local port, for example `LOCAL_PORT=17397 bash ecs-demo.sh user@ecs-host`, and open `http://127.0.0.1:17397/#/security` in Chrome. ECS still uses 17396.
-- **SSH fails or forwarding is denied:** check login with `ssh user@ecs-host`. The SSH service must permit local forwarding. The script uses existing SSH configuration and host verification.
-- **Docker is missing or inaccessible:** prepare Docker on ECS and confirm the login user can access the local engine, then run `prepare`. The script does not install Docker.
-- **Download fails:** retry when connectivity recovers. A successfully installed matching environment can be reconnected directly; Qoder CLI still requires its service network.
-- **Directory version or file verification fails:** the entry supports this `.1` starter bundle in the default directory. It preserves and refuses to execute other files. For custom directories, offline bundles, or older installations, use direct SSH following the [full guide](container-demo.md) and keep installation directories separate.
-- **Qoder CLI requires a terminal:** run the default connection command in a local interactive terminal; use `prepare` for automation jobs.
+- **Local port busy**: run `LOCAL_PORT=17397 bash ecs-demo.sh user@ecs-host` and use its corresponding Chrome address. A tunnel failure is reported rather than silently using the wrong port.
+- **SSH or forwarding failure**: check native SSH login and the server's local forwarding configuration. Host identity verification remains enabled.
+- **Download or pull failure**: restore connectivity and retry, or use the [preparation guide](container-demo.md#staff) to install this release's offline bundle in the default ECS directory, then use the same connector.
+- **Directory or file verification failure**: unknown installations, changed files, and symlinks are rejected. Do not disable verification. The connector uses the default directory and does not manage custom paths.
+- **Terminal required**: `qoder` and `control` require a real interactive terminal; automation uses `prepare`.
 
-The script forwards the page through SSH to your local loopback address; AgentSight does not need a public port. See the [preparation guide](container-demo.md) for installation, account configuration, and experience boundaries.
+Staff handle account login, handoff, and shutdown. Participants use only the operation card.

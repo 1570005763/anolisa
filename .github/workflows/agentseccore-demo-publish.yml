@@ -1,66 +1,46 @@
 name: Publish AgentSecCore demo
 
 on:
-  push:
-    branches: [codex/agentseccore-demo-ghcr]
-    paths:
-      - .github/workflows/agentseccore-demo-publish.yml
-      - tools/agentseccore-demo/**
-      - docs/user-guide/en/agent-security/agent-sec-core/container-demo*.md
-      - docs/user-guide/zh/agent-security/agent-sec-core/container-demo*.md
   workflow_dispatch:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
-  group: agentseccore-demo-20260910.1
+  group: agentseccore-demo-publish
   cancel-in-progress: false
 
 jobs:
   publish:
     if: github.repository == '1570005763/anolisa'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: agentseccore-demo-20260910.1
-      SOURCE_RELEASE_TAG: agentseccore-demo-20260910
-      IMAGE: ghcr.io/1570005763/agentseccore-demo:20260910
-      IMAGE_ID: sha256:1209b33fb96fd8960f1156b0fa01a0a2953573406c08d6e76439a4cd290f58ae
     steps:
       - uses: actions/checkout@v4
-
-      - name: Import the accepted image
+      - name: Download the unchanged accepted image archive
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP"
-          gh release download "$SOURCE_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern image.tar.gz
-          echo '750ad2e3bb66d3d11a146370e99be93c4917f95edfb8e7fcba046139980b5495  image.tar.gz' | sha256sum --check
-          gzip -dc image.tar.gz | docker load
-          test "$(docker image inspect agentseccore-demo:20260909 --format '{{.Id}}')" = "$IMAGE_ID"
-
-      - name: Push the accepted image and record its digest
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP"
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          trap 'docker logout ghcr.io' EXIT
-          docker tag "$IMAGE_ID" "$IMAGE"
-          docker push "$IMAGE"
-          docker image inspect "$IMAGE" | jq -r '.[0].RepoDigests[] | select(startswith("ghcr.io/1570005763/agentseccore-demo@sha256:"))' > image.ref
-          test "$(wc -l < image.ref)" -eq 1
-          grep -Eq '^ghcr.io/1570005763/agentseccore-demo@sha256:[0-9a-f]{64}$' image.ref
-          gh release upload "$RELEASE_TAG" image.ref --repo "$GITHUB_REPOSITORY" --clobber
-          cat image.ref >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Package the launcher and Markdown guides
+          gh release download agentseccore-demo-20260910 --repo "$GITHUB_REPOSITORY" \
+            --pattern image.tar.gz --dir "$RUNNER_TEMP"
+          python3 - <<'PY'
+          import os, pathlib, sys
+          sys.path.insert(0, 'tools/agentseccore-demo')
+          from package import IMAGE_REFERENCE, IMAGE_SHA256, digest
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          assert digest(root / 'image.tar.gz') == IMAGE_SHA256
+          (root / 'image.ref').write_text(IMAGE_REFERENCE + '\n')
+          PY
+      - name: Check and package one release
         shell: bash
         run: |
           set -euo pipefail
           python3 tools/agentseccore-demo/check.py
-          python3 tools/agentseccore-demo/package.py "$RUNNER_TEMP/image.tar.gz" "$RUNNER_TEMP/image.ref" "$RUNNER_TEMP/release"
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/release/"* --repo "$GITHUB_REPOSITORY" --clobber
+          python3 tools/agentseccore-demo/check-ecs.py
+          python3 tools/agentseccore-demo/check-release.py
+          python3 tools/agentseccore-demo/package.py "$RUNNER_TEMP/image.tar.gz" \
+            "$RUNNER_TEMP/image.ref" "$RUNNER_TEMP/release"
+      - name: Publish without replacing assets
+        run: python3 tools/agentseccore-demo/publish.py "$RUNNER_TEMP/release" "$GITHUB_SHA"

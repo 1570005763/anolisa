@@ -60,6 +60,7 @@ def main() -> None:
             ("host", "reset;echo unexpected"),
             ("host", "prepare", "extra"),
             ("host", "qoder"),
+            ("host", "control"),
         ):
             assert run(*args).returncode != 0
             assert not capture.exists(), args

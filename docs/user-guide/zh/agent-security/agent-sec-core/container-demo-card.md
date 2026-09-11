@@ -4,20 +4,12 @@
 
 **谁动了我的 Skill？** · 上手体验操作卡
 
-工作人员先按[完整指南中的首次准备步骤](container-demo.md)完成环境启动、Qoder CLI 登录和预演，再将终端交给参与者。指南包含 Token 获取、启动命令、登录检查和远程主机的 Chrome 访问方式。
-
-在已安装并启动 Docker 的 Linux amd64 主机，一条命令完成环境安装和启动：
-
-```bash
-curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install.sh | bash
-```
-
-然后执行 `cd "$HOME/agentseccore-demo" && ./demo.sh qoder`，输入 `/login` 并按提示完成账号认证，再开始体验。
+工作人员已准备环境并完成账号登录，直接按下面步骤体验；窗口未就绪时请工作人员处理。
 
 | 窗口 | 用途 |
 | --- | --- |
 | A | Qoder CLI，输入体验请求 |
-| B | 体验包目录下的 Linux 终端，执行修改和复位命令 |
+| B | 已进入 Linux 体验目录的控制终端（本机或 SSH 到 ECS），执行修改命令 |
 | C | AgentSight 浏览器，查看安全事件 |
 
 ## 1. 扫描并建立基线
@@ -60,6 +52,8 @@ curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-
 
 `drifted` 表示文件与签名版本不同；此时还没有重新判断新增内容的风险。
 
+**No 仅取消当前 Skill 调用。** 若 Qoder CLI 继续请求 Read、Glob 等额外探查，先按 Esc 取消，再输入 `/clear` 后进入步骤 4；不要批准这些额外操作。
+
 ## 4. 重扫并查看风险
 
 在窗口 A 再次发送步骤 1 的扫描请求。
@@ -71,7 +65,7 @@ curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-
 
 ## 5. 查看这一轮的安全记录
 
-在窗口 C 打开 [AgentSight 安全事件页面](http://127.0.0.1:17396/#/security)。
+在已准备的 Chrome 窗口 C 打开安全事件页；使用工作人员提供的实际地址，默认 `http://127.0.0.1:17396/#/security`。
 
 1. 打开 **安全事件（Security Events）**。
 2. 选择 **最近 1h（Last 1h）**、**类别（Category）= skill_ledger**。
@@ -79,21 +73,6 @@ curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-
 4. 点击 **查询（Query）**，按时间和目标路径找到本轮 `pass → drifted → deny`。后续有新事件时，重新点击 **最近 1h**，再点 **查询**，让结束时间覆盖最新操作。
 5. 打开调用前的 `check` 事件，查看 **Session ID** 和 **工具调用（Tool Call）** 关联详情。直接扫描产生的事件可能没有这些关联字段。
 
-## 工作人员复位
+可选加试：再次 `/clear` 并调用目标，看到 `deny` 后仍选 **No**，再查看对应的 `check / deny` 事件。
 
-在窗口 B 执行：
-
-```bash
-./demo.sh reset
-./demo.sh qoder
-```
-
-复位会结束本实例的 Qoder CLI 会话、恢复原始 Skill 并重新扫描到 `pass`，历史事件和签名密钥保留。
-
-活动结束时执行：
-
-```bash
-./demo.sh down
-```
-
-本轮使用 `ask` 策略：异常时请求确认，由参与者选择 **No** 取消调用。修改命令只追加模拟文本。实际耗时受网络、模型响应和命令确认影响，工作人员应根据预演记录安排每轮时长。
+本轮使用 `ask` 策略，由参与者选择 **No** 取消异常调用；修改命令只追加模拟文本。体验结束后，请工作人员按[准备指南](container-demo.md#staff)复位。

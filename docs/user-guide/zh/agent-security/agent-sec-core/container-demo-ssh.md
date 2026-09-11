@@ -1,64 +1,63 @@
-# 从本机一键连接 ECS 体验环境
+# 工作人员：从本机连接 ECS 体验环境
 
 [English](../../../en/agent-security/agent-sec-core/container-demo-ssh.md)
 
-在本机执行连接脚本，自动准备 ECS 上的体验环境、建立 AgentSight 页面隧道并进入 Qoder CLI。脚本复用已发布的容器镜像；体验流程仍按[操作卡](container-demo-card.md)进行。
+工作人员在本机准备三个窗口，参与者继续使用同一张[操作卡](container-demo-card.md)。容器、Skill、账号与历史位于 ECS；本机只运行 SSH 客户端和 Chrome。
 
-## 准备条件
+## 前置条件
 
-- 本机使用 macOS 或 Linux，具备 Bash、curl 和 OpenSSH；Windows 可在 WSL 中执行，未提供原生 PowerShell 脚本。
-- `ssh user@ecs-host` 已能连接目标 ECS。自定义端口、私钥或跳板机写入本机 `~/.ssh/config`，命令中的地址可直接替换为 SSH 别名。
-- ECS 为 Linux amd64，已安装并启动 Docker，SSH 登录用户可访问 Docker。首次安装需要 ECS 能访问 GitHub 和 GHCR；Qoder CLI 登录与模型调用还需要其服务网络和有效账号。
-- 本机准备 Chrome。一个 ECS 只运行一个本体验实例，由参与者轮流使用。
+- 本机 macOS/Linux 有 Bash、curl、OpenSSH；Windows 使用 WSL，未提供原生 PowerShell 支持。
+- `ssh user@ecs-host` 能连接 Linux amd64 ECS。自定义端口、私钥和跳板机使用现有 `~/.ssh/config` 的 SSH 别名；首次确认主机身份由工作人员完成。
+- ECS 上 Docker 已启动且登录用户可访问。GitHub/GHCR 用于在线安装；Qoder 服务网络和有效活动账号用于登录及模型请求。
+- 一个 ECS 运行一个体验实例，参与者轮流使用；无需新增公网 AgentSight 端口。
 
-## 一条命令连接
+## 窗口 A：Qoder CLI 和页面隧道
 
-在**本机终端**执行，将 `user@ecs-host` 替换为实际 SSH 地址或别名：
-
-```bash
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo.sh \
-  | bash -s -- user@ecs-host
-```
-
-首次使用时，脚本在 ECS 的 `~/agentseccore-demo` 安装启动包、校验文件、拉取固定镜像并启动容器。已有同版启动包时，校验后直接启动和自检，不再下载安装包或拉取镜像，也不会自动复位 Skill。
-
-进入 Qoder CLI 后，首次按提示确认演示目录，并输入 `/login` 完成本人的账号认证。SSH 主机身份确认、密码输入和 Qoder CLI 登录仍使用各自原生交互。远程浏览器登录回调失败时，按[账号认证说明](container-demo.md#2-配置-qoder-cli-登录推荐-token)在 ECS 配置 Personal Access Token；修改 `demo.env` 后先停止容器，再重新连接使其生效。
-
-本机 Chrome 打开 <http://127.0.0.1:17396/#/security>。保持 Qoder CLI 所在终端连接；退出 Qoder CLI 后，SSH 隧道关闭，远端容器、账号状态和记录保留。
-
-## 工作人员常用命令
-
-需要反复操作时，把连接脚本保存到本机当前目录：
+在**本机终端 A**执行，将 `user@ecs-host` 替换为实际地址或 SSH 别名：
 
 ```bash
-curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo.sh \
-  -o ecs-demo.sh
+curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260911.1/ecs-demo.sh -o ecs-demo.sh && \
+  bash ecs-demo.sh user@ecs-host
 ```
 
-下面命令均在**本机终端**执行；省略动作默认进入 Qoder CLI。
+首次准备或已知旧版更新均自动完成；文件已就绪但镜像缺失时会补拉镜像，已有正确镜像直接复用。脚本保存在本机当前目录。准备完成后，工作人员按[准备指南](container-demo.md#staff)完成原生 `/login`、模型检查和预演。
 
-| 目的 | 命令 |
+后续进入同一环境，在本机保存脚本的目录运行：
+
+```bash
+bash ecs-demo.sh user@ecs-host
+```
+
+## 窗口 B：远端控制终端
+
+在**另一个本机终端 B**、保存脚本的目录运行：
+
+```bash
+bash ecs-demo.sh user@ecs-host control
+```
+
+现在 B 已通过 SSH 进入 ECS 的 `~/agentseccore-demo`。参与者直接执行操作卡中的 `./demo.sh tamper`，无需自行替换命令或填写主机地址。B 保持连接；退出 B 不会停止容器。
+
+## 窗口 C 和下一轮
+
+用本机 Chrome 打开 A 打印的实际地址，默认 `http://127.0.0.1:17396/#/security`。保持 A 连接；退出 Qoder CLI 或 B 执行 `./demo.sh reset` 后，A 的 SSH 隧道关闭。工作人员在 **A** 重跑上述进入命令，B 继续作为控制终端。
+
+| 工作人员任务（以下命令在本机执行） | 命令 |
 | --- | --- |
-| 提前准备环境并自检，不打开 Qoder CLI | `bash ecs-demo.sh user@ecs-host prepare` |
-| 打开 Qoder CLI 和页面隧道 | `bash ecs-demo.sh user@ecs-host` |
-| 检查环境状态 | `bash ecs-demo.sh user@ecs-host doctor` |
-| 在第二个终端修改演示 Skill | `bash ecs-demo.sh user@ecs-host tamper` |
-| 为下一位参与者复位 | `bash ecs-demo.sh user@ecs-host reset` |
-| 活动结束，停止远端容器 | `bash ecs-demo.sh user@ecs-host down` |
+| 只准备并自检 | `bash ecs-demo.sh user@ecs-host prepare` |
+| 查看服务状态 | `bash ecs-demo.sh user@ecs-host doctor` |
+| 无控制窗口时复位 | `bash ecs-demo.sh user@ecs-host reset` |
+| 活动结束停止容器 | `bash ecs-demo.sh user@ecs-host down` |
 
-`prepare` 可用于无人值守的环境准备，前提是 SSH 已配置免交互认证和可信主机记录。它不执行 Qoder CLI 登录或模型请求。`reset` 会结束本实例的 Qoder CLI 会话并恢复到 `pass`，相应隧道也会关闭；下一轮重新执行默认连接命令。`down` 保留实例数据。
-
-演示时，窗口 A 保持默认连接；窗口 B 执行上表的 `tamper` 或 `reset`；窗口 C 使用 Chrome。窗口 A 的提示词、确认选择和预期结果见[操作卡](container-demo-card.md)。
+`prepare` 不登录或请求模型；无人值守执行还需要既有 SSH 免交互认证和可信主机记录。其他动作 `tamper`、`reset`、`down` 保留兼容。`down` 保留数据卷。
 
 ## 排查
 
-- **本机 17396 被占用**：换一个本机端口，例如 `LOCAL_PORT=17397 bash ecs-demo.sh user@ecs-host`，Chrome 对应访问 `http://127.0.0.1:17397/#/security`。ECS 仍使用 17396。
-- **SSH 失败或转发不允许**：先运行 `ssh user@ecs-host` 检查登录；隧道需要 SSH 服务允许本地转发。脚本使用现有 SSH 配置和主机身份校验。
-- **缺少 Docker 或权限不足**：先在 ECS 准备 Docker 并确认登录用户可使用本地 Docker，再运行 `prepare`。脚本不会安装 Docker。
-- **下载失败**：网络恢复后重试。已成功安装的同版环境可直接重复连接；Qoder CLI 仍需要服务网络。
-- **目录版本或文件校验不符**：入口支持本版 `.1` 轻量启动包的默认目录；会保留并拒绝执行其他文件。手工目录、离线包或旧版环境按[完整指南](container-demo.md)直接 SSH 操作，避免混用安装目录。
-- **Qoder CLI 提示需要终端**：在本机交互终端运行默认连接命令；自动化任务使用 `prepare`。
+- **本机端口被占用**：运行 `LOCAL_PORT=17397 bash ecs-demo.sh user@ecs-host`，Chrome 使用对应地址。脚本会报告隧道建立失败，不会静默使用错误端口。
+- **SSH 失败或转发不允许**：先检查原生 SSH 登录及 SSH 服务的本地转发配置；脚本保留主机身份校验。
+- **下载或拉取失败**：恢复网络后重试。也可按[准备指南](container-demo.md#staff)在 ECS 默认目录准备本版离线包，再使用同一个连接器。
+- **目录或文件校验失败**：未知安装、修改过的文件和符号链接会被拒绝；不要关闭校验。入口使用默认目录，不管理自定义路径。
+- **提示需要终端**：`qoder` 和 `control` 在真实交互终端执行，自动化任务使用 `prepare`。
 
-脚本只通过 SSH 转发页面到本机回环地址，不要求将 AgentSight 端口暴露到公网。完整安装、账号配置和体验边界见[准备指南](container-demo.md)。
+账号登录、交接和活动结束由工作人员处理；参与者只使用操作卡。
