@@ -6,6 +6,8 @@ Run, modify, and rescan a Skill in a prepared Qoder CLI environment, then inspec
 
 The image runs **Qoder CLI 1.1.48**. `./demo.sh qoder` opens its interactive terminal interface.
 
+To use the experience on ECS from your computer, use the [automatic connection entry](container-demo-ssh.md) to prepare the environment, forward the page, and enter Qoder CLI.
+
 ## Staff: first-time setup
 
 Use a Linux x86_64 host with Docker installed and running. The image includes the products and scanning dependencies; importing it and scanning locally do not require network access. Qoder CLI authentication and model requests require a working network and valid account. Version 1 supports one demo instance and one participant at a time.

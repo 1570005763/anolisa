@@ -15,3 +15,5 @@ curl -fsSL https://github.com/1570005763/anolisa/releases/download/agentseccore-
 `demo.sh` 启动和管理单个实例；`build.sh` 保存 Linux 构建配方；`check.py` 检查语法、修改行为、镜像身份校验和可选的镜像层审计。发布流程直接导入已验收镜像。真实凭据不得加入源码或交付文件。
 
 `install.sh` 是发布模板，打包时写入启动包校验值；请使用 Release 中生成的脚本。
+
+从本机 macOS/Linux 连接 ECS 时，`ecs-demo.sh SSH_DESTINATION` 自动准备远端环境、转发页面并打开 Qoder CLI。[SSH 指南](../../docs/user-guide/zh/agent-security/agent-sec-core/container-demo-ssh.md)提供一条命令入口与工作人员操作。执行 `python3 tools/agentseccore-demo/check-ecs.py` 可在不访问主机的情况下检查连接脚本。
