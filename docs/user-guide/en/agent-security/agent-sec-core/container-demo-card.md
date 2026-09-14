@@ -12,6 +12,8 @@ Staff have prepared and authenticated this environment. Start directly below; as
 | B | Control terminal in the Linux demo directory (local, or SSH into ECS), for modification commands |
 | C | AgentSight in Chrome, for security events |
 
+At a Windows venue, A and B are WSL terminals already connected to ECS by staff, and C is Windows Chrome. Use these ready windows; do not run modification commands in a new, unconnected PowerShell window.
+
 ## 1. Scan and establish a baseline
 
 Send this prompt in A. If a scan command requires approval, verify the target before allowing it. The prompts preserve the wording used in the Chinese activity:
@@ -66,6 +68,8 @@ In the prepared Chrome window C, open Security Events. Use the address provided 
 3. Set **Verdict** and **Result** to **All**, and clear **Session ID**.
 4. Click **Query** and find this round's `pass → drifted → deny` by time and target path. For new events, select **Last 1h** again before querying to advance the end time.
 5. Open a pre-invocation `check` event and inspect **Session ID** and **Tool Call** details. Direct scan events may not include those fields.
+
+In event details, identify **Skill name / target path `ledger-demo-target`** first. `skill-ledger` is the scanning helper; its `pass` does not mean the target recovered. `check` inspects status and `scan` certifies content. The helper usually runs `check → scan → check`, so one scan experience produces multiple records. `Result` describes command execution; `Verdict` is the security conclusion. `scan / succeeded / deny` means scanning completed and found denial findings.
 
 Optional extension: enter `/clear`, invoke the target again, select **No** at the `deny` prompt, and inspect the associated `check / deny` event.
 

@@ -11,13 +11,13 @@ import shutil
 import tarfile
 import tempfile
 
-VERSION = "20260911.1"
+VERSION = "20260914.1"
 REPOSITORY = "1570005763/anolisa"
 IMAGE_SHA256 = "750ad2e3bb66d3d11a146370e99be93c4917f95edfb8e7fcba046139980b5495"
 IMAGE_REFERENCE = "ghcr.io/1570005763/agentseccore-demo@sha256:3994fdfbe477ade58937f13bc76263cf174450b6f734b0aa7b462074e0424319"
 PREVIOUS_MANIFESTS = (
-    "65c47b9a36f3b79859311d861d19a19e65fd3d51ce536d8c6e4a848ccb45f3f5",
-    "20ba80d5b36e60882cfc57c68a1c6ec60da1c84533649fbe61503b3639e98e47",
+    "f3c820caba596098dfe6f67d56ac2066d1ed692253586a08b758bd876d40ed6d",
+    "e53da378f578295819298c538f3a0eee43910af0234774af81274eac83797066",
 )
 
 
@@ -90,6 +90,10 @@ def main() -> None:
             for filename, kind in names.items():
                 document = (directory / filename).read_text()
                 versions = re.findall(r"releases/download/agentseccore-demo-([0-9.]+)/", document)
+                versions += re.findall(
+                    r"agentseccore-demo-(?:starter-)?linux-amd64-([0-9.]+)\.tar\.gz",
+                    document,
+                )
                 assert all(
                     version == VERSION for version in versions
                 ), "Update documented release commands"
@@ -104,7 +108,8 @@ def main() -> None:
                 online = document
                 for lang in ("en", "zh"):
                     online = online.replace(
-                        f"](../{lang}/", f"]({public}/{lang}/agent-security/agent-sec-core/"
+                        f"](../{lang}/",
+                        f"]({public}/{lang}/agent-security/agent-sec-core/",
                     )
                 for target in names:
                     online = online.replace(

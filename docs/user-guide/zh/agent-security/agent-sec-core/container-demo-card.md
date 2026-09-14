@@ -12,6 +12,8 @@
 | B | 已进入 Linux 体验目录的控制终端（本机或 SSH 到 ECS），执行修改命令 |
 | C | AgentSight 浏览器，查看安全事件 |
 
+Windows 现场的 A、B 是工作人员已连接到 ECS 的 WSL 终端，C 是 Windows Chrome。直接使用已就绪窗口；不要在 PowerShell 新开一个未连接的窗口执行修改命令。
+
 ## 1. 扫描并建立基线
 
 在窗口 A 输入；若请求运行扫描命令，核对为本次目标后允许：
@@ -72,6 +74,8 @@
 3. 将 **Verdict** 和 **结果（Result）** 设为 **全部（All）**，清空 **Session ID**。
 4. 点击 **查询（Query）**，按时间和目标路径找到本轮 `pass → drifted → deny`。后续有新事件时，重新点击 **最近 1h**，再点 **查询**，让结束时间覆盖最新操作。
 5. 打开调用前的 `check` 事件，查看 **Session ID** 和 **工具调用（Tool Call）** 关联详情。直接扫描产生的事件可能没有这些关联字段。
+
+查看详情时先认准 **Skill 名称/目标路径为 `ledger-demo-target`**；`skill-ledger` 是扫描助手自身，其 `pass` 不表示目标恢复正常。`check` 检查状态，`scan` 扫描认证；助手通常执行 `check → scan → check`，因此一次扫描体验会有多条记录。`Result` 表示命令执行结果，`Verdict` 表示安全结论；`scan / succeeded / deny` 表示扫描成功并发现拒绝项。
 
 可选加试：再次 `/clear` 并调用目标，看到 `deny` 后仍选 **No**，再查看对应的 `check / deny` 事件。
 

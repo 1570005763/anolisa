@@ -4,6 +4,8 @@
 
 **Who touched my Skill?** Staff prepare and rehearse once; participants use ready windows to experience `pass → drifted → deny`. Share only [this entry page](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910.1).
 
+**For venue Windows desktops backed by ECS**: staff first complete [WSL and SSH setup](container-demo-ssh.md#windows), then [prepare ECS ahead of time](container-demo-ssh.md#prestage). Participants use the operation card after A/B/C are ready; Windows needs neither Docker nor Qoder CLI.
+
 ## Choose the deployment location
 
 | Container location | Where staff run installation | Prerequisites |
@@ -15,14 +17,16 @@ Install on local Linux:
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260911.1/install.sh -o install.sh && bash install.sh
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/install.sh -o install.sh && bash install.sh
 ```
+
+On Windows, first enter `~/agentseccore-client` in WSL Ubuntu, then run the ECS command below. If the connector is already saved, run `bash ecs-demo.sh user@ecs-host` directly.
 
 Connect to ECS from the local machine, replacing `user@ecs-host` with the address or SSH alias:
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260911.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host
 ```
 
@@ -33,7 +37,7 @@ The scripts verify downloads, reuse or prepare the pinned image, start the conta
 | Staff: login, rehearse, and hand over | [Preparation guide](container-demo.md#staff) |
 | Staff: prepare ECS windows or diagnose SSH | [ECS guide](container-demo-ssh.md) |
 | Participants: run the five steps | [Markdown operation card](container-demo-card.md) |
-| Staff: download the offline bundle | [Current release files](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260911.1) |
+| Staff: download the offline bundle | [Current release files](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260914.1) |
 
 One host runs one instance, used sequentially. Chrome displays security events; ECS needs only the SSH tunnel, without a public AgentSight port. Staff preinstall Docker; these scripts do not install system software. See the [official Docker installation guide](https://docs.docker.com/engine/install/) and your organization's machine management requirements.
 
@@ -64,7 +68,7 @@ For ECS, open A and B using the ECS guide; B is already in the remote demo direc
 
 ### 2. Authenticate the activity account and rehearse
 
-In A, staff confirm the demo directory and enter `/login`. Use native Qoder CLI authentication. On ECS, prefer **Personal Access Token** and paste a PAT obtained from the activity account into the native prompt. Local deployment can also use browser login. Staff complete account authentication and initial SSH host verification; see the [official Qoder CLI authentication guide](https://docs.qoder.com/cli/authentication).
+Staff prepare three separate identities: the cloud test account manages ECS, SSH credentials connect to it, and the Qoder CLI activity account provides model access. If already authenticated, check `/status` and the actual model request below without logging in again. When authentication is needed, staff confirm the demo directory in A and enter `/login`. Use native Qoder CLI authentication. On ECS, prefer **Personal Access Token** and paste a PAT obtained from the activity account into the native prompt. Local deployment can also use browser login. Staff complete account authentication and initial SSH host verification; see the [official Qoder CLI authentication guide](https://docs.qoder.com/cli/authentication).
 
 A PAT is a Qoder account token, not a model provider API key. Native authentication persists in this instance's data volume; the normal workflow needs neither editing `demo.env` nor recreating the container. Keep credentials out of public scripts, operation cards, and screenshots.
 
@@ -86,7 +90,7 @@ After each round, staff run in B:
 ./demo.sh reset
 ```
 
-This ends Qoder CLI in A, restores the original Skill, and scans it to `pass`, retaining authentication, signing keys, and history. **Return to A** to reenter: locally run `./demo.sh qoder`; for ECS rerun `bash ecs-demo.sh user@ecs-host` on the client. Keep B as the control terminal; do not launch Qoder CLI in B.
+This ends Qoder CLI in A, restores the original Skill, and scans it to `pass`, retaining authentication, signing keys, and history. **Return to A** to reenter: locally run `./demo.sh qoder`; for ECS rerun `bash ecs-demo.sh user@ecs-host` in the client directory containing the connector (`~/agentseccore-client` in WSL on Windows). Keep B as the control terminal; do not launch Qoder CLI in B.
 
 At the end, run `./demo.sh down` in B, then exit the terminals. `down` removes the container and retains account state and history in the volume. Staff remain responsible for the dedicated activity machine and account.
 
@@ -96,14 +100,14 @@ Download the offline bundle and `SHA256SUMS` from the current release, copy both
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS && \
-  tar -xzf agentseccore-demo-linux-amd64-20260911.1.tar.gz -C "$HOME"
+  tar -xzf agentseccore-demo-linux-amd64-20260914.1.tar.gz -C "$HOME"
 cd "$HOME/agentseccore-demo" && ./demo.sh up && ./demo.sh doctor
 ```
 
 Extract only when the default installation directory does not exist. For an existing current installation, copy only `image.tar.gz` from the verified offline bundle into that directory and run `./demo.sh up`. Both sources use the same controls, including the ECS connector. The offline bundle supplies the image; authentication and model calls still need network.
 
 - **Pull failure**: restore connectivity and retry. An existing correct image needs no GHCR access.
-- **File verification failure**: stop using the changed files and investigate. The installer accepts the current release or a known unmodified `20260910.1`; updates retain private configuration, offline image, and data volume, and remove temporary files on success.
+- **File verification failure**: stop using the changed files and investigate. The installer accepts the current release or a known unmodified `20260911.1`; updates retain private configuration, offline image, and data volume, and remove temporary files on success.
 - **Expired login**: staff use `/login` again in A. A PAT in an existing `demo.env` takes precedence over native login; remove it from that private file and run `down`, then `up` before switching to native authentication.
 - **No Skill invocation**: follow the operation card, `/clear`, and retry once. A direct `Read` does not pass.
 - **Missing new events**: reselect `Last 1h` in Chrome, then click `Query`.

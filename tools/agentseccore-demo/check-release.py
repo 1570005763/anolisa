@@ -25,13 +25,22 @@ def check_links(directory: pathlib.Path) -> None:
 def main() -> None:
     root = pathlib.Path(__file__).resolve().parent
     repo = root.parents[1]
-    for name in ("container-demo.md", "container-demo-card.md", "container-demo-ssh.md"):
+    for name in (
+        "container-demo.md",
+        "container-demo-card.md",
+        "container-demo-ssh.md",
+    ):
         docs = [
             repo / f"docs/user-guide/{lang}/agent-security/agent-sec-core/{name}"
             for lang in ("en", "zh")
         ]
         blocks = [
-            re.findall(r"```(?:bash|text|dotenv)\n(.*?)```", p.read_text(), re.S) for p in docs
+            re.findall(
+                r"```(?:bash|text|dotenv|powershell|sshconfig)\n(.*?)```",
+                p.read_text(),
+                re.S,
+            )
+            for p in docs
         ]
         assert blocks[0] == blocks[1], name
         for document in docs:
@@ -114,7 +123,12 @@ def main() -> None:
             calls.append(args)
             if args[0] == "api" and "/releases?" in args[1]:
                 return json.dumps(
-                    [{"tag_name": f"agentseccore-demo-{package.VERSION}", "assets": assets}]
+                    [
+                        {
+                            "tag_name": f"agentseccore-demo-{package.VERSION}",
+                            "assets": assets,
+                        }
+                    ]
                 )
             if args[0] == "api" and "/git/matching-refs/" in args[1]:
                 return json.dumps(
