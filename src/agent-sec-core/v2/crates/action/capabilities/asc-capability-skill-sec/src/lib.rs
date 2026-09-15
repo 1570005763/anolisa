@@ -4,7 +4,9 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+pub mod command;
 pub mod config;
+pub mod executor;
 mod filesystem;
 pub mod identity;
 pub mod integrity;
@@ -17,7 +19,7 @@ pub use config::SkillSecConfig;
 pub use identity::SkillIdentity;
 pub use integrity::{FileHashes, HashDiff, KeyStore, SigningIdentity, hash_tree};
 pub use models::{DecisionAction, Finding, Manifest, ScanEntry, ScanStatus, UserDecision};
-pub use service::{ScanOptions, SkillRoot, SkillSecService};
+pub use service::{InitOptions, ScanOptions, SkillRoot, SkillSecService};
 
 /// Domain failures, kept separate from daemon transport errors and risk findings.
 #[derive(Debug, thiserror::Error)]
@@ -43,6 +45,15 @@ pub enum SkillSecError {
     /// Cryptographic key generation or decoding failed without exposing secrets.
     #[error("SkillSec signing key operation failed")]
     Key,
+    /// The operation requires the kernel-authenticated root administrator.
+    #[error("SkillSec operation requires root administrator")]
+    PermissionDenied,
+    /// Bounded shared-daemon admission is exhausted.
+    #[error("SkillSec is busy; retry after an in-flight operation completes")]
+    Busy,
+    /// Rotation must finish before ordinary ledger access resumes.
+    #[error("SkillSec key rotation is pending; administrator must resume rotation")]
+    RotationPending,
     /// A request exhausted its execution deadline before completing.
     #[error("SkillSec execution deadline exceeded")]
     Timeout,

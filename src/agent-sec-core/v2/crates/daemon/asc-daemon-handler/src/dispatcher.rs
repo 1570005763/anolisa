@@ -16,6 +16,7 @@ use crate::pap::PapHandler;
 pub struct DaemonDispatcher {
     pap: PapHandler,
     code_scan: CodeScanHandler,
+    skill_sec: Option<crate::skill_sec::SkillSecHandler>,
     principal_policy: Arc<dyn PrincipalPolicy>,
 }
 
@@ -40,8 +41,20 @@ impl DaemonDispatcher {
         Self {
             pap: PapHandler::new(application),
             code_scan: CodeScanHandler::new(finalizer),
+            skill_sec: None,
             principal_policy,
         }
+    }
+
+    /// Adds `SkillSec` using the same service and public finalizer as other entrypoints.
+    #[must_use]
+    pub fn with_skill_sec(
+        mut self,
+        service: Arc<asc_capability_skill_sec::SkillSecService>,
+        finalizer: Finalizer,
+    ) -> Self {
+        self.skill_sec = Some(crate::skill_sec::SkillSecHandler::new(service, finalizer));
+        self
     }
 
     /// Handles one decoded request using transport-authenticated peer identity.
@@ -90,6 +103,14 @@ impl DaemonDispatcher {
                     .handle(request_id, &principal, method, request.params)
             }
             MethodId::Action(method) => match method {
+                method::ActionMethod::SkillSec => match &self.skill_sec {
+                    Some(handler) => handler.handle(request_id, peer, control, request.params),
+                    None => DaemonResponse::error(
+                        request_id,
+                        error_code::INTERNAL,
+                        "SkillSec is not configured",
+                    ),
+                },
                 method::ActionMethod::CodeScan => {
                     self.code_scan
                         .handle(request_id, peer, control, request.params)
@@ -110,6 +131,20 @@ fn is_authorized(principal: &Principal, access: AccessPolicy) -> bool {
 }
 
 impl RequestDispatcher for DaemonDispatcher {
+    fn dispatch_timeout(&self, payload: &[u8]) -> Option<std::time::Duration> {
+        let request: DaemonRequest = serde_json::from_slice(payload).ok()?;
+        if request.method != method::ACTION_SKILL_SEC || self.skill_sec.is_none() {
+            return None;
+        }
+        let millis = request
+            .params
+            .get("timeoutMs")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(60_000)
+            .clamp(1, 120_000);
+        Some(std::time::Duration::from_millis(millis))
+    }
+
     fn dispatch(
         &self,
         request: DispatchRequest,

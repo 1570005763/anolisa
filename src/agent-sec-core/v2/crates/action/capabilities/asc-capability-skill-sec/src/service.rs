@@ -1,5 +1,8 @@
 //! Shared orchestration and per-canonical-Skill serialization for every Ledger consumer.
 
+pub use commands::InitOptions;
+pub(crate) use commands::{batch, require_batch_roots, with_key};
+
 use crate::ledger::Ledger;
 use crate::ledger::content::Content;
 use crate::ledger::storage::{Directory, MAX_RECORD_BYTES, missing, set_owner};
@@ -61,6 +64,7 @@ pub struct SkillSecService {
     pub(crate) config: SkillSecConfig,
     pub(crate) registry: ScannerRegistry,
     pub(crate) generation: RwLock<()>,
+    pub(crate) active_requests: std::sync::atomic::AtomicUsize,
     locks: Mutex<BTreeMap<SkillIdentity, Weak<Mutex<()>>>>,
     managed: Mutex<BTreeSet<SkillIdentity>>,
 }
@@ -88,6 +92,7 @@ impl SkillSecService {
             config,
             registry,
             generation: RwLock::new(()),
+            active_requests: std::sync::atomic::AtomicUsize::new(0),
             locks: Mutex::new(BTreeMap::new()),
             managed: Mutex::new(managed),
         })
@@ -98,9 +103,38 @@ impl SkillSecService {
     /// # Errors
     /// Propagates unsafe existing key/state and persistence errors.
     pub fn initialize(&self) -> Result<Value, SkillSecError> {
-        let _generation = self.generation.write().map_err(|_| poisoned())?;
-        let key = KeyStore::open(&self.config.state_dir)?.initialize()?;
-        Ok(json!({"initialized":true,"keyFingerprint":key.fingerprint()}))
+        self.initialize_with_deadline(Instant::now() + Duration::from_secs(30))
+    }
+
+    /// Initializes keys within the caller deadline, without replacing current trust.
+    ///
+    /// # Errors
+    /// Rejects unsafe keys, pending rotation and exhausted deadlines.
+    pub fn initialize_with_deadline(&self, deadline: Instant) -> Result<Value, SkillSecError> {
+        {
+            let _generation = self.generation_read(deadline)?;
+            self.require_no_rotation(deadline)?;
+            match KeyStore::open(&self.config.state_dir)?.load() {
+                Ok(key) => {
+                    return Ok(
+                        json!({"initialized":true,"keyFingerprint":key.fingerprint(),"keyCreated":false}),
+                    );
+                }
+                Err(error) if missing(&error) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        // Release the read guard before acquiring exclusive access; another caller may create it.
+        let _generation = self.generation_write(deadline)?;
+        self.require_no_rotation(deadline)?;
+        let store = KeyStore::open(&self.config.state_dir)?;
+        let created = match store.load() {
+            Ok(_) => false,
+            Err(error) if missing(&error) => true,
+            Err(error) => return Err(error),
+        };
+        let key = store.initialize()?;
+        Ok(json!({"initialized":true,"keyFingerprint":key.fingerprint(),"keyCreated":created}))
     }
 
     /// Exact registered roots; registration never expands a parent into sibling Skills.
@@ -122,10 +156,10 @@ impl SkillSecService {
         &self.registry
     }
 
-    /// Scans staged bytes, rechecks live content and commits under the canonical Skill lock.
+    /// Validates scanner selection before initializing keys, then commits scanned staged bytes.
     ///
     /// # Errors
-    /// Rejects missing keys, unsafe paths, insufficient scan coverage, content changes and deadlines.
+    /// Rejects invalid selection, unsafe keys or paths, insufficient coverage, changes and deadlines.
     pub fn scan(
         &self,
         root: &SkillRoot,
@@ -133,6 +167,21 @@ impl SkillSecService {
         deadline: Instant,
     ) -> Result<Value, SkillSecError> {
         let requested = requested_names(options.scanners.as_deref())?;
+        let key = self.initialize_with_deadline(deadline)?;
+        Ok(with_key(
+            self.scan_selected(root, &requested, options.force, deadline)?,
+            &key,
+        ))
+    }
+
+    // Public operations validate selection before key changes; baseline reuses this per-Skill body.
+    fn scan_selected(
+        &self,
+        root: &SkillRoot,
+        requested: &[String],
+        force: bool,
+        deadline: Instant,
+    ) -> Result<Value, SkillSecError> {
         self.with_locked_root(root, deadline, |directory, key| {
             self.recover_rollback(root, directory, key, deadline)?;
             validate_skill(directory)?;
@@ -144,21 +193,19 @@ impl SkillSecService {
             let to_run: Vec<_> = requested
                 .iter()
                 .filter(|name| {
-                    options.force
-                        || new_version
-                        || !manifest.scans.iter().any(|s| &s.scanner == *name)
+                    force || new_version || !manifest.scans.iter().any(|s| &s.scanner == *name)
                 })
                 .cloned()
                 .collect();
             if to_run.is_empty() {
                 content.unchanged(directory, &original, deadline)?;
-                let mut result = self.noop(root, &manifest, &requested)?;
+                let mut result = self.noop(root, &manifest, requested)?;
                 result["activation"] = refresh_locked(&ledger, directory, key, root, deadline);
                 return Ok(result);
             }
             let (staging_dir, tree) =
                 content.scan_tree(&self.config.state_dir, &original, deadline)?;
-            let mut entries = self.registry.scan_tree(&tree, Some(&to_run), deadline)?;
+            let mut entries = self.registry.scan_tree(&tree, &to_run, deadline)?;
             if entries.is_empty() {
                 if new_version {
                     return Err(SkillSecError::Scanner(
@@ -191,7 +238,7 @@ impl SkillSecService {
         })
     }
 
-    /// Certifies an imported findings value against captured current content.
+    /// Validates imported findings before initializing keys and certifying captured content.
     ///
     /// # Errors
     /// Rejects invalid findings, keys, paths, changed content and expired execution deadlines.
@@ -204,7 +251,8 @@ impl SkillSecService {
         deadline: Instant,
     ) -> Result<Value, SkillSecError> {
         let parsed = self.registry.parse_external(scanner, findings)?;
-        self.with_locked_root(root, deadline, |directory, key| {
+        let key_status = self.initialize_with_deadline(deadline)?;
+        let result = self.with_locked_root(root, deadline, |directory, key| {
             self.recover_rollback(root, directory, key, deadline)?;
             validate_skill(directory)?;
             let ledger = required_ledger(directory)?;
@@ -232,7 +280,8 @@ impl SkillSecService {
             recovery_event(&mut result, state, "certify", &manifest, &scanners_run);
             result["activation"] = refresh_locked(&ledger, directory, key, root, deadline);
             Ok(result)
-        })
+        })?;
+        Ok(with_key(result, &key_status))
     }
 
     /// Returns none/pass/warn/deny/drifted/tampered without requiring a snapshot.
@@ -374,14 +423,8 @@ impl SkillSecService {
         deadline: Instant,
         operation: impl FnOnce(&Directory) -> Result<T, SkillSecError>,
     ) -> Result<T, SkillSecError> {
-        let generation = loop {
-            check_deadline(deadline)?;
-            match self.generation.try_read() {
-                Ok(lock) => break lock,
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(5)),
-                Err(TryLockError::Poisoned(_)) => return Err(poisoned()),
-            }
-        };
+        let generation = self.generation_read(deadline)?;
+        self.require_no_rotation(deadline)?;
         let lock = self.skill_lock(&root.identity)?;
         let _guard = timed_lock(&lock, deadline)?;
         if [root.identity.path(), root.io_dir.as_path()]
@@ -672,6 +715,8 @@ fn check_locked(
 }
 
 mod activation;
+mod administration;
+mod commands;
 mod display;
 mod rollback;
 use activation::refresh_locked;
