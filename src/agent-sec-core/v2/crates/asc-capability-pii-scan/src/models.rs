@@ -129,8 +129,14 @@ pub struct PiiFinding {
 /// Typed aggregation with additive evidence metadata under v1's summary key.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PiiSummary {
-    /// Number of retained findings.
+    /// Number of detected findings, including omitted response details.
     pub total: usize,
+    /// Response details were reduced; totals and scan coverage remain unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub findings_truncated: bool,
+    /// The full redacted text was replaced with an output-limit placeholder.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub redacted_text_omitted: bool,
     /// Counts by type.
     pub by_type: BTreeMap<String, usize>,
     /// Counts by category.
@@ -180,9 +186,15 @@ pub struct PiiScanReport {
     pub findings: Vec<PiiFinding>,
     /// Scan duration in whole milliseconds.
     pub elapsed_ms: u64,
-    /// Full redacted prefix, returned only on request and never audit-safe.
+    /// Redacted prefix or an explicit output-limit placeholder; never audit-safe.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redacted_text: Option<String>,
+}
+
+// Serde's skip_serializing_if predicate borrows the field.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Bounded, input-independent scan errors suitable for adapter projection.

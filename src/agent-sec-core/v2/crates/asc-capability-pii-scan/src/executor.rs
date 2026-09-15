@@ -1,6 +1,7 @@
 //! Adapt pure PII detection to the common action outcome without storing inputs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -11,8 +12,12 @@ use serde_json::{Map, Value};
 use crate::scanner::digest;
 use crate::{
     Coverage, CoverageStatus, PiiRuleSet, PiiScanReport, PiiScanRequest, PiiScanner, PiiSummary,
-    ScanError, ScanStatus, Verdict,
+    ScanError, ScanStatus, Severity, Verdict,
 };
+
+// Budget pretty JSON below the 4 MiB RPC frame and 1 MiB Hook stdout buffer.
+const REPORT_BYTES: usize = 512 * 1024;
+const OMITTED_TEXT: &str = "[REDACTED: output size limit]";
 
 /// Executes against the daemon's immutable startup rule collection.
 pub struct PiiScanExecutor {
@@ -31,6 +36,8 @@ impl PiiScanExecutor {
             verdict: Verdict::Error,
             summary: PiiSummary {
                 total: 0,
+                findings_truncated: false,
+                redacted_text_omitted: false,
                 by_type: BTreeMap::new(),
                 by_category: BTreeMap::new(),
                 by_severity: BTreeMap::new(),
@@ -73,6 +80,7 @@ impl CapabilityExecutor for PiiScanExecutor {
             .scan(&request.text, &request.options)
             .unwrap_or_else(|error| self.failed_report(request, error));
         report.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        bound_report(&mut report);
         let success = report.ok;
         ActionOutcome {
             success,
@@ -81,6 +89,55 @@ impl CapabilityExecutor for PiiScanExecutor {
             error_type: report.summary.error_type.clone().unwrap_or_default(),
             data: report_object(&report),
         }
+    }
+}
+
+fn bound_report(report: &mut PiiScanReport) {
+    if fits_report(report) {
+        return;
+    }
+    // Detection, totals and full-text redaction have already finished. Preserve
+    // one real finding per type/severity, including a deny even at the input tail.
+    let mut seen = BTreeSet::new();
+    let total = report.findings.len();
+    report.findings.retain(|finding| {
+        seen.insert((finding.pii_type.clone(), finding.severity == Severity::Deny))
+    });
+    report.summary.findings_truncated = report.findings.len() < total;
+    for finding in &mut report.findings {
+        if finding.raw_evidence.take().is_some() {
+            finding
+                .metadata
+                .insert("evidence_omitted".into(), Value::Bool(true));
+            report.summary.findings_truncated = true;
+        }
+    }
+    if !fits_report(report) && report.redacted_text.is_some() {
+        report.redacted_text = Some(OMITTED_TEXT.to_owned());
+        report.summary.redacted_text_omitted = true;
+    }
+    // At most 11 builtin and 100 custom types remain, with bounded type names,
+    // redacted evidence and detector-owned metadata. No input-sized field remains.
+    debug_assert!(fits_report(report));
+}
+
+fn fits_report(report: &PiiScanReport) -> bool {
+    serde_json::to_writer_pretty(SizeBudget(REPORT_BYTES), report).is_ok()
+}
+
+struct SizeBudget(usize);
+
+impl Write for SizeBudget {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_sub(bytes.len())
+            .ok_or_else(|| io::Error::other("report size limit"))?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
