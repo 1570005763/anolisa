@@ -886,3 +886,24 @@ Rust 响应仍保留公开 `requestId` UUID 和既有 result/error 结构。
 关闭 exporter 不关闭 carrier。
 兼容记录 OTEL-CR-001/002/005/006/007、执行 fixtures、直接消费者和回滚见
 [V2 OTel 验收](V2_OTEL_ACCEPTANCE_zh.md)。冻结 V1 运行时没有增加 OTel 依赖。
+
+## 14. [TARGET V2] SkillSec 第一阶段批准替代
+
+本节将 §6.12 中 `action.skill_ledger` 候选明确替换为 `action.skill_sec`，采用已落地 V2
+`{method,params}` 请求及 `{requestId,result|error}` envelope。普通 V1 RPC 不兼容；SkillFS
+HMAC/notify 单独在适配层保留，不扩大通用解析器接受字段。
+
+`params.command` 为封闭枚举：init/check/analyze/scan/certify/status/audit/list-scanners/
+decide/show/export/activate/rotate-keys。未知 command、未知字段和伪造 uid/ioDir 拒绝解析。
+每个方法按内核 peer credentials 鉴别本地用户；换钥和 forceKeys 进一步要求 UID 0，PAP 的
+policy-admin-uid 不赋予换钥权限。正常用户可操作全部受管 Skill，用户隔离留在领域配置 TODO。
+
+结果字段为 `success`、`exitCode`、`error`、`errorType`、`data`。方法解析失败仍为 daemon error；
+执行失败为正常 envelope 内的失败业务结果；风险判定不必带执行错误。CLI 只投影 data 与退出码。
+`timeoutMs` 为 1–120000，缺省 60000；只改变 SkillSec 的 dispatch 预算，其他方法不变。
+超时之后不得重放写请求，应通过 show/check 查明状态。大于 3 MiB 的业务响应改为明确
+ResponseTooLarge，注明 operationMayHaveCommitted；完整版本可用 export 读取。
+
+可执行合同：`v2/fixtures/skillsec/consumer.json`、`v2/apps/asc-cli/tests/skill_sec.rs`、
+`v2/crates/asc-daemon-handler/src/skill_sec.rs` 测试。样例覆盖正常、风险、未初始化、超时、
+执行失败与激活未完成，不能作为 Agent Hook 或真实 FUSE 联调证据。

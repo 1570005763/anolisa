@@ -1,4 +1,5 @@
 mod runtime_path;
+mod skill_sec;
 
 use runtime_path::RuntimeLease;
 
@@ -91,6 +92,13 @@ async fn run(
             return (ExitCode::FAILURE, None);
         }
     };
+    let skill_sec = match skill_sec::start(cli.skillsec_config.as_deref()) {
+        Ok(service) => service,
+        Err(error) => {
+            report_error(telemetry, &error);
+            return (ExitCode::FAILURE, None);
+        }
+    };
     let repository = Arc::new(ProcessLocalPapRepository::default());
     let (finalizer, event_sinks) = match event_finalizer(telemetry) {
         Ok(sinks) => sinks,
@@ -101,6 +109,16 @@ async fn run(
             return (ExitCode::FAILURE, None);
         }
     };
+    let actions = asc_daemon::skill_application(
+        finalizer,
+        asc_capability_skill_sec::executor::SkillSecExecutor::new(skill_sec.clone()),
+    );
+    if let Err(error) = skill_sec::recover(&skill_sec, &actions) {
+        report_error(telemetry, &error);
+        telemetry.report(
+            "agent-sec-daemon: SkillSec recovery is degraded; status and administrator retry remain available",
+        );
+    }
     let policy_runtime = match asc_daemon::start_policy_reconciliation(repository.clone()) {
         Ok(runtime) => Some(runtime),
         Err(error) => {
@@ -122,11 +140,7 @@ async fn run(
         cli.policy_admin_uids,
     ));
     let policy_for_handler: Arc<dyn PrincipalPolicy> = principal_policy.clone();
-    let dispatcher = Arc::new(DaemonDispatcher::new(
-        pap,
-        policy_for_handler,
-        asc_daemon::scan_application(finalizer),
-    ));
+    let dispatcher = Arc::new(DaemonDispatcher::new(pap, policy_for_handler, actions));
     telemetry
         .report("agent-sec-daemon: warning: PAP state is process-local and is lost on restart");
 
