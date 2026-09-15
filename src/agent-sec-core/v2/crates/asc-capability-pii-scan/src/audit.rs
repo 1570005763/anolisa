@@ -8,32 +8,10 @@ use crate::scanner::digest;
 use crate::{PiiScanReport, PiiScanRequest};
 
 const AUDIT_ERROR: &str = "pii_scan error details omitted from audit";
-const PARAMETER_ERROR: &str = "PII scan parameters are invalid";
 
 /// Projects only known, safe scan fields into the common terminal event.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PiiAuditProjector;
-
-impl PiiAuditProjector {
-    /// Safe failure projection when an authorized request cannot be decoded.
-    ///
-    /// No unvalidated parameters or parser exception text are retained. The
-    /// runtime supplies kernel identity and any independently normalized trace.
-    pub fn invalid_parameters() -> (Failure, AuditProjection) {
-        (
-            Failure {
-                error: Some(PARAMETER_ERROR.to_owned()),
-                error_type: "invalid_parameters".to_owned(),
-                exit_code: 1,
-            },
-            AuditProjection::Failed {
-                request: Map::new(),
-                error: PARAMETER_ERROR.to_owned(),
-                error_type: "invalid_parameters".to_owned(),
-            },
-        )
-    }
-}
 
 impl AuditProjector for PiiAuditProjector {
     type Request = PiiScanRequest;

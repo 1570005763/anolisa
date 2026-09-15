@@ -101,7 +101,7 @@ fn assert_private(event: &SecurityEvent) {
 }
 
 #[test]
-fn each_normal_partial_failed_and_rejected_call_has_one_terminal_event() {
+fn each_normal_partial_and_failed_call_has_one_terminal_event() {
     let sink = Arc::new(RecordingSink::default());
     let rules = Arc::new(PiiRuleSet::builtin().unwrap());
     let runtime = runtime(rules, sink.clone());
@@ -160,12 +160,8 @@ fn each_normal_partial_failed_and_rejected_call_has_one_terminal_event() {
             .is_empty()
     );
 
-    let (failure, projection) = PiiAuditProjector::invalid_parameters();
-    let rejected = runtime.reject(&attribution(), failure, projection);
-    assert!(!rejected.success);
-    assert_eq!(rejected.error_type, "invalid_parameters");
     let records = sink.0.lock().unwrap();
-    assert_eq!(records.len(), 4);
+    assert_eq!(records.len(), 3);
     for record in &records[..3] {
         assert_eq!(
             record.details["result"]["summary"]["scanner_version"],
@@ -181,7 +177,6 @@ fn each_normal_partial_failed_and_rejected_call_has_one_terminal_event() {
             EventResult::Succeeded,
             EventResult::Succeeded,
             EventResult::Failed,
-            EventResult::Failed,
         ]
     );
     assert_eq!(
@@ -189,7 +184,6 @@ fn each_normal_partial_failed_and_rejected_call_has_one_terminal_event() {
         TEXT.chars().count()
     );
     assert_eq!(records[0].details["request"]["agent_name"], "fixture-agent");
-    assert_eq!(records[3].details["request"], json!({}));
 }
 
 #[test]
@@ -312,4 +306,105 @@ fn real_sinks_persist_private_events_and_fail_independently_of_scanning() {
                 .any(|finding| finding.get("raw_evidence").and_then(Value::as_str) == Some(TOKEN))
         );
     }
+}
+
+#[test]
+fn bounded_report_keeps_tail_deny_totals_full_redaction_and_one_terminal_event() {
+    let sink = Arc::new(RecordingSink::default());
+    let runtime = runtime(Arc::new(PiiRuleSet::builtin().unwrap()), sink.clone());
+    let request = PiiScanRequest {
+        text: format!("{}\npassword=abcdefghijklmnop", "a@b.co ".repeat(20_000)),
+        options: PiiScanOptions {
+            redact_output: true,
+            ..Default::default()
+        },
+        agent_name: None,
+    };
+    let result = runtime
+        .invoke(&control(), &attribution(), &request)
+        .unwrap();
+    assert!(result.success);
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.data["verdict"], "deny");
+    let summary = &result.data["summary"];
+    assert_eq!(summary["total"], 20_001);
+    assert_eq!(summary["by_severity"], json!({"deny": 1, "warn": 20_000}));
+    assert_eq!(summary["findings_truncated"], true);
+    assert_eq!(summary["coverage"]["status"], "complete");
+    assert_eq!(summary["truncated"], false);
+    assert!(summary.get("redacted_text_omitted").is_none());
+    let findings = result.data["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2);
+    assert_eq!(findings.last().unwrap()["severity"], "deny");
+    let redacted = result.data["redacted_text"].as_str().unwrap();
+    assert_eq!(redacted.matches("a***@b.co").count(), 20_000);
+    assert!(!redacted.contains("abcdefghijklmnop"));
+    assert!(serde_json::to_vec_pretty(&result.data).unwrap().len() <= 512 * 1024);
+    let events = sink.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].details["result"]["summary"], *summary);
+    let audit = serde_json::to_string(&events[0]).unwrap();
+    assert!(!audit.contains("abcdefghijklmnop"));
+    assert!(!audit.contains("\"redacted_text\""));
+}
+
+#[test]
+fn oversized_single_raw_finding_retains_its_classification_without_raw_evidence() {
+    let rules = PiiRuleSet::from_yaml(
+        b"- type: large_secret\n  regex: 'BEGIN[A-Z]+END'\n  severity: deny\n",
+    )
+    .unwrap();
+    let request = PiiScanRequest {
+        text: format!("BEGIN{}END", "Q".repeat(600 * 1024)),
+        options: PiiScanOptions {
+            raw_evidence: true,
+            ..Default::default()
+        },
+        agent_name: None,
+    };
+    let outcome = PiiScanExecutor::new(Arc::new(rules)).execute(&control(), &request);
+    assert_eq!(outcome.data["verdict"], "deny");
+    assert_eq!(outcome.data["summary"]["total"], 1);
+    assert_eq!(outcome.data["summary"]["findings_truncated"], true);
+    let finding = &outcome.data["findings"][0];
+    assert_eq!(finding["severity"], "deny");
+    assert_eq!(finding["metadata"]["evidence_omitted"], true);
+    assert!(finding.get("raw_evidence").is_none());
+    assert!(serde_json::to_vec_pretty(&outcome.data).unwrap().len() <= 512 * 1024);
+}
+
+#[test]
+fn escaped_redacted_output_is_omitted_without_claiming_partial_scanning() {
+    let sink = Arc::new(RecordingSink::default());
+    let runtime = runtime(Arc::new(PiiRuleSet::builtin().unwrap()), sink.clone());
+    let request = PiiScanRequest {
+        // JSON escaping expands this 90 KB input beyond the output budget.
+        text: "\0".repeat(90_000),
+        options: PiiScanOptions {
+            redact_output: true,
+            ..Default::default()
+        },
+        agent_name: None,
+    };
+    let outcome = runtime
+        .invoke(&control(), &attribution(), &request)
+        .unwrap();
+    assert!(outcome.success);
+    assert_eq!(outcome.data["verdict"], "pass");
+    assert_eq!(outcome.data["summary"]["coverage"]["status"], "complete");
+    assert_eq!(outcome.data["summary"]["scanned_bytes"], 90_000);
+    assert_eq!(outcome.data["summary"]["redacted_text_omitted"], true);
+    assert!(outcome.data["summary"].get("findings_truncated").is_none());
+    assert_eq!(
+        outcome.data["redacted_text"],
+        "[REDACTED: output size limit]"
+    );
+    assert!(outcome.data["findings"].as_array().unwrap().is_empty());
+    let events = sink.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].details["result"]["summary"]["redacted_text_omitted"],
+        true
+    );
+    assert!(events[0].details["result"].get("redacted_text").is_none());
 }

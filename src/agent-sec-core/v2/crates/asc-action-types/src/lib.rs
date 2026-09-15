@@ -12,6 +12,9 @@ pub use pii::{PiiScanOptions, PiiScanRequest, Source};
 use serde_json::Map;
 use serde_json::Value;
 
+mod trace;
+pub use trace::ActionTraceContext;
+
 /// Identities supported by implemented action capabilities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionId {
@@ -54,7 +57,7 @@ pub struct CallerIdentity {
 
 /// Optional business-correlation fields carried by an action invocation.
 ///
-/// The current daemon protocol does not transport them, so the default is empty.
+/// These opaque V1 strings are not OpenTelemetry `TraceId` or `SpanId` values.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Correlation {
     /// Opaque v1-compatible trace correlation string.

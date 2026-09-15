@@ -86,6 +86,8 @@ impl PiiScanner {
             verdict,
             summary: PiiSummary {
                 total: findings.len(),
+                findings_truncated: false,
+                redacted_text_omitted: false,
                 by_type,
                 by_category,
                 by_severity,
