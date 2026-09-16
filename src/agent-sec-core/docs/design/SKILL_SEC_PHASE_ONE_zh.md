@@ -3,8 +3,8 @@
 [English](SKILL_SEC_PHASE_ONE.md)
 
 SkillSec 在一个 `asc-capability-skill-sec` crate 内拆分 Skill 扫描、内容完整性、
-版本存储和激活，由系统 daemon 中的 `SkillSecService` 编排。本文记录迁移合同和开发批次；
-标记为计划的内容不代表能力已实现。
+版本存储和激活，由系统 daemon 中的 `SkillSecService` 编排。本文记录迁移合同、开发批次
+及 Linux 验收边界。
 
 ## 交付与验收
 
@@ -15,16 +15,56 @@ daemon、CLI、SkillFS 和 Linux 部署。Agent Hook 实现、能力视图、Hoo
 
 | 批次 | 职责 | 实现状态 | 进入下一批前的验收 |
 | --- | --- | --- | --- |
-| 1 | 类型、canonical 身份、系统密钥、Integrity | 已实现，Linux 门禁通过 | 签名、篡改与重放拒绝，密钥权限，源目录与快照路径规则 |
-| 2 | Scanner 与 analyze | 已实现，Linux 验收通过 | V1 结果对照，选择与别名，覆盖不足，错误，不写账本 |
-| 3 | Ledger 与 Service | 已实现，Linux 验收通过 | 版本、补扫与强制扫描、快照、导出、串行化、扫描期间内容变化 |
-| 4 | Activation | 已实现，Linux 验收通过 | 决策、active/pending/hidden、回滚、发布失败与启动 reconcile |
-| 5 | daemon、CLI 与审计 | Linux 验收通过 | 真实 CLI 请求、输出和退出码、peer 身份、审计、超时、管理员换钥、消费者样例 |
-| 6 | SkillFS | Linux 验收通过 | 单 socket、HMAC notify/resolver、拒绝降级、真实 FUSE 效果、普通 IPC 回归 |
-| 7 | 部署 | 计划 | 源码与 RPM 安装、root systemd、普通本地用户调用、核心完整流程 |
+| 1 | 类型、canonical 身份、系统密钥、Integrity | 已有实现；本次 Linux 复验待完成 | 签名、篡改与重放拒绝，密钥权限，源目录与快照路径规则 |
+| 2 | Scanner 与 analyze | 已有实现；本次 Linux 复验待完成 | V1 结果对照，选择与别名，覆盖不足，错误，不写账本 |
+| 3 | Ledger 与 Service | 已有实现；本次 Linux 复验待完成 | 版本、补扫与强制扫描、快照、导出、串行化、扫描期间内容变化 |
+| 4 | Activation | 已有实现；本次 Linux 复验待完成 | 决策、active/pending/hidden、回滚、发布失败与启动 reconcile |
+| 5 | daemon、CLI 与审计 | 对齐代码已实现；Linux 验收待完成 | 真实 CLI 请求、输出和退出码、peer 身份、审计、超时、管理员换钥、消费者样例 |
+| 6 | SkillFS | 对齐代码已实现；Linux 验收待完成 | 单 socket、HMAC notify/resolver、拒绝降级、真实 FUSE 效果、普通 IPC 回归 |
+| 7 | 部署 | 部署配置已恢复；安装验收暂缓 | 源码与 RPM 安装、root systemd、普通本地用户调用、核心完整流程 |
 
 每批形成一个独立编译的逻辑 commit，同时包含测试和文档。本批引入的问题修回本批 commit。
 必须在 Linux 上验收；macOS 格式化或 manifest 检查不能替代构建与运行验收。
+
+## 公共执行与 OTel 对齐
+
+固定主干基线为 `4507cfb74ec39f6f264e8753a3eaf7715c7a83ee`，库 crate 统一使用
+`v2/crates/asc-*/`。本次重建保留七个业务批次，但 Linux 构建、逐提交编译和安装／FUSE
+验收均需重新执行。后文历史结果仅属于此前版本。测试机当前不可用，依赖测试机的验收暂缓，
+PR 保持 Draft；PII 合入后再进行 SkillSec 最终 rebase。
+
+```text
+CLI / RPC -> Handler -> ActionService -> ActionRuntime -> SkillSecExecutor -> SkillSecService
+SkillFS notify -> 认证队列 / worker -> ActionService
+启动恢复 ---------------------------> ActionService
+```
+
+`asc-action-types` 提供共享命令、canonical 身份和决策类型。执行请求仅包含业务命令和服务端
+注入的调用 UID，物理目录、句柄和密钥留在能力实现内。Handler 解析协议并投影响应；Executor
+通过窄的 `SkillEnvironment` 端口选择、解析目录，再由 Service 执行既有业务转换。认证映射
+不可用时不回退访问 FUSE 可见目录；沿用不可用根目录表示，保留聚合操作中的逐 Skill 错误。
+
+daemon 启动层统一组装 Service、Executor、Projector、Runtime 和共享 Finalizer。
+SkillFS 位于 `asc-daemon::skillfs`，复用现有 dispatcher/session 接口。启动顺序为准备 resolver
+与队列、注册 ActionService、执行恢复、启动 worker、开放 socket。Executor 只持有解析与健康
+查询资源，不持有包含 worker 的 bridge。配置、私有状态或 bridge 初始化及 worker 启动失败
+阻止准入；换钥恢复未完成时保留围栏，允许 status／管理员重试；单项 reconcile 失败记录诊断
+并继续其他项。
+
+普通请求沿用主干顶层 OTel carrier、兼容标签和 request scope。UID/GID/PID 来自内核；Agent
+baggage 仅用于关联，不授予权限。每个出队通知和启动恢复项建立独立 daemon Context；scan、
+activation 和 Busy 重试仍是不同执行调用。Runtime 对意外异常收尾一次后返回 `InvokeError`，
+入口不再写第二条终态。analyze 不写账本但记录调用审计。审计、telemetry、诊断共用公共
+Finalizer，保持既有 telemetry 字段白名单和各输出失败隔离。
+
+SkillFS 保持 HMAC／notify 消息合同。认证会话先于普通请求分流，仍使用有界五秒交互；普通
+SkillSec 执行默认 60 秒，上限 120 秒，其他方法沿用配置。关闭顺序为停止 UDS 准入并排空请求，
+并行等待 SkillFS（65 秒）与 PAP（30 秒），再关闭外层 Runtime、持久化 sinks 和 OTel。
+等待中的通知通过重启后扫描登记 Skill 恢复，不提供持久队列或 exactly-once 保证。
+
+Backing mount 先创建分离克隆，通过 `/proc/self/fd` 设为 private，再由 `move_mount` 发布，
+防止已运行 daemon 收到的副本被后续原位 FUSE 覆盖。daemon 无需新增挂载 capability；操作
+不支持或被拒绝时直接失败。本次重建仍须补验特权回归和真实 FUSE 效果。
 
 ## 保留的业务能力
 
@@ -242,7 +282,10 @@ CLI 的共享发现逻辑包括 `$XDG_DATA_HOME/anolisa/skills` 下的直接 Ski
 
 换钥持有全局代际写锁，写入私有 intent，撤销全部登记 Skill 的 activation 后才替换密钥。
 有未完成回滚时须先 reconcile。撤销失败保留旧密钥，并阻止普通账本操作，直到管理员重试或启动
-恢复成功。恢复发现指纹已经变化时，不会再次换钥。启动恢复经过公共 Action Runtime；单个 Skill
+恢复成功。intent 仅保存旧密钥指纹和 canonical Skill 身份；启动恢复、`rotate-keys` 和
+`init --force-keys` 在撤销前重新解析当前物理目录及 inode，Service 要求映射完整覆盖记录中的
+Skill 集合。解析失败保留 intent 和旧密钥，允许重试；指纹已经变化时无需再解析映射，只清理
+intent，不会再次换钥。启动恢复经过公共 Action Runtime；单个 Skill
 恢复失败可见，但不关闭其他 daemon 方法。
 
 公共 Finalizer/Sink 仅记录受控的 command、数量、判定状态、版本和执行错误类别；不包含原始
@@ -268,7 +311,7 @@ root daemon 回滚后，恢复的普通文件与目录归属于源 Skill 目录�
 
 ## 第六批 SkillFS 边界
 
-`asc-daemon-handler::skillfs` 负责兼容适配。通用 socket service 只增加可选的连接内会话接口，
+`asc-daemon::skillfs` 负责兼容适配。通用 socket service 只增加可选的连接内会话接口，
 并在帧之间保留缓冲区剩余字节。普通 V2 envelope 继续拒绝未知字段。认证会话只接受
 `skill_ledger.skillfs_notify_change`，不能调用 PAP 或其他 V1 方法。
 
@@ -328,9 +371,51 @@ daemon 同步恢复 rollback/latest/activation 后，重新安排全部显式注
 
 第六批测试覆盖冻结的 SkillFS HMAC 向量、同次读取中的多帧、错误密钥与 payload MAC、
 明文拒绝、source/live 身份、错误 resolver 映射、backing inode 被替换、daemon 启动补扫、
-扫描失败后的激活尝试和普通 V2 请求。合成 resolver 测试证明 IPC 合同；Linux 验收另外通过了
+扫描失败后的激活尝试和普通 V2 请求。合成 resolver 测试证明 IPC 合同；历史 Linux 验收（早于本次对齐）另外通过了
 V2 工作区门禁、SkillFS 工作区测试及按既有用例环境前提执行的定向复验，以及仓库真实 FUSE smoke。
 root 原地挂载和 UID 1001 普通挂载各完成 25 项真实 daemon/SkillFS 操作，覆盖认证通知与
 resolver、发布、错误身份/密钥/明文拒绝，以及仅重启 daemon 后的恢复。
 SkillFS Clippy 使用仓库固定的 Rust 1.86，V2 使用 Rust 1.93.1。这些是核心与 FUSE 结果，
 不代表 Agent Hook 或安装后的 systemd 验收。
+
+## 第七批：部署边界
+
+V2 `install-core-v2` 安装 Rust 二进制、root 系统 unit 和初始私有配置。
+V2 RPM 复用二进制与系统 unit 的安装目标，并使用 systemd 系统服务脚本宏。
+V1 保留原用户 unit。源码安装和 unit 均不启用 Agent Hook，也不导入 V1 状态。
+源码重装和 RPM 升级保留已有配置（`%config(noreplace)`）。签名密钥由业务操作初始化，安装过程不创建。
+
+系统 unit 管理 `/run/agent-sec-core`（0755）、`/var/lib/agent-sec/skillsec`（0700）和
+`/var/log/agent-sec`（0700），umask 为 0077。进程以 root 运行，仅保留 DAC override、CHOWN 和
+FOWNER capabilities，并保留 `NoNewPrivileges`、`SystemCallFilter=@system-service`、native syscall
+架构、`MemoryDenyWriteExecute` 和内核保护。HOME、`/tmp`、系统 Skill 根目录和
+共享挂载保持可访问，因为它们是支持的内容位置。daemon 不具有 SYS_ADMIN。
+systemd 测试容器所需的额外 namespace 管理能力属于测试运行环境，不属于产品服务权限。
+
+V2 CLI RPM 不再依赖 Python、GPG 或 loongshield；未改动的 Hook 子包保留各自依赖。
+仓库完整 RPM 配方仍构建插件包和 sandbox，OpenClaw 构建依赖要求 Node.js 22.14 或更新版本，
+V2 CI 使用 Node 22。`V2_CARGO_TARGET_DIR` 支持任务私有缓存，同时保留真实 release 构建流程。
+
+`tests/packaging/test-skillsec-install.sh` 使用真实构建产物，在临时 DESTDIR 检查配置保留、
+不自动激活或创建密钥，以及 V1 unit 隔离。安装后的 Python V2 E2E 使用独立状态和审计目录，
+并以普通 UID 验证 root daemon 的 PAP 权限拒绝。这些检查与实际 systemd 生命周期和真实
+FUSE 证据分别记录。
+[核心指南](../../../../docs/user-guide/zh/agent-security/agent-sec-core/skillsec-v2.md)
+提供源码/RPM 命令、共享卷要求及恢复匹配状态的升级回退步骤。
+
+历史交付验收（早于本次对齐）在 Alibaba Cloud Linux 4 x86_64 上通过。与主线系统 daemon 对齐后，源码
+安装套件通过 914 项，跳过 38 项（含构建容器没有 system manager 的用例）；RPM 安装套件
+通过 914 项、跳过 37 项，再单独通过修正后的 systemd 生命周期用例，共 915 项独立用例。
+两套均排除两项真实模型测试。其余 skip 涉及仅源码环境提供的规则库存/元数据及 telemetry；
+SkillSec、PAP 和 daemon 生命周期用例均已执行。
+这些测试无法调用 Python Ledger。RPM 来自仓库原配方，DNF 在正常依赖检查下安装核心及
+Skill 资源包；这是仓库构建产物的证据，不代表 GitHub CI 结果。
+
+原样的产品 unit 在真实 PID 1 systemd 255 下完成 45 项操作。有效及上界 capabilities 精确为
+CHOWN、DAC_OVERRIDE、FOWNER，并启用 `NoNewPrivileges`。UID 1001 可管理私有 HOME、
+`/tmp`、系统及共享卷 Skill；回滚后可继续编辑，换钥仅限 root，重启保留信任，公共审计不含
+敏感细节。包生命周期的 12 项检查通过：重装保留配置，卸载保存修改过的配置并保留私钥，
+恢复安装后信任和包校验保持有效。这验证 V2 包恢复，不代表 V1 降级或 Agent Hook 接入。
+system manager fixture 还验证产品的 75 秒强制停止期限及启动限流。由于 `/run` 可能为
+noexec，用例原位执行选定产物，仅在隔离测试 unit 注入非终止的停止信号，并验证真实的启动
+拒绝行为，避免依赖发行版相关的 `Result` 字符串。此前失败的 fixture 尝试单独保留。

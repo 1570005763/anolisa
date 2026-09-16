@@ -3,9 +3,9 @@
 [中文版](SKILL_SEC_PHASE_ONE_zh.md)
 
 SkillSec separates Skill scanning, content authentication, version storage and activation inside
-one `asc-capability-skill-sec` crate. `SkillSecService` will coordinate these modules in the
-system daemon. This document tracks the migration contract and implementation batches; a planned
-row is not evidence that the capability is already available.
+one `asc-capability-skill-sec` crate. `SkillSecService` coordinates these modules in the
+system daemon. This document records the migration contract, implementation batches and Linux
+acceptance boundaries.
 
 ## Delivery and acceptance
 
@@ -17,17 +17,66 @@ Phase-two policy integration is outside this PR.
 
 | Batch | Responsibility | Implementation | Acceptance required before the next batch |
 | --- | --- | --- | --- |
-| 1 | Types, canonical identity, system keys, Integrity | Implemented; Linux gates passed | Signature/tamper/replay checks, key permissions, source/snapshot path rules |
-| 2 | Scanner and analyze | Implemented; Linux gates passed | V1 result comparison, selection/aliases, incomplete coverage, errors, no Ledger writes |
-| 3 | Ledger and Service | Implemented; Linux gates passed | Versions, fill-in/force, snapshots, export, serialization, changes during scan |
-| 4 | Activation | Implemented; Linux gates passed | Decisions, active/pending/hidden, rollback, publish failure and startup reconcile |
-| 5 | daemon, CLI and audit | Linux acceptance passed | Real CLI requests, outputs/exit codes, peer identity, audit, deadlines, admin rotation, consumer fixtures |
-| 6 | SkillFS | Linux acceptance passed | One socket, authenticated notify/resolver, no downgrade, real FUSE effects, ordinary IPC regression |
-| 7 | Deployment | Planned | Source/RPM installation, root systemd service, local non-root callers, complete core workflow |
+| 1 | Types, canonical identity, system keys, Integrity | Preserved; Linux revalidation pending | Signature/tamper/replay checks, key permissions, source/snapshot path rules |
+| 2 | Scanner and analyze | Preserved; Linux revalidation pending | V1 result comparison, selection/aliases, incomplete coverage, errors, no Ledger writes |
+| 3 | Ledger and Service | Preserved; Linux revalidation pending | Versions, fill-in/force, snapshots, export, serialization, changes during scan |
+| 4 | Activation | Preserved; Linux revalidation pending | Decisions, active/pending/hidden, rollback, publish failure and startup reconcile |
+| 5 | daemon, CLI and audit | Alignment implemented; Linux validation pending | Real CLI requests, outputs/exit codes, peer identity, audit, deadlines, admin rotation, consumer fixtures |
+| 6 | SkillFS | Alignment implemented; Linux validation pending | One socket, authenticated notify/resolver, no downgrade, real FUSE effects, ordinary IPC regression |
+| 7 | Deployment | Packaging restored; installed acceptance deferred | Source/RPM installation, root systemd service, local non-root callers, complete core workflow |
 
 Each batch is one independently compiling logical commit with its tests and documentation.
 Failures introduced by a batch are fixed in that commit. Linux tests are required; macOS formatting
 or manifest inspection does not establish build or runtime acceptance.
+
+## Shared execution and OTel alignment
+
+The fixed main baseline is `4507cfb74ec39f6f264e8753a3eaf7715c7a83ee`. Library crates use
+`v2/crates/asc-*/`. The current reconstruction retains the seven business batches, but its Linux
+build, per-commit compilation and installed/FUSE acceptance must be repeated. Historical results
+below describe earlier revisions only. The test machine is unavailable; machine-dependent
+acceptance is deferred, and this PR remains Draft. PII integration precedes the final SkillSec rebase.
+
+```text
+CLI / RPC -> Handler -> ActionService -> ActionRuntime -> SkillSecExecutor -> SkillSecService
+SkillFS notify -> authenticated queue / worker -> ActionService
+Startup recovery ---------------------------> ActionService
+```
+
+`asc-action-types` owns the shared command, canonical identity and decision types. Invocation input
+contains only a command and a server-injected caller UID. Physical roots, handles and keys remain
+inside the capability. Handler decodes and projects responses; Executor selects and resolves roots
+through a narrow `SkillEnvironment` port before Service performs the existing domain transitions.
+An unavailable authenticated mapping never falls back to the visible FUSE tree. The existing
+unavailable-root representation preserves per-Skill errors in aggregate operations.
+
+The daemon composition root owns one Service, the executors, projectors, runtimes and shared
+Finalizer. SkillFS lives in `asc-daemon::skillfs`, using the existing dispatcher/session ports.
+Startup prepares resolver and queue resources, registers ActionService, runs recovery, starts the
+worker, then opens the socket. The Executor retains resolver/health resources, not the worker bridge.
+Configuration, private-state or bridge initialization and worker-start failures prevent admission.
+Unfinished rotation recovery retains its fence and permits status/admin retry; individual reconcile
+failures are diagnosed while other items continue.
+
+Ordinary requests use main's top-level OTel carrier, compatibility labels and request scope.
+UID/GID/PID come from kernel credentials; Agent baggage is correlation metadata, never authority.
+Each dequeued notification or startup recovery item starts a fresh daemon Context. Scan, activation
+and Busy retries remain separate invocations. Runtime finalizes an unexpected execution failure once
+before returning `InvokeError`; entries do not emit a second terminal record. Analyze remains
+Ledger-read-only while producing invocation audit. Audit, telemetry and diagnostics share the public
+Finalizer, with the existing telemetry field allowlist and independent output-failure handling.
+
+SkillFS keeps its HMAC/notify wire contract. Authentication is selected before ordinary dispatch and
+retains its bounded five-second exchange; the SkillSec execution override remains 60 seconds by
+default, capped at 120 seconds. Other methods retain their configured limits. Shutdown stops UDS
+admission and drains requests, joins SkillFS (65 seconds) and PAP (30 seconds) in parallel, then closes
+the outer runtime, durable sinks and OTel. Waiting notifications are recovered from registered Skills
+on restart; this is not a durable queue or an exactly-once guarantee.
+
+Backing mounts are cloned while detached, made private through `/proc/self/fd`, then published with
+`move_mount`. This protects copies received by an already running daemon from later in-place FUSE
+over-mounts. The daemon gains no mount capability. Unsupported/denied operations fail closed.
+The privileged regression and real FUSE verification remain required for the reconstructed source.
 
 ## Preserved business capabilities
 
@@ -299,7 +348,11 @@ Rotation takes the service generation write lock, records a private intent, and 
 registered exposure before replacing the key. A pending rollback must first reconcile. A failed
 withdrawal retains the old key and fences ordinary Ledger operations until administrator retry or
 startup recovery succeeds. A changed fingerprint during recovery proves replacement already
-committed and prevents a second rotation. Startup recovery uses the public Action Runtime; failed
+committed and permits intent cleanup without resolving mappings or rotating again. The intent stores
+only the previous fingerprint and canonical Skill identities. Startup, `rotate-keys`, and
+`init --force-keys` resolve current physical mappings and inodes again before withdrawal; the service
+requires exactly the recorded Skill set. Resolver failure retains the intent and old key for retry.
+Startup recovery uses the public Action Runtime; failed
 Skill recovery is visible without disabling unrelated daemon methods.
 
 The public Finalizer/Sink receives controlled command, counts, verdict/status, version and execution
@@ -315,7 +368,7 @@ no committed mutation is undone. Findings import is bounded to 2 MiB.
 `v2/fixtures/skillsec/consumer.json` records normal, risk, uninitialized, timeout, execution-error
 and incomplete-activation examples. CLI rendering tests consume these examples; runtime and real
 CLI tests independently exercise execution, caller identity, rotation and safe audit. They do not
-establish Agent Hook integration or SkillFS effects. Linux batch-five acceptance passed strict
+establish Agent Hook integration or SkillFS effects. Historical batch-five acceptance (before the current alignment) passed strict
 workspace Clippy, all workspace tests and rustdoc. The cross-UID CLI workflow runs with normal
 root DAC permissions; other permission-sensitive cases retain reduced DAC. A separate daemon
 binary and CLI completed 25 operations, including restart, rotation, ordinary-user export, PAP,
@@ -327,7 +380,7 @@ stripped. The cross-UID CLI workflow verifies rollback followed by a real user w
 
 ## Batch six: SkillFS boundary
 
-`asc-daemon-handler::skillfs` owns the compatibility adapter. The generic socket service only adds
+`asc-daemon::skillfs` owns the compatibility adapter. The generic socket service only adds
 an optional connection-local session port and retains buffered bytes between frames. The normal
 V2 envelope remains closed to unknown fields. Authenticated sessions accept only
 `skill_ledger.skillfs_notify_change`; they cannot dispatch PAP or arbitrary V1 methods.
@@ -399,10 +452,61 @@ of original notification order.
 Batch-six tests cover frozen SkillFS HMAC vectors, coalesced wire frames, wrong keys and payload
 MACs, plaintext rejection, source/live identity, false resolver mappings, replaced backing
 inodes, daemon startup rescan, activation after scan errors and normal V2 calls. The synthetic
-resolver tests establish the IPC contract. Linux acceptance additionally passed V2 workspace gates,
+resolver tests establish the IPC contract. Historical acceptance (before the current alignment) additionally passed V2 workspace gates,
 SkillFS workspace tests with targeted retries under the existing tests' environment assumptions,
 and the repository's real FUSE smoke. The root in-place mount and UID-1001 ordinary mount each
 completed 25 real daemon/SkillFS operations, including authenticated notify/resolver, publication,
 invalid identity/key/plaintext rejection and daemon-only restart recovery. SkillFS Clippy used the
 repository's pinned Rust 1.86; V2 used Rust 1.93.1. These are core/FUSE results, not Agent Hook or
 installed-systemd acceptance.
+
+## Batch seven: deployment boundary
+
+V2 `install-core-v2` installs the Rust binaries, root system unit and initial private configuration.
+The V2 RPM shares the binary and system-unit installation targets and uses systemd system-service
+scriptlets. V1 retains its original user unit. Neither source installation nor the unit enables
+Agent Hooks or imports V1 state. Existing operator settings survive source reinstallation and RPM
+upgrade (`%config(noreplace)`). The signing key is created by a business operation, not installation.
+
+The system unit owns `/run/agent-sec-core` (0755), `/var/lib/agent-sec/skillsec` (0700) and
+`/var/log/agent-sec` (0700), with umask 0077. It runs as root with only DAC override, CHOWN and
+FOWNER capabilities, `NoNewPrivileges`, `SystemCallFilter=@system-service`, native syscall
+architecture, `MemoryDenyWriteExecute` and kernel protections. HOME, `/tmp`, system Skill roots
+and shared mounts remain accessible because these are supported content locations. The daemon
+does not receive SYS_ADMIN. A systemd test container's separate namespace-management capability
+is a test-runtime requirement, not part of the product service's capability set.
+
+The V2 CLI RPM no longer depends on Python, GPG or loongshield; unchanged Hook packages retain
+their own dependencies. The full repository RPM recipe still builds those plugin packages and
+the sandbox. Its OpenClaw build dependency requires Node.js 22.14 or later; V2 CI uses Node 22.
+`V2_CARGO_TARGET_DIR` allows a task-owned cache while preserving the real release-build path.
+
+`tests/packaging/test-skillsec-install.sh` checks real built binaries in a temporary DESTDIR,
+configuration preservation, absence of automatic activation/key creation and V1 unit isolation.
+The installed Python V2 E2E fixtures isolate daemon state/audit and exercise ordinary-UID PAP
+denial against a root process. These checks remain distinct from actual systemd lifecycle and
+real FUSE evidence. The
+[core guide](../../../../docs/user-guide/en/agent-security/agent-sec-core/skillsec-v2.md) gives
+source/RPM commands, shared-volume requirements and state-matched upgrade/rollback instructions.
+
+Historical delivery acceptance (before the current alignment) passed on Alibaba Cloud Linux 4, x86_64. After alignment with the upstream system daemon, the
+source-installed suite passed 914 tests, with 38 skips including the unavailable system manager.
+The RPM suite passed 914 tests with 37 skips; its corrected systemd lifecycle case passed separately,
+for 915 unique installed cases. Both exclude two real-model cases. The other skips concern
+source-only rule inventory/metadata and telemetry;
+SkillSec, PAP and daemon lifecycle cases ran. Python Ledger was unavailable to these suites.
+The repository recipe produced the RPMs, and DNF installed the core and Skill resources with
+normal dependency checks. This is repository-built artifact evidence, not a GitHub CI result.
+
+The unchanged product unit completed 45 operations under actual PID 1 systemd 255. Its effective
+and bounding capabilities were exactly CHOWN, DAC_OVERRIDE and FOWNER, with `NoNewPrivileges`.
+UID 1001 managed private HOME, `/tmp`, system and shared-volume Skills; rollback remained editable,
+rotation stayed root-only, restart retained trust, and public audit omitted sensitive details.
+Twelve package lifecycle checks passed: reinstallation retained configuration, removal saved
+modified configuration and retained the private key, and restoration preserved trust and package
+verification. This verifies V2 package recovery, not a V1 downgrade or Agent Hook integration.
+
+The system-manager fixture also verifies the shipped 75-second forced-stop deadline and startup
+rate limit. It uses the selected executable in place because `/run` may be noexec, injects a
+non-terminating stop signal only in the isolated test unit, and checks actual admission rejection
+instead of a distribution-specific `Result` string. Earlier failed fixture attempts remain recorded.

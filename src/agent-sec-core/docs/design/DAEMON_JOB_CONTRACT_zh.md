@@ -539,7 +539,7 @@ SkillFS notify 驱动的后台合并队列、重试、shutdown、健康与实际
 ## SkillSec 第一阶段落地边界
 
 上述 Python Job 和早期 Rust 建议由第一阶段的具体实现收口：当前使用一个进程内 worker，
-共享 `SkillSecService`、Action Runtime 和公共 Finalizer。没有另建 Python 子进程协议或
+通过同一个 `ActionService` 复用 `SkillSecService`、Action Runtime 和公共 Finalizer。没有另建 Python 子进程协议或
 通用 Job 调度器。每项变更分别执行 scan 和 activation，前者失败也会尝试后者；业务错误不
 自动重放，仅执行前的 `Busy` 在同一有界期限内重试。
 
@@ -553,6 +553,6 @@ SkillFS notify 驱动的后台合并队列、重试、shutdown、健康与实际
 running、processed、failed、lastError；各次 Action 使用公共审计记录，未增加独立 Job
 trace-ID 或第二套审计输出。worker 意外退出时关闭队列准入，`healthy=false`、`running=false`，
 要求重启 daemon；不会继续确认无法处理的通知。可执行异常退出证据为
-`asc-daemon-handler/src/skillfs/worker.rs::unwinding_worker_closes_admission_and_reports_failed_health`。
+`apps/asc-daemon/src/skillfs/worker.rs::unwinding_worker_closes_admission_and_reports_failed_health`。
 具体模块与验收边界见
 [SkillSec 第一阶段迁移](SKILL_SEC_PHASE_ONE_zh.md#第六批-skillfs-边界)。
