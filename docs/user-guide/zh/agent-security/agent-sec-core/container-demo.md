@@ -2,7 +2,7 @@
 
 [English](../../../en/agent-security/agent-sec-core/container-demo.md)
 
-**谁动了我的 Skill？** 工作人员完成一次准备和预演，参与者使用已就绪的窗口体验 Skill 的 `pass → drifted → deny`。对外只需转发[这个入口页](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910.1)。
+**谁动了我的 Skill？** 工作人员完成一次准备和预演，参与者使用已就绪的窗口体验 Skill 的 `pass → drifted → deny`。安装文件、镜像和文档统一由同一个 Release 提供。对外只需转发[这个入口页](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260910.1)。
 
 **现场使用 Windows 台式机、ECS 提供环境时**：工作人员先完成 [WSL 与 SSH 准备](container-demo-ssh.md#windows)，再[提前准备 ECS](container-demo-ssh.md#prestage)。现场打开 A/B/C 后，参与者直接使用操作卡；Windows 无需安装 Docker 或 Qoder CLI。
 
@@ -17,16 +17,16 @@
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/install.sh -o install.sh && bash install.sh
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/install-20260916.1.sh -o install.sh && bash install.sh
 ```
 
-Windows 请先进入 WSL Ubuntu 的 `~/agentseccore-client`，再执行下面的 ECS 命令；已保存连接器时直接运行 `bash ecs-demo.sh user@ecs-host`。
+Windows 请先进入 WSL Ubuntu 的 `~/agentseccore-client`，再执行下面的 ECS 命令。首次准备或更新交付版本时重新下载连接器，此后直接运行 `bash ecs-demo.sh user@ecs-host`。
 
 从本机连接 ECS：将 `user@ecs-host` 替换为实际地址或 SSH 别名。
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo-20260916.1.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host
 ```
 
@@ -37,7 +37,7 @@ curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
 | 工作人员：完成登录、预演和交接 | [准备指南](container-demo.md#staff) |
 | 工作人员：配置 ECS 窗口或排查 SSH | [ECS 指南](container-demo-ssh.md) |
 | 参与者：开始五步体验 | [Markdown 操作卡](container-demo-card.md) |
-| 工作人员：下载离线包 | [本版全部文件](https://github.com/1570005763/anolisa/releases/tag/agentseccore-demo-20260914.1) |
+| 工作人员：下载离线包 | [离线包](https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/agentseccore-demo-linux-amd64-20260916.1.tar.gz) |
 
 一个宿主机运行一个实例，参与者轮流使用。Chrome 查看安全事件；ECS 模式只需 SSH 隧道，无需开放 AgentSight 公网端口。Docker 由工作人员预装，脚本不会修改系统安装；缺项时参考 [Docker 官方安装说明](https://docs.docker.com/engine/install/)及单位的机器管理要求。
 
@@ -96,18 +96,18 @@ PAT 是 Qoder 账号令牌，不是模型供应商 API Key。原生登录状态�
 
 ### 4. 离线镜像与排查
 
-从本版文件页下载离线包及 `SHA256SUMS`，带到容器宿主机同一目录，执行：
+从本版文件页下载离线包及 `SHA256SUMS-20260916.1`，带到容器宿主机同一目录，执行：
 
 ```bash
-sha256sum --check --ignore-missing SHA256SUMS && \
-  tar -xzf agentseccore-demo-linux-amd64-20260914.1.tar.gz -C "$HOME"
+sha256sum --check --ignore-missing SHA256SUMS-20260916.1 && \
+  tar -xzf agentseccore-demo-linux-amd64-20260916.1.tar.gz -C "$HOME"
 cd "$HOME/agentseccore-demo" && ./demo.sh up && ./demo.sh doctor
 ```
 
 仅在默认安装目录尚不存在时解压；已有当前版环境时，只将已校验离线包中的 `image.tar.gz` 放进该目录，再运行 `./demo.sh up`。两种来源准备好后使用相同命令，ECS 也继续使用同一个连接器。离线包只解决镜像交付，登录和模型调用仍需网络。
 
 - **拉取失败**：恢复网络后重试；已有正确镜像不需要访问 GHCR。
-- **文件校验失败**：停止使用被修改的安装文件，排查原因。安装器只接受当前版或已知未修改的 `20260911.1`，更新时保留私密配置、离线镜像和数据卷，成功后清理临时文件。
+- **文件校验失败**：停止使用被修改的安装文件，排查原因。安装器只接受当前版或已知未修改的 `20260911.1`、`20260914.1`，更新时保留私密配置、离线镜像和数据卷，成功后清理临时文件。
 - **登录失效**：由工作人员在 A 重新 `/login`；已有 `demo.env` 的 PAT 会优先于原生登录，切换原生登录前须从该私密文件移除 PAT，再 `down`、`up`。
 - **未出现 Skill 调用**：按操作卡 `/clear` 后仅重试一次；直接 `Read` 不能算通过。
 - **找不到新事件**：在 Chrome 重新选择 `Last 1h` 后点击 `Query`。

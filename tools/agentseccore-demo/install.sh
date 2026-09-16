@@ -16,7 +16,7 @@ install_demo() {
     install_dir=${1:-"$HOME/agentseccore-demo"}
     [[ -n "$install_dir" && ! -L "$install_dir" ]] || die 'Choose a non-symlink installation directory.'
     [[ ! -e "$install_dir" || -d "$install_dir" ]] || die 'The installation path is an existing file.'
-    release=agentseccore-demo-__VERSION__
+    release=__RELEASE_TAG__
     asset=agentseccore-demo-starter-linux-amd64-__VERSION__.tar.gz
     expected_sha256=__STARTER_SHA256__
     [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]] || die 'Use install.sh from the published GitHub Release; the source is a packaging template.'

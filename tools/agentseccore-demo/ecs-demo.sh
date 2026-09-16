@@ -41,7 +41,7 @@ if [[ "$current" == false ]]; then
             trap 'rm -rf -- "$temporary"' EXIT
             curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
                 --retry 3 --connect-timeout 15 --max-time 180 \
-                https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-__VERSION__/install.sh \
+                https://github.com/1570005763/anolisa/releases/download/__RELEASE_TAG__/install-__VERSION__.sh \
                 --output "$temporary/install.sh"
             printf '%s  %s\n' __INSTALLER_SHA256__ "$temporary/install.sh" | sha256sum --check
             bash "$temporary/install.sh" "$directory"

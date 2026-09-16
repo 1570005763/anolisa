@@ -85,13 +85,15 @@ def main() -> None:
             assert (
                 not list(installation.rglob(".auth")) and not (installation / "demo.env").exists()
             )
-        connector = (output / "ecs-demo.sh").read_text()
-        installer = (output / "install.sh").read_text()
+        connector = (output / f"ecs-demo-{package.VERSION}.sh").read_text()
+        installer = (output / f"install-{package.VERSION}.sh").read_text()
         assert all(value in connector and value in installer for value in manifests)
-        assert package.digest(output / "install.sh") in connector
+        assert package.digest(output / f"install-{package.VERSION}.sh") in connector
         assert "__VERSION__" not in installer
+        assert f"releases/download/{package.RELEASE_TAG}/install-{package.VERSION}.sh" in connector
+        assert f"release={package.RELEASE_TAG}" in installer
         subprocess.run(
-            ["sha256sum", "--check", "SHA256SUMS"],
+            ["sha256sum", "--check", f"SHA256SUMS-{package.VERSION}"],
             cwd=output,
             check=True,
             stdout=subprocess.DEVNULL,
@@ -117,28 +119,20 @@ def main() -> None:
         commit = "a" * 40
         files = sorted(p for p in output.iterdir() if p.is_file())
         assets = [{"name": p.name, "digest": "sha256:" + package.digest(p)} for p in files]
+        assets += [
+            {"name": "image.tar.gz", "digest": "sha256:" + package.IMAGE_SHA256},
+            {"name": "install-20260914.1.sh", "digest": "sha256:" + "1" * 64},
+        ]
         calls = []
+        refs = []
 
         def fake_gh(*args: str) -> str:
             calls.append(args)
-            if args[0] == "api" and "/releases?" in args[1]:
-                return json.dumps(
-                    [
-                        {
-                            "tag_name": f"agentseccore-demo-{package.VERSION}",
-                            "assets": assets,
-                        }
-                    ]
-                )
+            if args[0] == "api" and "/releases/tags/" in args[1]:
+                assert args[1].endswith("/" + package.RELEASE_TAG)
+                return json.dumps({"tag_name": package.RELEASE_TAG, "assets": assets})
             if args[0] == "api" and "/git/matching-refs/" in args[1]:
-                return json.dumps(
-                    [
-                        {
-                            "ref": f"refs/tags/agentseccore-demo-{package.VERSION}",
-                            "object": {"sha": commit},
-                        }
-                    ]
-                )
+                return json.dumps(refs)
             return ""
 
         saved_gh, old_argv = publish.gh, sys.argv
@@ -147,6 +141,19 @@ def main() -> None:
         try:
             publish.main()
             assert not any(c[:2] == ("release", "upload") for c in calls)
+            assert not any(c[:2] == ("release", "create") for c in calls)
+            assert any(f"ref=refs/tags/agentseccore-demo-{package.VERSION}" in c for c in calls)
+            removed = [c[3] for c in calls if c[:2] == ("release", "delete-asset")]
+            assert removed == ["install-20260914.1.sh"]
+            assert next(i for i, c in enumerate(calls) if c[:2] == ("release", "edit")) < next(
+                i for i, c in enumerate(calls) if c[:2] == ("release", "delete-asset")
+            )
+            refs.append(
+                {
+                    "ref": f"refs/tags/agentseccore-demo-{package.VERSION}",
+                    "object": {"sha": commit},
+                }
+            )
             calls.clear()
             assets[0]["digest"] = "sha256:" + "0" * 64
             try:
@@ -155,7 +162,7 @@ def main() -> None:
                 assert "Refusing to replace" in str(error)
             else:
                 raise AssertionError("Publisher replaced conflicting content")
-            assert not any(c[:2] in (("release", "upload"), ("release", "edit")) for c in calls)
+            assert not any(c[0] == "release" or "POST" in c for c in calls)
         finally:
             publish.gh, sys.argv = saved_gh, old_argv
     print(

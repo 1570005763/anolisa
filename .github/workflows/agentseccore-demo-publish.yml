@@ -23,7 +23,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release download agentseccore-demo-20260910 --repo "$GITHUB_REPOSITORY" \
+          release_tag=$(python3 -c 'import sys; sys.path.insert(0, "tools/agentseccore-demo"); from package import RELEASE_TAG; print(RELEASE_TAG)')
+          gh release download "$release_tag" --repo "$GITHUB_REPOSITORY" \
             --pattern image.tar.gz --dir "$RUNNER_TEMP"
           python3 - <<'PY'
           import os, pathlib, sys

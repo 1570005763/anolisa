@@ -53,6 +53,7 @@ def check_install(root: pathlib.Path) -> None:
             .read_text()
             .replace("__STARTER_SHA256__", hashlib.sha256(starter.read_bytes()).hexdigest())
             .replace("__VERSION__", "fixture")
+            .replace("__RELEASE_TAG__", "fixture-release")
             .replace("__CURRENT_MANIFESTS__", current_manifest)
             .replace("__SUPPORTED_MANIFESTS__", current_manifest + "|" + old_manifest)
         )

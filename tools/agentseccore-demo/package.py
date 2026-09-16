@@ -11,13 +11,16 @@ import shutil
 import tarfile
 import tempfile
 
-VERSION = "20260914.1"
+VERSION = "20260916.1"
 REPOSITORY = "1570005763/anolisa"
+RELEASE_TAG = "agentseccore-demo-20260910.1"
 IMAGE_SHA256 = "750ad2e3bb66d3d11a146370e99be93c4917f95edfb8e7fcba046139980b5495"
 IMAGE_REFERENCE = "ghcr.io/1570005763/agentseccore-demo@sha256:3994fdfbe477ade58937f13bc76263cf174450b6f734b0aa7b462074e0424319"
 PREVIOUS_MANIFESTS = (
     "f3c820caba596098dfe6f67d56ac2066d1ed692253586a08b758bd876d40ed6d",
     "e53da378f578295819298c538f3a0eee43910af0234774af81274eac83797066",
+    "502278f2cc56a6635ce701bbc04da9676c14fb1a157be84b114958ba62048652",
+    "6135d77dd6bbb65584dd71a0fa164c07c14a1aae7cfa0558110a0e9f402438d0",
 )
 
 
@@ -89,11 +92,13 @@ def main() -> None:
             destination.mkdir(parents=True)
             for filename, kind in names.items():
                 document = (directory / filename).read_text()
-                versions = re.findall(r"releases/download/agentseccore-demo-([0-9.]+)/", document)
-                versions += re.findall(
+                releases = re.findall(r"releases/download/([^/]+)/", document)
+                assert all(tag == RELEASE_TAG for tag in releases), "Use the single release"
+                versions = re.findall(
                     r"agentseccore-demo-(?:starter-)?linux-amd64-([0-9.]+)\.tar\.gz",
                     document,
                 )
+                versions += re.findall(r"(?:install|ecs-demo)-([0-9.]+)\.sh", document)
                 assert all(
                     version == VERSION for version in versions
                 ), "Update documented release commands"
@@ -117,9 +122,9 @@ def main() -> None:
                         f"]({public}/{language}/agent-security/agent-sec-core/{target}",
                     )
                 suffix = "_zh" if language == "zh" else ""
-                (args.output / f"agentseccore-demo-{kind}{suffix}.md").write_text(online)
+                (args.output / f"agentseccore-demo-{kind}-{VERSION}{suffix}.md").write_text(online)
                 if kind == "guide" and language == "zh":
-                    (args.output / "release-notes.md").write_text(
+                    (args.output / f"release-notes-{VERSION}.md").write_text(
                         online.split("<!-- release-entry-end -->", 1)[0]
                     )
         (bundle / "README.md").write_text(
@@ -140,21 +145,24 @@ def main() -> None:
         current = "|".join((starter_manifest, offline_manifest))
         values = {
             "VERSION": VERSION,
+            "RELEASE_TAG": RELEASE_TAG,
             "STARTER_SHA256": digest(starter),
             "CURRENT_MANIFESTS": current,
             "SUPPORTED_MANIFESTS": "|".join((current, *PREVIOUS_MANIFESTS)),
         }
-        installer = args.output / "install.sh"
+        installer = args.output / f"install-{VERSION}.sh"
         installer.write_text(render((source / "install.sh").read_text(), values))
         values["INSTALLER_SHA256"] = digest(installer)
-        (args.output / "ecs-demo.sh").write_text(
+        (args.output / f"ecs-demo-{VERSION}.sh").write_text(
             render((source / "ecs-demo.sh").read_text(), values)
         )
         for name in ("install.sh", "ecs-demo.sh"):
-            (args.output / name).chmod(0o755)
+            (args.output / f"{pathlib.Path(name).stem}-{VERSION}.sh").chmod(0o755)
         shutil.copy2(bundle / "image.ref", args.output / "image.ref")
     files = sorted(p for p in args.output.iterdir() if p.is_file())
-    (args.output / "SHA256SUMS").write_text("".join(f"{digest(p)}  {p.name}\n" for p in files))
+    (args.output / f"SHA256SUMS-{VERSION}").write_text(
+        "".join(f"{digest(p)}  {p.name}\n" for p in files)
+    )
     print(json.dumps({p.name: p.stat().st_size for p in files}, indent=2))
 
 

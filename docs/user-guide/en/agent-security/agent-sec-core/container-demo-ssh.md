@@ -85,7 +85,7 @@ Download the connector on the preparation client and prepare services first:
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo-20260916.1.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host prepare
 ```
 
@@ -99,7 +99,7 @@ Run in **local terminal A**, replacing `user@ecs-host` with the actual address o
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo-20260916.1.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host
 ```
 

@@ -85,7 +85,7 @@ ssh agentseccore-demo-ecs 'uname -sm; docker --host unix:///var/run/docker.sock 
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo-20260916.1.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host prepare
 ```
 
@@ -99,7 +99,7 @@ Windows 在 WSL Ubuntu 的 `~/agentseccore-client` 中操作。连接器已下�
 
 ```bash
 curl -fSL --retry 3 --connect-timeout 15 --max-time 180 \
-  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260914.1/ecs-demo.sh -o ecs-demo.sh && \
+  https://github.com/1570005763/anolisa/releases/download/agentseccore-demo-20260910.1/ecs-demo-20260916.1.sh -o ecs-demo.sh && \
   bash ecs-demo.sh user@ecs-host
 ```
 
