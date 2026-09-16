@@ -21,3 +21,6 @@ pub use reconciliation::{
 };
 pub use runtime::{RuntimeError, run_with_shutdown_timeout};
 pub use signals::{ProcessSignals, SignalError};
+
+/// Authenticated `SkillFS` integration owned by the daemon process.
+pub mod skillfs;

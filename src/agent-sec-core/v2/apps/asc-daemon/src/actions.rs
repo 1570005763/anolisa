@@ -16,7 +16,7 @@ pub fn scan_application(finalizer: Finalizer) -> Arc<ActionService> {
     )))
 }
 
-/// Registers SkillSec and Code Scan against the same process-owned lifecycle outputs.
+/// Registers `SkillSec` and Code Scan against the same process-owned lifecycle outputs.
 #[must_use]
 pub fn skill_application(
     finalizer: Finalizer,
