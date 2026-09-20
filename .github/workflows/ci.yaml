@@ -696,6 +696,10 @@ jobs:
         working-directory: src/agentsight/dashboard
         run: npm run test:i18n
 
+      - name: Run dashboard navigation regression
+        working-directory: src/agentsight/dashboard
+        run: npm run test:navigation
+
       - name: Install eBPF build dependencies
         run: |
           sudo apt-get update
