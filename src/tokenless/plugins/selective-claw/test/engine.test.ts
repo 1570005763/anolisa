@@ -216,6 +216,52 @@ describe("SelectiveContextEngine", () => {
   });
 
   describe("reconcile via assemble", () => {
+    it("does not reimport a replacement across lifecycle calls or engine restart", async () => {
+      const original: AgentMessage[] = [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "thinking" },
+        { role: "user", content: "q2" },
+        { role: "assistant", content: "a2" },
+        { role: "user", content: "q3" },
+        { role: "assistant", content: "a3" },
+      ];
+      const replaced = original.map((message, index) => index === 1 ? { role: "assistant", content: "final answer" } : message);
+      engine.setSummarizeFn(async () => "saved summary");
+      await engine.assemble({ sessionId: "s1", messages: original });
+      await engine.assemble({ sessionId: "s1", messages: replaced });
+      const store = engine.getStore();
+      const archived = store.getMessages("s1");
+      expect(archived).toHaveLength(11);
+      await engine.afterTurn({ sessionId: "s1", messages: replaced });
+      const summaries = store.getTurnSummaries("s1");
+      await engine.assemble({ sessionId: "s1", messages: replaced });
+      expect(store.getMessages("s1")).toEqual(archived);
+      expect(store.getTurnSummaries("s1")).toEqual(summaries);
+
+      const restored = new SelectiveContextEngine(db, { freshTailTurns: 3, dbPath: ":memory:", enabled: true });
+      await restored.afterTurn({ sessionId: "s1", messages: replaced });
+      const newMessage: AgentMessage = { role: "user", content: "q4" };
+      const result = await restored.assemble({ sessionId: "s1", messages: [...replaced, newMessage] });
+      expect(store.getMessageCount("s1")).toBe(12);
+      expect(store.getMessages("s1").slice(0, 11)).toEqual(archived);
+      expect(store.getLastMessage("s1")!.content).toBe("q4");
+      expect(result.messages.at(-1)).toBe(newMessage);
+    });
+
+    it("recognizes overlapping repeated message patterns without duplicating an extended tail", async () => {
+      const user: AgentMessage = { role: "user", content: "q" };
+      await engine.assemble({ sessionId: "s1", messages: [user, { role: "assistant", content: "old" }] });
+      const replaced = [user, ...["x", "y", "x", "y", "x", "z"].map((content) => ({ role: "assistant", content }))];
+      await engine.assemble({ sessionId: "s1", messages: replaced });
+      expect(engine.getStore().getMessageCount("s1")).toBe(8);
+
+      await engine.afterTurn({ sessionId: "s1", messages: replaced });
+      await engine.assemble({ sessionId: "s1", messages: [...replaced, { role: "assistant", content: "y" }] });
+      expect(engine.getStore().getMessages("s1").map((message) => message.content)).toEqual([
+        "q", "old", "x", "y", "x", "y", "x", "z", "y",
+      ]);
+    });
+
     it("imports params.messages into store when store is empty", async () => {
       await engine.bootstrap({ sessionId: "s1" });
       const result = await engine.assemble({

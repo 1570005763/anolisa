@@ -17,6 +17,36 @@ import { estimateTokens } from "./estimate-tokens.js";
 
 const MAX_CACHED_SESSIONS = 10;
 
+type ReconcileMessage = { role: string; content: string };
+
+function messagesMatch(left: ReconcileMessage, right: ReconcileMessage): boolean {
+  return left.role === right.role && left.content === right.content;
+}
+
+function suffixOverlap(stored: ReconcileMessage[], incoming: ReconcileMessage[]): number {
+  if (stored.length === 0 || incoming.length === 0) return 0;
+
+  // Prefix fallback keeps matching linear even for repeated message patterns.
+  const fallback = new Array<number>(incoming.length).fill(0);
+  let matched = 0;
+  for (let i = 1; i < incoming.length; i++) {
+    while (matched > 0 && !messagesMatch(incoming[i], incoming[matched])) {
+      matched = fallback[matched - 1];
+    }
+    if (messagesMatch(incoming[i], incoming[matched])) matched++;
+    fallback[i] = matched;
+  }
+
+  matched = 0;
+  for (const message of stored) {
+    while (matched > 0 && (matched === incoming.length || !messagesMatch(message, incoming[matched]))) {
+      matched = fallback[matched - 1];
+    }
+    if (messagesMatch(message, incoming[matched])) matched++;
+  }
+  return matched;
+}
+
 export class SelectiveContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: "selective-claw",
@@ -249,14 +279,15 @@ export class SelectiveContextEngine implements ContextEngine {
 
   private reconcileMessages(sessionId: string, messages: AgentMessage[]): void {
     const stored = this.store.getMessages(sessionId);
+    const incoming = messages.map((message) => ({
+      role: this.normalizeRole(message.role),
+      content: this.extractContent(message),
+    }));
 
     let matchLen = 0;
     const minLen = Math.min(stored.length, messages.length);
     for (let i = 0; i < minLen; i++) {
-      const storedRole = stored[i].role;
-      const incomingRole = this.normalizeRole(messages[i].role);
-      const incomingContent = this.extractContent(messages[i]);
-      if (storedRole === incomingRole && stored[i].content === incomingContent) {
+      if (messagesMatch(stored[i], incoming[i])) {
         matchLen++;
       } else {
         break;
@@ -264,7 +295,8 @@ export class SelectiveContextEngine implements ContextEngine {
     }
 
     if (matchLen < messages.length) {
-      const toImport = messages.slice(matchLen);
+      const overlap = suffixOverlap(stored.slice(matchLen), incoming.slice(matchLen));
+      const toImport = messages.slice(matchLen + overlap);
       this.importMessages(sessionId, toImport);
     }
   }
