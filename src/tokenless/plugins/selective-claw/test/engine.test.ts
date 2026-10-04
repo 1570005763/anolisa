@@ -3,6 +3,9 @@ import { SelectiveContextEngine } from "../src/engine.js";
 import { createConnection, closeConnection } from "../src/db/connection.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentMessage } from "../src/openclaw-bridge.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("SelectiveContextEngine", () => {
   let db: DatabaseSync;
@@ -114,6 +117,53 @@ describe("SelectiveContextEngine", () => {
   });
 
   describe("assemble", () => {
+    it.each(["bootstrap", "ingest", "gateway"] as const)("restores structured %s messages after reopening the archive", async (source) => {
+      const directory = mkdtempSync(join(tmpdir(), "selective-claw-restore-"));
+      const dbPath = join(directory, "archive.db");
+      let archive = createConnection(dbPath);
+      try {
+        const config = { freshTailTurns: 3, dbPath, enabled: true };
+        const writer = new SelectiveContextEngine(archive, config);
+        const messages: AgentMessage[] = [
+          { role: "user", content: [{ type: "text", text: "inspect project" }], timestamp: 100 },
+          { role: "assistant", content: [{ type: "toolCall", id: "call-7", name: "read", arguments: { path: "README.md" } }], timestamp: 101 },
+          { role: "toolResult", toolCallId: "call-7", toolUseId: "use-7", toolName: "read", isError: true, content: [{ type: "text", text: "file unavailable" }], timestamp: 102 },
+          { role: "assistant", content: [{ type: "text", text: "Please check the path." }], timestamp: 103 },
+        ];
+        if (source === "bootstrap") {
+          await writer.bootstrap({ sessionId: "s1", messages });
+        } else if (source === "ingest") {
+          for (const message of messages) await writer.ingest({ sessionId: "s1", message });
+        } else {
+          const live = await writer.assemble({ sessionId: "s1", messages, tokenBudget: 100000 });
+          expect(live.messages[2]).toBe(messages[2]);
+        }
+        closeConnection(archive);
+        archive = createConnection(dbPath);
+
+        const reader = new SelectiveContextEngine(archive, config);
+        const result = await reader.assemble({ sessionId: "s1", messages: [], tokenBudget: 100000 });
+        expect(result.messages).toEqual(messages);
+        expect(reader.getStore().getMessages("s1").map((message) => JSON.parse(message.rawMessage!))).toEqual(messages);
+        await reader.afterTurn({ sessionId: "s1", messages: [] });
+        expect(reader.expandTurns("s1", [1]).turns[0].messages[2].role).toBe("toolResult");
+      } finally {
+        closeConnection(archive);
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it.each([undefined, "{broken", "null", "[]", '{"content":"no role"}'])("uses legacy text for unavailable or invalid raw payload %s", async (rawMessage) => {
+      engine.getStore().createMessage({
+        sessionId: "legacy", seq: 1, turnSeq: 1, role: "tool", content: "archived output", tokenCount: 2, rawMessage,
+      });
+
+      const result = await engine.assemble({ sessionId: "legacy", messages: [], tokenBudget: 100000 });
+      expect(result.messages).toEqual([{ role: "tool", content: "archived output" }]);
+      await engine.afterTurn({ sessionId: "legacy", messages: [] });
+      expect(engine.expandTurns("legacy", [1]).turns[0].messages).toEqual([{ role: "tool", content: "archived output" }]);
+    });
+
     it("returns ingested messages", async () => {
       await engine.bootstrap({ sessionId: "s1" });
       await engine.ingest({ sessionId: "s1", message: { role: "user", content: "hello" } });
