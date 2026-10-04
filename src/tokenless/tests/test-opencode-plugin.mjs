@@ -185,12 +185,16 @@ try {
     description: "A very long tool description",
     parameters: { type: "object", title: "Bash", properties: {} },
   };
+  const originalParameters = definition.parameters;
   await hooks["tool.definition"]({ toolID: "bash" }, definition);
   assert.equal(definition.description, "compressed description");
   assert.deepEqual(definition.parameters, {
     type: "object",
     properties: { command: { type: "string" } },
   });
+  definition.parameters.properties.command.type = "number";
+  definition.parameters.properties.host_annotation = { type: "boolean" };
+  assert.deepEqual(originalParameters, { type: "object", title: "Bash", properties: {} });
 
   const repeatedDefinition = {
     description: "A very long tool description",
@@ -198,6 +202,23 @@ try {
   };
   await hooks["tool.definition"]({ toolID: "bash" }, repeatedDefinition);
   assert.equal(repeatedDefinition.description, "compressed description");
+  assert.deepEqual(repeatedDefinition.parameters, {
+    type: "object",
+    properties: { command: { type: "string" } },
+  });
+  assert.notStrictEqual(repeatedDefinition.parameters, definition.parameters);
+  assert.notStrictEqual(repeatedDefinition.parameters.properties, definition.parameters.properties);
+
+  repeatedDefinition.parameters.properties.command.description = "host-added metadata";
+  const thirdDefinition = {
+    description: "A very long tool description",
+    parameters: { type: "object", title: "Bash", properties: {} },
+  };
+  await hooks["tool.definition"]({ toolID: "bash" }, thirdDefinition);
+  assert.deepEqual(thirdDefinition.parameters, {
+    type: "object",
+    properties: { command: { type: "string" } },
+  });
 
   const circularArgs = {};
   circularArgs.self = circularArgs;

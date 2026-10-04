@@ -255,7 +255,7 @@ export const TokenlessPlugin = async () => {
 
       if (typeof tools[0].description === "string") output.description = tools[0].description;
       if (tools[0].parameters && typeof tools[0].parameters === "object") {
-        output.parameters = tools[0].parameters;
+        output.parameters = JSON.parse(JSON.stringify(tools[0].parameters));
       }
     },
   };
