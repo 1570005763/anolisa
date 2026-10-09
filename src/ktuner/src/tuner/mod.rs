@@ -1243,7 +1243,7 @@ fn persist_from_rollback_at(
 
         systemctl_quiet(&["daemon-reload"]);
         systemctl_quiet(&["enable", "ktuner-nonsysctl.service"]);
-    } else if !remove_persisted(script_path, true) || !remove_persisted(service_path, true) {
+    } else {
         // The same invariant one artifact further: the script and its unit
         // render only while the ledger keeps a non-sysctl entry the deny-list
         // accepts, and an edited or pre-filter ledger can hold one whose
@@ -1252,9 +1252,20 @@ fn persist_from_rollback_at(
         // The pair an earlier generation wrote from it would still replay that
         // write as root at the next boot, and nothing else removes it, so a
         // failed retire is an error here too.
-        anyhow::bail!(
-            "清理 {script_path} 或 {service_path} 失败（未能删除的持久化会在下次启动时重新生效）"
-        );
+        //
+        // Both removals are attempted before the error is raised. `||` would
+        // short-circuit, so a script that refuses to go (an immutable file, a
+        // read-only /etc, a directory in its place) would stop the unit from
+        // being retired with it — and the unit is what runs the script at the
+        // next boot, on a path that may by then hold something systemd fails
+        // to execute, which leaves the unit failed and the boot degraded.
+        let script_removed = remove_persisted(script_path, true);
+        let service_removed = remove_persisted(service_path, true);
+        if !script_removed || !service_removed {
+            anyhow::bail!(
+                "清理 {script_path} 或 {service_path} 失败（未能删除的持久化会在下次启动时重新生效）"
+            );
+        }
     }
 
     Ok(())
@@ -2435,6 +2446,62 @@ mod tests {
         assert!(
             !script.exists() && !service.exists(),
             "the script and its unit must be retired with the render that owns them"
+        );
+    }
+
+    /// The pair is retired best-effort across BOTH files: the unit is the boot
+    /// path that runs the script, and systemd fails a unit whose ExecStart
+    /// cannot be executed, so a script that refuses to go must not stop the
+    /// unit from being retired with it. `||` short-circuits, so the second
+    /// removal only ran while the first succeeded, and the unit was left for
+    /// the next boot — a failed oneshot that no later command clears, because
+    /// an incomplete rollback never reaches `finalize_rollback_at`.
+    #[test]
+    fn persist_retires_the_unit_even_when_the_script_survives() {
+        let dir = AtomicTestDir::new("persist-retire-both");
+        let ledger = dir.0.join("rollback.json");
+        let sysctl = dir.0.join("99-ktuner.conf");
+        let script = dir.0.join("apply-nonsysctl.sh");
+        let service = dir.0.join("ktuner-nonsysctl.service");
+        let path = ledger.to_str().unwrap();
+
+        // The same unrenderable ledger as above, so the pair is retired...
+        let ledger_json = serde_json::json!({
+            "version": 1,
+            "entries": {
+                "block/sda/read_ahead_kb": {
+                    "previous": "128",
+                    "applied": "2048",
+                    "path": "/proc/sys/kernel/core_pattern",
+                }
+            }
+        });
+        fs::write(&ledger, serde_json::to_string(&ledger_json).unwrap()).unwrap();
+        // ...with the script path occupied by something `remove_file` refuses.
+        // A directory is the portable shape: no permission bits are involved,
+        // so the refusal is the same for root and for an unprivileged runner.
+        fs::create_dir(&script).unwrap();
+        fs::write(
+            &service,
+            "[Unit]\nDescription=Apply ktuner non-sysctl kernel parameters\n",
+        )
+        .unwrap();
+
+        let guard = lock_ledger_at(path).unwrap();
+        let result = persist_from_rollback_at(
+            &guard,
+            sysctl.to_str().unwrap(),
+            script.to_str().unwrap(),
+            service.to_str().unwrap(),
+        );
+
+        assert!(
+            result.is_err(),
+            "a file that could not be removed is reported"
+        );
+        assert!(
+            !service.exists(),
+            "the unit must still be retired, not left to fail the next boot"
         );
     }
 
