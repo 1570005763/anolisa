@@ -1167,6 +1167,24 @@ fn persistable_entries(
 /// record is read from the ledger the transaction's lock guards, so a fixture
 /// lock renders its own ledger and never the production one.
 fn persist_from_rollback(guard: &LedgerLock) -> Result<()> {
+    persist_from_rollback_at(
+        guard,
+        SYSCTL_PERSIST_PATH,
+        NONSYSCTL_SCRIPT_PATH,
+        NONSYSCTL_SERVICE_PATH,
+    )
+}
+
+/// [`persist_from_rollback`] with the generated-file paths injectable (the
+/// [`rollback_preview_at`] / [`finalize_rollback_at`] idiom): a fixture test
+/// can land a file the ledger can no longer render, or a fixture guard whose
+/// ledger renders one, without touching /etc.
+fn persist_from_rollback_at(
+    guard: &LedgerLock,
+    sysctl_path: &str,
+    script_path: &str,
+    service_path: &str,
+) -> Result<()> {
     let data = load_rollback_from(&guard.path)?;
     let entries = persistable_entries(&data.entries);
     let (sysctl_content, nonsysctl_script) = render_persistence(&entries);
@@ -1175,16 +1193,29 @@ fn persist_from_rollback(guard: &LedgerLock) -> Result<()> {
         // sysctl.d convention: world-readable, same as the systemd service
         // file below; write_atomic lands the mode before the rename so no
         // 0600 intermediate is ever visible at the final path.
-        write_atomic(SYSCTL_PERSIST_PATH, sysctl_content.as_bytes(), 0o644)
+        write_atomic(sysctl_path, sysctl_content.as_bytes(), 0o644)
             .context("持久化 sysctl 配置失败（需要 root 权限？）")?;
+    } else if !remove_persisted(sysctl_path, true) {
+        // A file this regenerate cannot render must not survive it. The
+        // render comes back empty when every sysctl-class entry the ledger
+        // holds is one the deny-list refuses; the file on disk, though, may
+        // be the one an earlier generation wrote from those very entries —
+        // and systemd-sysctl applies it as root at the next boot, which is
+        // the write the deny-list exists to keep off the boot path.
+        // `rollback` cannot clean it up either: the deny-listed entry counts
+        // as a failed restore, and an incomplete restore keeps the cleanup
+        // (files included) back for a retry, so no other command ever
+        // removes it. Leaving the failure silent would do the same, hence
+        // the error.
+        anyhow::bail!("清理 {sysctl_path} 失败（未能删除的配置会在下次启动时重新生效）");
     }
 
     if let Some(nonsysctl_script) = nonsysctl_script {
-        let dir = Path::new(NONSYSCTL_SCRIPT_PATH).parent().unwrap();
+        let dir = Path::new(script_path).parent().unwrap();
         fs::create_dir_all(dir).ok();
         fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
             .with_context(|| format!("设置 {} 权限 0755 失败", dir.display()))?;
-        write_atomic(NONSYSCTL_SCRIPT_PATH, nonsysctl_script.as_bytes(), 0o755)
+        write_atomic(script_path, nonsysctl_script.as_bytes(), 0o755)
             .context("写入非 sysctl 持久化脚本失败")?;
 
         let service = format!(
@@ -1193,17 +1224,29 @@ fn persist_from_rollback(guard: &LedgerLock) -> Result<()> {
              After=local-fs.target\n\n\
              [Service]\n\
              Type=oneshot\n\
-             ExecStart={NONSYSCTL_SCRIPT_PATH}\n\
+             ExecStart={script_path}\n\
              RemainAfterExit=yes\n\n\
              [Install]\n\
              WantedBy=multi-user.target\n"
         );
 
-        write_atomic(NONSYSCTL_SERVICE_PATH, service.as_bytes(), 0o644)
+        write_atomic(service_path, service.as_bytes(), 0o644)
             .context("写入 systemd service 失败")?;
 
         systemctl_quiet(&["daemon-reload"]);
         systemctl_quiet(&["enable", "ktuner-nonsysctl.service"]);
+    } else if !remove_persisted(script_path, true) || !remove_persisted(service_path, true) {
+        // The same invariant one artifact further: the script and its unit
+        // render only while the ledger keeps a non-sysctl entry the deny-list
+        // accepts, and an edited or pre-filter ledger can hold one whose
+        // *path* the filter refuses — `persistable_entries` drops an entry
+        // whose recorded path is deny-listed however the parameter is named.
+        // The pair an earlier generation wrote from it would still replay that
+        // write as root at the next boot, and nothing else removes it, so a
+        // failed retire is an error here too.
+        anyhow::bail!(
+            "清理 {script_path} 或 {service_path} 失败（未能删除的持久化会在下次启动时重新生效）"
+        );
     }
 
     Ok(())
@@ -1482,9 +1525,6 @@ fn restore_entries_with(
 /// the file is gone: one that survived still re-applies the tuned values on the
 /// next boot, so the caller must not report a finished rollback.
 fn remove_persisted(path: &str, quiet: bool) -> bool {
-    if !Path::new(path).exists() {
-        return true;
-    }
     match fs::remove_file(path) {
         Ok(()) => {
             if !quiet {
@@ -1492,6 +1532,12 @@ fn remove_persisted(path: &str, quiet: bool) -> bool {
             }
             true
         }
+        // Only a path that is genuinely absent is already clean. A metadata
+        // check first would also call a dangling symlink absent — the lookup
+        // follows the link — while its directory entry stays behind and
+        // systemd-sysctl re-applies the file the moment the target appears.
+        // Unlinking does not follow the link, so the entry always goes.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
         Err(err) => {
             if !quiet {
                 println!("  {} {path} : {err}（未清理）", "✗".red());
@@ -2182,6 +2228,163 @@ mod tests {
             "nothing deny-listed may reach the rendered file: {config}"
         );
         assert!(script.is_none());
+    }
+
+    /// Dropping a deny-listed entry from the *render* is not enough: the file
+    /// the previous generation wrote is still on disk, and systemd-sysctl
+    /// applies it as root at the next boot — the exact write the deny-list
+    /// exists to keep off the boot path. The regenerate reads the whole ledger
+    /// every time, so a file it can no longer render must be retired, or a
+    /// denied line survives every later run that has something else to persist.
+    #[test]
+    fn persist_retires_a_file_the_ledger_can_no_longer_render() {
+        let dir = AtomicTestDir::new("persist-retire");
+        let ledger = dir.0.join("rollback.json");
+        let sysctl = dir.0.join("99-ktuner.conf");
+        let script = dir.0.join("apply-nonsysctl.sh");
+        let service = dir.0.join("ktuner-nonsysctl.service");
+        let path = ledger.to_str().unwrap();
+
+        // A file an earlier generation left for a ledger whose only
+        // sysctl-class entry is a deny-listed one (the ledger an edited file
+        // or one from before the persist-side filter can hold).
+        fs::write(
+            &sysctl,
+            "# Generated by ktuner - do not edit manually\nkernel.core_pattern = |/tmp/evil\n",
+        )
+        .unwrap();
+        merge_rollback_at(
+            path,
+            [(
+                "kernel.core_pattern".to_string(),
+                "core".to_string(),
+                "|/tmp/evil".to_string(),
+            )],
+        )
+        .unwrap();
+        let guard = lock_ledger_at(path).unwrap();
+        persist_from_rollback_at(
+            &guard,
+            sysctl.to_str().unwrap(),
+            script.to_str().unwrap(),
+            service.to_str().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !sysctl.exists(),
+            "a file with nothing left to render must be retired, not left for the next boot"
+        );
+
+        // Control: with a persistable entry in the ledger the file is
+        // regenerated (without the denied line) — the retire arm must not
+        // fire while there is still something to persist. The merge takes
+        // the same exclusive lock, so the transaction guard goes first.
+        drop(guard);
+        merge_rollback_at(
+            path,
+            [(
+                "vm.swappiness".to_string(),
+                "60".to_string(),
+                "10".to_string(),
+            )],
+        )
+        .unwrap();
+        let guard = lock_ledger_at(path).unwrap();
+        persist_from_rollback_at(
+            &guard,
+            sysctl.to_str().unwrap(),
+            script.to_str().unwrap(),
+            service.to_str().unwrap(),
+        )
+        .unwrap();
+        let rendered = fs::read_to_string(&sysctl).unwrap();
+        assert!(rendered.contains("vm.swappiness = 10"), "{rendered}");
+        assert!(!rendered.contains("core_pattern"), "{rendered}");
+    }
+
+    /// The boot script and its unit are rendered from the same filtered
+    /// entries as the sysctl file, and an entry whose recorded *path* the
+    /// deny-list refuses is dropped however the parameter is named. The pair
+    /// an earlier generation wrote from such an entry must be retired with it,
+    /// or the denied write still runs as root at the next boot.
+    #[test]
+    fn persist_retires_the_script_and_unit_of_an_unrenderable_ledger() {
+        let dir = AtomicTestDir::new("persist-retire-script");
+        let ledger = dir.0.join("rollback.json");
+        let sysctl = dir.0.join("99-ktuner.conf");
+        let script = dir.0.join("apply-nonsysctl.sh");
+        let service = dir.0.join("ktuner-nonsysctl.service");
+        let path = ledger.to_str().unwrap();
+
+        // A non-sysctl parameter whose recorded path is deny-listed — the
+        // shape an edited or pre-filter ledger has. The filter drops the entry
+        // by path, so neither the sysctl file nor the script renders.
+        let ledger_json = serde_json::json!({
+            "version": 1,
+            "entries": {
+                "block/sda/read_ahead_kb": {
+                    "previous": "128",
+                    "applied": "2048",
+                    "path": "/proc/sys/kernel/core_pattern",
+                }
+            }
+        });
+        fs::write(&ledger, serde_json::to_string(&ledger_json).unwrap()).unwrap();
+        fs::write(
+            &script,
+            "#!/bin/bash\necho '|/tmp/evil' > /proc/sys/kernel/core_pattern\n",
+        )
+        .unwrap();
+        fs::write(
+            &service,
+            "[Unit]\nDescription=Apply ktuner non-sysctl kernel parameters\n",
+        )
+        .unwrap();
+
+        let guard = lock_ledger_at(path).unwrap();
+        persist_from_rollback_at(
+            &guard,
+            sysctl.to_str().unwrap(),
+            script.to_str().unwrap(),
+            service.to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            !script.exists() && !service.exists(),
+            "the script and its unit must be retired with the render that owns them"
+        );
+    }
+
+    /// Retirement is an unlink, not a metadata lookup: a dangling symlink at
+    /// the generated path also fails a lookup, and leaving its directory entry
+    /// behind means systemd-sysctl applies the file once the target appears.
+    #[test]
+    fn persist_retires_a_dangling_link_at_the_generated_path() {
+        let dir = AtomicTestDir::new("persist-retire-link");
+        let ledger = dir.0.join("rollback.json");
+        let sysctl = dir.0.join("99-ktuner.conf");
+        let path = ledger.to_str().unwrap();
+
+        fs::write(&sysctl, "# leftovers from a previous generation\n").unwrap();
+        let target = dir.0.join("missing-target.conf");
+        fs::remove_file(&sysctl).unwrap();
+        std::os::unix::fs::symlink(&target, &sysctl).unwrap();
+
+        // Nothing to render, so the generated path is retired.
+        let guard = lock_ledger_at(path).unwrap();
+        persist_from_rollback_at(
+            &guard,
+            sysctl.to_str().unwrap(),
+            dir.0.join("script.sh").to_str().unwrap(),
+            dir.0.join("unit.service").to_str().unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            fs::symlink_metadata(&sysctl).is_err(),
+            "the directory entry must be gone, not just resolved away"
+        );
     }
 
     #[test]
