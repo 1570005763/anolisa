@@ -1105,8 +1105,16 @@ fn render_persistence(
 
     for (param, entry) in entries {
         if param.starts_with("block/") || param.starts_with("transparent_hugepage/") {
+            // The guard is a deliberate skip, not a failure: a device renamed
+            // between the apply and the boot (sda -> sdb), a disk that is gone,
+            // or a node that only shows up later leaves the path absent. With
+            // no `set -e`, the status systemd reads as the unit's verdict is
+            // the exit code of the last rendered line, and `&&` makes a failed
+            // guard there that status - a degraded boot for a skip this
+            // renderer chose. An if-statement carries no status for the skip
+            // while a write that does fail still fails the unit.
             nonsysctl_script.push_str(&format!(
-                "[ -f '{}' ] && echo '{}' > '{}'\n",
+                "if [ -f '{}' ]; then echo '{}' > '{}'; fi\n",
                 entry.path, entry.applied, entry.path
             ));
             has_nonsysctl = true;
@@ -2177,6 +2185,80 @@ mod tests {
         let (sysctl, nonsysctl) = render_persistence(&entries);
         assert!(sysctl.is_none());
         assert!(nonsysctl.is_none());
+    }
+
+    /// The generated script is the ExecStart of `ktuner-nonsysctl.service`, a
+    /// `Type=oneshot` unit: a command that exits non-zero is the unit's own
+    /// failure, which is exactly what puts a host into the `degraded` state
+    /// systemctl reports. The `[ -f ]` guard is what makes "the node is not
+    /// there" a deliberate skip — a device renamed between the apply and the
+    /// boot (sda -> sdb), a disk that is gone, or a node that appears only
+    /// later all leave `/sys/block/<dev>/…` absent — so a skip must not end up
+    /// as the script's exit status: `&&` carries the failed test into it, and
+    /// the unit then fails on every boot for a node the renderer chose to skip.
+    #[test]
+    fn nonsysctl_script_skips_an_absent_node_without_failing() {
+        let dir = AtomicTestDir::new("nonsysctl-absent");
+        let node = dir.0.join("queue").join("read_ahead_kb");
+        let entries = BTreeMap::from([(
+            "block/sda/read_ahead_kb".to_string(),
+            RollbackEntry {
+                previous: "128".to_string(),
+                applied: "2048".to_string(),
+                path: node.to_str().unwrap().to_string(),
+            },
+        )]);
+        let script = render_persistence(&entries)
+            .1
+            .expect("a block entry renders the boot script");
+        let path = dir.0.join("apply-nonsysctl.sh");
+        fs::write(&path, &script).unwrap();
+
+        // Run it the way the unit does; `sh` is enough for a POSIX test and
+        // echo, and the node stays absent for the whole run.
+        let status = std::process::Command::new("sh")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "an absent node is the skip the guard exists for, not a boot failure: {script}"
+        );
+    }
+
+    /// Control for the test above: a node that IS there still receives the
+    /// recorded value, so the skip cannot degenerate into "never write".
+    #[test]
+    fn nonsysctl_script_applies_a_present_node() {
+        let dir = AtomicTestDir::new("nonsysctl-present");
+        let queue = dir.0.join("queue");
+        fs::create_dir(&queue).unwrap();
+        let node = queue.join("read_ahead_kb");
+        fs::write(&node, "128\n").unwrap();
+        let entries = BTreeMap::from([(
+            "block/sda/read_ahead_kb".to_string(),
+            RollbackEntry {
+                previous: "128".to_string(),
+                applied: "2048".to_string(),
+                path: node.to_str().unwrap().to_string(),
+            },
+        )]);
+        let script = render_persistence(&entries)
+            .1
+            .expect("a block entry renders the boot script");
+        let path = dir.0.join("apply-nonsysctl.sh");
+        fs::write(&path, &script).unwrap();
+
+        let status = std::process::Command::new("sh")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "a present node must apply: {script}");
+        assert_eq!(
+            fs::read_to_string(&node).unwrap().trim(),
+            "2048",
+            "the recorded value must reach the node"
+        );
     }
 
     #[test]
