@@ -2704,7 +2704,7 @@ fn eval_unprivileged_bpf(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> u
     if !info.param_exists(path) {
         return 1;
     }
-    recommend_unprivileged_bpf(read_sysctl_u64(path), recs);
+    recommend_unprivileged_bpf(read_sysctl_u64(path), &info.kernel_version, recs);
     1
 }
 
@@ -2712,8 +2712,22 @@ fn eval_unprivileged_bpf(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> u
 ///
 /// Split from the probe so the rule is assertable on every host: 0 is the only
 /// value worth changing, and the target has to be 2 rather than 1.
-fn recommend_unprivileged_bpf(current: u64, recs: &mut Vec<Recommendation>) {
+///
+/// The value 2 does not exist before Linux 5.13. Through 5.12 the node is a
+/// plain `proc_dointvec_minmax` with `.extra1 = SYSCTL_ONE, .extra2 =
+/// SYSCTL_ONE` (v5.10 kernel/sysctl.c:2625, v4.19 kernel/sysctl.c:1215): a
+/// write of 2 fails with `-EINVAL`, and the only writable value is the
+/// one-way 1, which the documentation says can't be cleared once set. There
+/// is no reversible target to recommend on those kernels, so the rule stays
+/// quiet below 5.13 — advising a value the kernel rejects would only turn
+/// `tune`/`fix` into a reported write failure. 5.13 added the value 2 with
+/// `CONFIG_BPF_UNPRIV_DEFAULT_OFF`: it denies unprivileged `bpf()` while
+/// root can still write 0 back.
+fn recommend_unprivileged_bpf(current: u64, kernel_version: &str, recs: &mut Vec<Recommendation>) {
     if current != 0 {
+        return;
+    }
+    if !kernel_at_least(kernel_version, 5, 13) {
         return;
     }
     recs.push(Recommendation {
@@ -13148,7 +13162,7 @@ mod tests {
         // 1 or 2; the literal is asserted on purpose, so the rule cannot
         // silently regress to 1.
         let mut recs = Vec::new();
-        recommend_unprivileged_bpf(0, &mut recs);
+        recommend_unprivileged_bpf(0, "6.6.0", &mut recs);
         assert_eq!(recs.len(), 1, "0 must be recommended against");
         assert_eq!(
             recs[0].recommended_value, "2",
@@ -13163,12 +13177,37 @@ mod tests {
         // Already denied: nothing to recommend, whichever way it was set.
         for current in [1u64, 2] {
             let mut recs = Vec::new();
-            recommend_unprivileged_bpf(current, &mut recs);
+            recommend_unprivileged_bpf(current, "6.6.0", &mut recs);
             assert!(
                 recs.is_empty(),
                 "unprivileged bpf is already denied by {current}, so there is \
                  nothing to change"
             );
+        }
+    }
+
+    #[test]
+    fn test_unprivileged_bpf_old_kernels_get_no_advice() {
+        // Through 5.12 the node only accepts the one-way 1: a write of 2 is
+        // rejected with -EINVAL (proc_dointvec_minmax with
+        // .extra1 = SYSCTL_ONE, .extra2 = SYSCTL_ONE) and a written 1 can
+        // never be cleared, so there is no writable reversible value to
+        // recommend.
+        for version in ["4.19.91", "5.10.134", "5.12.19"] {
+            let mut recs = Vec::new();
+            recommend_unprivileged_bpf(0, version, &mut recs);
+            assert!(
+                recs.is_empty(),
+                "{version} has no writable reversible value, so nothing may be advised"
+            );
+        }
+        // 5.13 added the value 2 while keeping 0 and 1 writable, so the
+        // reversible-value advice starts there.
+        for version in ["5.13.0", "5.15.0-microsoft-standard-WSL2", "6.6.0"] {
+            let mut recs = Vec::new();
+            recommend_unprivileged_bpf(0, version, &mut recs);
+            assert_eq!(recs.len(), 1, "{version} must still be advised the value 2");
+            assert_eq!(recs[0].recommended_value, "2");
         }
     }
 
