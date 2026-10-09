@@ -422,14 +422,14 @@ fn cgroup_memory_limit_kb_from(root: &Path, self_cgroup: &str) -> u64 {
     // a hybrid host delegates the memory controller to v1, so the v2 walk
     // finds no file at all and must not answer "no limit" from that.
     if let Some(rel) = cgroup_v2_relative_path(self_cgroup) {
-        if let Some(kb) = chain_limit_kb(root, &rel, "memory.max", cgroup_v2_limit_kb) {
+        if let Some(kb) = chain_min_value(root, &rel, "memory.max", cgroup_v2_limit_kb) {
             return kb;
         }
     }
     // cgroup v1: the line of the memory controller, walked under the
     // controller's own mount (`/sys/fs/cgroup/memory`).
     if let Some(rel) = cgroup_v1_relative_path(self_cgroup) {
-        if let Some(kb) = chain_limit_kb(
+        if let Some(kb) = chain_min_value(
             &root.join("memory"),
             &rel,
             "memory.limit_in_bytes",
@@ -441,10 +441,10 @@ fn cgroup_memory_limit_kb_from(root: &Path, self_cgroup: &str) -> u64 {
     // No navigable /proc/self/cgroup (unreadable, or a layout the walks
     // cannot follow): the root files remain the best approximation — the
     // pre-existing behaviour.
-    if let Some(kb) = chain_limit_kb(root, "/", "memory.max", cgroup_v2_limit_kb) {
+    if let Some(kb) = chain_min_value(root, "/", "memory.max", cgroup_v2_limit_kb) {
         return kb;
     }
-    chain_limit_kb(
+    chain_min_value(
         &root.join("memory"),
         "/",
         "memory.limit_in_bytes",
@@ -463,21 +463,21 @@ fn cgroup_v2_relative_path(content: &str) -> Option<String> {
 }
 
 /// Pure /proc/self/cgroup parsing: the relative cgroup path of the v1 line
-/// for the memory controller (`<hierarchy>:<controllers>:<path>`), when
-/// present. The controller list decides, so the v2 line (empty controller
-/// field) and other controllers' lines never match. The line is split into
-/// exactly three fields because the path runs to the end of the line: a
-/// cgroup directory may itself be named with a colon (kernfs only forbids
-/// '/' and '\0' in names), so an unbounded split truncates the membership
-/// at the colon inside the name — the same idiom the CPU membership reader
-/// already uses (`splitn(3, ':')`, cpu_hierarchy).
-fn cgroup_v1_relative_path(content: &str) -> Option<String> {
+/// for `controller` (`<hierarchy>:<controllers>:<path>`), when present. The
+/// controller list decides, so the v2 line (empty controller field) and other
+/// controllers' lines never match. The line is split into exactly three fields
+/// because the path runs to the end of the line: a cgroup directory may itself
+/// be named with a colon (kernfs only forbids '/' and '\0' in names), so an
+/// unbounded split truncates the membership at the colon inside the name — the
+/// same idiom the CPU membership reader already uses (`splitn(3, ':')`,
+/// cpu_hierarchy).
+fn cgroup_v1_controller_relative_path(content: &str, controller: &str) -> Option<String> {
     content.lines().find_map(|line| {
         let mut fields = line.splitn(3, ':');
         let hierarchy = fields.next()?;
         let controllers = fields.next()?;
         let path = fields.next()?;
-        if !hierarchy.is_empty() && controllers.split(',').any(|c| c == "memory") {
+        if !hierarchy.is_empty() && controllers.split(',').any(|c| c == controller) {
             Some(path.to_string())
         } else {
             None
@@ -485,13 +485,21 @@ fn cgroup_v1_relative_path(content: &str) -> Option<String> {
     })
 }
 
+/// The memory controller's membership line
+/// ([`cgroup_v1_controller_relative_path`], kept for the callers that only ever
+/// need memory).
+fn cgroup_v1_relative_path(content: &str) -> Option<String> {
+    cgroup_v1_controller_relative_path(content, "memory")
+}
+
 /// Walk the cgroup chain from `rel` up to `root`, reading `file` at every
-/// level; the effective limit is the smallest real limit seen, because a
-/// child can never exceed its ancestors. Levels with no limit (the v2 `max`
+/// level; the effective value is the smallest real one seen, because a child
+/// can never exceed its ancestors. Levels with no value (the v2 `max`
 /// sentinel, the v1 unlimited constant, unparsable content) are skipped.
 /// `None` when no level of the chain offers the file at all, so the caller
-/// can fall back to the next hierarchy.
-fn chain_limit_kb(root: &Path, rel: &str, file: &str, parse: fn(&str) -> u64) -> Option<u64> {
+/// can fall back to the next hierarchy. `parse` sets the unit: the memory
+/// walks read kilobytes, the cpuset walk reads the CPUs in a mask.
+fn chain_min_value(root: &Path, rel: &str, file: &str, parse: fn(&str) -> u64) -> Option<u64> {
     // Namespace-relative parent components must never walk above this mount
     // — the same guard cpu_chain_limit carries for the CPU walk.
     let rel = Path::new(rel.trim_start_matches('/'));
@@ -559,7 +567,24 @@ fn read_cgroup_cpu_limit_cores() -> u64 {
 // CPU bandwidth is constrained by both the process's cgroup and its ancestors.
 // A readable unlimited v2 chain must not fall through to an unrelated v1 tree;
 // an absent v2 CPU controller on a hybrid hierarchy must allow v1 fallback.
+//
+// The cpuset controller bounds the same number by a second mechanism: it
+// decides which CPUs the process may run on, and a container pinned to two of
+// a host's sixty-four (a `--cpuset-cpus` container, a Kubernetes pod under the
+// static CPU-manager policy, a systemd unit with `AllowedCPUs=`) runs at most
+// two CPUs' worth of work in parallel. Sizing cpu-scaled rules for the host's
+// sixty-four is the same mis-scaling the bandwidth quota is read to prevent,
+// so the effective count is the smaller of the two limits.
 fn cgroup_cpu_limit_cores_from(root: &Path, self_cgroup: &str) -> u64 {
+    let quota = cgroup_cpu_quota_cores_from(root, self_cgroup);
+    let cpuset = cgroup_cpuset_core_count_from(root, self_cgroup);
+    match (quota, cpuset) {
+        (0, count) | (count, 0) => count,
+        (quota, cpuset) => quota.min(cpuset),
+    }
+}
+
+fn cgroup_cpu_quota_cores_from(root: &Path, self_cgroup: &str) -> u64 {
     if let Some(rel) = cgroup_v2_relative_path(self_cgroup) {
         if let Some(cores) = cpu_chain_limit(root, &rel, true) {
             return cores;
@@ -593,6 +618,75 @@ fn cgroup_cpu_limit_cores_from(root: &Path, self_cgroup: &str) -> u64 {
         .iter()
         .find_map(|r| cpu_chain_limit(r, "/", false))
         .unwrap_or(0)
+}
+
+/// The CPUs the cpuset controller grants this process: the smallest mask on
+/// the chain from its own cgroup up to the mount root, 0 when no readable mask
+/// exists on that chain (the controller lives on the other hierarchy, or no
+/// mask is set) — 0 clamps nothing, exactly like an unlimited quota.
+///
+/// cgroup v2 keeps the mask in `cpuset.cpus.effective` of the cgroup itself: a
+/// read-only file the kernel fills with the CPUs the parent actually grants,
+/// so it already folds in the ancestors. cgroup v1 keeps the matching
+/// `cpuset.effective_cpus` under the controller's own mount. Reading the
+/// process's own cgroup (rather than the root file) is what makes a container
+/// or a unit with a narrower mask bind: the effective file of every ancestor
+/// above it is wider.
+fn cgroup_cpuset_core_count_from(root: &Path, self_cgroup: &str) -> u64 {
+    if let Some(rel) = cgroup_v2_relative_path(self_cgroup) {
+        if let Some(cpus) = chain_min_value(root, &rel, "cpuset.cpus.effective", cpuset_mask_cpus) {
+            return cpus;
+        }
+    }
+    if let Some(rel) = cgroup_v1_controller_relative_path(self_cgroup, "cpuset") {
+        if let Some(cpus) = chain_min_value(
+            &root.join("cpuset"),
+            &rel,
+            "cpuset.effective_cpus",
+            cpuset_mask_cpus,
+        ) {
+            return cpus;
+        }
+    }
+    // Membership that cannot be followed: the mount root's own mask still
+    // bounds what the process may use — the container root in the common
+    // private-cgroup-namespace case.
+    if let Some(cpus) = chain_min_value(root, "/", "cpuset.cpus.effective", cpuset_mask_cpus) {
+        return cpus;
+    }
+    chain_min_value(
+        &root.join("cpuset"),
+        "/",
+        "cpuset.effective_cpus",
+        cpuset_mask_cpus,
+    )
+    .unwrap_or(0)
+}
+
+/// A cpuset mask (`cpuset.cpus`, cpuset v1's `cpuset.effective_cpus`, and v2's
+/// `cpuset.cpus.effective` share the format) → the number of CPUs it lists:
+/// comma-separated single CPUs and `first-last` ranges, so `0-3,8,10-11` is
+/// seven CPUs. 0 when the mask is empty or unparsable, which clamps nothing:
+/// an empty mask means the cgroup inherits its parent's set, not that it may
+/// use zero CPUs, and a malformed mask is no evidence of a restriction.
+fn cpuset_mask_cpus(raw: &str) -> u64 {
+    let mut cpus = 0u64;
+    for part in raw.trim().split(',') {
+        let part = part.trim();
+        match part.split_once('-') {
+            Some((first, last)) => {
+                match (first.trim().parse::<u64>(), last.trim().parse::<u64>()) {
+                    (Ok(first), Ok(last)) if first <= last => cpus += last - first + 1,
+                    _ => return 0,
+                }
+            }
+            None => match part.parse::<u64>() {
+                Ok(_) => cpus += 1,
+                Err(_) => return 0,
+            },
+        }
+    }
+    cpus
 }
 
 fn cpu_chain_limit(root: &Path, rel: &str, v2: bool) -> Option<u64> {
@@ -1804,7 +1898,7 @@ mod tests {
     }
 
     #[test]
-    fn chain_limit_kb_refuses_to_walk_above_the_mount() {
+    fn chain_min_value_refuses_to_walk_above_the_mount() {
         // Parity with cpu_chain_limit: a membership line whose path carries
         // a parent component must not let the walk read limit files outside
         // the mount root it was given.
@@ -1822,7 +1916,7 @@ mod tests {
         fs::write(outside.join("memory.max"), b"4294967296\n").expect("write outside limit");
 
         assert_eq!(
-            chain_limit_kb(&root, "/../escape", "memory.max", cgroup_v2_limit_kb),
+            chain_min_value(&root, "/../escape", "memory.max", cgroup_v2_limit_kb),
             None,
             "a parent component must not escape the mount"
         );
