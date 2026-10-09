@@ -165,13 +165,20 @@ fn apply_locked(
 
     if !applied_recs.is_empty() {
         save_rollback(guard, &applied_recs)?;
-        persist_from_rollback(guard)?;
+        let boot_unit_enabled = persist_from_rollback(guard)?;
         if !quiet {
             println!();
             // Count writes, not ledger records: a *_bytes knob also records
             // the ratio sibling the kernel clears for it, and the batch's
             // progress and exit-code semantics stay per-write.
-            println!("  {} 项配置已应用并持久化（重启后自动生效）", applied);
+            if boot_unit_enabled {
+                println!("  {} 项配置已应用并持久化（重启后自动生效）", applied);
+            } else {
+                println!(
+                    "  {} 项配置已应用，但 ktuner-nonsysctl.service 未能启用（systemctl enable 失败），块设备与 THP 等非 sysctl 配置重启后不会自动生效",
+                    applied
+                );
+            }
         }
     } else if applied == 0 && !quiet {
         println!();
@@ -1174,25 +1181,32 @@ fn persistable_entries(
 /// persists a param that failed to apply (those are not in the record). The
 /// record is read from the ledger the transaction's lock guards, so a fixture
 /// lock renders its own ledger and never the production one.
-fn persist_from_rollback(guard: &LedgerLock) -> Result<()> {
+///
+/// Returns whether the boot replay is armed: false when the non-sysctl unit
+/// was written but `systemctl enable` did not succeed (no systemd, or a
+/// refused enable), so the script will not run at the next boot.
+fn persist_from_rollback(guard: &LedgerLock) -> Result<bool> {
     persist_from_rollback_at(
         guard,
         SYSCTL_PERSIST_PATH,
         NONSYSCTL_SCRIPT_PATH,
         NONSYSCTL_SERVICE_PATH,
+        "systemctl",
     )
 }
 
 /// [`persist_from_rollback`] with the generated-file paths injectable (the
 /// [`rollback_preview_at`] / [`finalize_rollback_at`] idiom): a fixture test
 /// can land a file the ledger can no longer render, or a fixture guard whose
-/// ledger renders one, without touching /etc.
+/// ledger renders one, without touching /etc. `systemctl` names the program
+/// the unit is enabled with, so a test can stand in one that refuses.
 fn persist_from_rollback_at(
     guard: &LedgerLock,
     sysctl_path: &str,
     script_path: &str,
     service_path: &str,
-) -> Result<()> {
+    systemctl: &str,
+) -> Result<bool> {
     let data = load_rollback_from(&guard.path)?;
     let entries = persistable_entries(&data.entries);
     let (sysctl_content, nonsysctl_script) = render_persistence(&entries);
@@ -1201,6 +1215,16 @@ fn persist_from_rollback_at(
         // sysctl.d convention: world-readable, same as the systemd service
         // file below; write_atomic lands the mode before the rename so no
         // 0600 intermediate is ever visible at the final path.
+        // /etc/sysctl.d belongs to the package that replays it at boot
+        // (systemd-sysctl), so a missing directory means nothing would read
+        // the file: say so instead of guessing at permissions.
+        let sysctl_dir = Path::new(sysctl_path).parent().unwrap_or(Path::new("/"));
+        if !sysctl_dir.is_dir() {
+            anyhow::bail!(
+                "未持久化：{} 不存在（本机没有 systemd-sysctl？），已应用的 sysctl 值重启后不会保留",
+                sysctl_dir.display()
+            );
+        }
         write_atomic(sysctl_path, sysctl_content.as_bytes(), 0o644)
             .context("持久化 sysctl 配置失败（需要 root 权限？）")?;
     } else if !remove_persisted(sysctl_path, true) {
@@ -1241,8 +1265,10 @@ fn persist_from_rollback_at(
         write_atomic(service_path, service.as_bytes(), 0o644)
             .context("写入 systemd service 失败")?;
 
-        systemctl_quiet(&["daemon-reload"]);
-        systemctl_quiet(&["enable", "ktuner-nonsysctl.service"]);
+        systemctl_quiet(systemctl, &["daemon-reload"]);
+        if !systemctl_quiet(systemctl, &["enable", "ktuner-nonsysctl.service"]) {
+            return Ok(false);
+        }
     } else {
         // The same invariant one artifact further: the script and its unit
         // render only while the ledger keeps a non-sysctl entry the deny-list
@@ -1268,17 +1294,19 @@ fn persist_from_rollback_at(
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
-fn systemctl_quiet(args: &[&str]) {
+/// Run `program` (systemctl) with its output discarded. Returns whether it
+/// ran and exited 0; a host without systemd fails to spawn it.
+fn systemctl_quiet(program: &str, args: &[&str]) -> bool {
     use std::process::Stdio;
-    std::process::Command::new("systemctl")
+    std::process::Command::new(program)
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .ok();
+        .is_ok_and(|status| status.success())
 }
 
 pub fn rollback_preview() -> Result<Vec<(String, String, String)>> {
@@ -1595,11 +1623,11 @@ fn finalize_rollback_at(
         failed += 1;
     }
     if Path::new(service_path).exists() {
-        systemctl_quiet(&["disable", "ktuner-nonsysctl.service"]);
+        systemctl_quiet("systemctl", &["disable", "ktuner-nonsysctl.service"]);
         if !remove_persisted(service_path, quiet) {
             failed += 1;
         }
-        systemctl_quiet(&["daemon-reload"]);
+        systemctl_quiet("systemctl", &["daemon-reload"]);
     }
     if !remove_persisted(script_path, quiet) {
         failed += 1;
@@ -2380,6 +2408,7 @@ mod tests {
             sysctl.to_str().unwrap(),
             script.to_str().unwrap(),
             service.to_str().unwrap(),
+            "true",
         )
         .unwrap();
         assert!(
@@ -2407,6 +2436,7 @@ mod tests {
             sysctl.to_str().unwrap(),
             script.to_str().unwrap(),
             service.to_str().unwrap(),
+            "true",
         )
         .unwrap();
         let rendered = fs::read_to_string(&sysctl).unwrap();
@@ -2459,6 +2489,7 @@ mod tests {
             sysctl.to_str().unwrap(),
             script.to_str().unwrap(),
             service.to_str().unwrap(),
+            "true",
         )
         .unwrap();
 
@@ -2512,6 +2543,7 @@ mod tests {
             sysctl.to_str().unwrap(),
             script.to_str().unwrap(),
             service.to_str().unwrap(),
+            "true",
         );
 
         assert!(
@@ -2546,12 +2578,91 @@ mod tests {
             sysctl.to_str().unwrap(),
             dir.0.join("script.sh").to_str().unwrap(),
             dir.0.join("unit.service").to_str().unwrap(),
+            "true",
         )
         .unwrap();
 
         assert!(
             fs::symlink_metadata(&sysctl).is_err(),
             "the directory entry must be gone, not just resolved away"
+        );
+    }
+
+    /// The boot script only runs if its unit is enabled, so a refused or
+    /// impossible `systemctl enable` (no systemd on the host) must not be
+    /// reported as a persisted change.
+    #[test]
+    fn persist_reports_a_boot_unit_that_was_not_enabled() {
+        let dir = AtomicTestDir::new("persist-enable");
+        let ledger = dir.0.join("rollback.json");
+        let path = ledger.to_str().unwrap();
+        let ledger_json = serde_json::json!({
+            "version": 1,
+            "entries": {
+                "block/sda/read_ahead_kb": {
+                    "previous": "128",
+                    "applied": "2048",
+                    "path": "/sys/block/sda/queue/read_ahead_kb",
+                }
+            }
+        });
+        fs::write(&ledger, serde_json::to_string(&ledger_json).unwrap()).unwrap();
+        let script = dir.0.join("apply-nonsysctl.sh");
+        let service = dir.0.join("ktuner-nonsysctl.service");
+        let guard = lock_ledger_at(path).unwrap();
+        let persist = |systemctl: &str| {
+            persist_from_rollback_at(
+                &guard,
+                dir.0.join("99-ktuner.conf").to_str().unwrap(),
+                script.to_str().unwrap(),
+                service.to_str().unwrap(),
+                systemctl,
+            )
+            .unwrap()
+        };
+
+        assert!(persist("true"), "an enabled unit replays at boot");
+        assert!(
+            !persist("false"),
+            "a refused enable leaves nothing to replay"
+        );
+        assert!(
+            !persist(dir.0.join("no-systemctl").to_str().unwrap()),
+            "a host without systemctl has no unit to run"
+        );
+        assert!(service.exists(), "the unit itself is still written");
+    }
+
+    /// /etc/sysctl.d is owned by the package that replays it at boot, so its
+    /// absence is the host telling us nothing would read the file.
+    #[test]
+    fn persist_names_a_missing_sysctl_directory() {
+        let dir = AtomicTestDir::new("persist-no-sysctl-d");
+        let ledger = dir.0.join("rollback.json");
+        let path = ledger.to_str().unwrap();
+        merge_rollback_at(
+            path,
+            [(
+                "vm.swappiness".to_string(),
+                "60".to_string(),
+                "10".to_string(),
+            )],
+        )
+        .unwrap();
+        let guard = lock_ledger_at(path).unwrap();
+        let missing = dir.0.join("sysctl.d");
+        let error = persist_from_rollback_at(
+            &guard,
+            missing.join("99-ktuner.conf").to_str().unwrap(),
+            dir.0.join("apply-nonsysctl.sh").to_str().unwrap(),
+            dir.0.join("ktuner-nonsysctl.service").to_str().unwrap(),
+            "true",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("未持久化") && error.contains(missing.to_str().unwrap()),
+            "{error}"
         );
     }
 
