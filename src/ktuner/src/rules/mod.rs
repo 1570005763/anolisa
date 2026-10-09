@@ -5085,7 +5085,13 @@ fn tcp_adv_win_scale_recommendation(current: i64, kernel_version: &str) -> Optio
     // Linux 6.6 replaced the sysctl with a per-socket scaling_ratio measured
     // from real skb overhead; the knob is documented as obsolete and the
     // receive window ignores it, so raising it there changes nothing.
-    if kernel_at_least(kernel_version, 6, 6) || current >= 2 {
+    //
+    // Before that the value feeds tcp_win_from_space(), whose non-positive
+    // branch returns `space >> -scale`: at 0 the window already covers the
+    // whole buffer, and the target 2 would count a quarter of that space
+    // back as overhead, shrinking the window the reason promises to grow.
+    // Only negative values and 1 really sit below the target.
+    if kernel_at_least(kernel_version, 6, 6) || current == 0 || current >= 2 {
         return None;
     }
     Some(Recommendation {
@@ -12318,6 +12324,20 @@ mod tests {
         assert!(tcp_adv_win_scale_recommendation(1, "7.0.0-29-generic").is_none());
         // Already at or above the target on any version.
         assert!(tcp_adv_win_scale_recommendation(2, "5.10.0").is_none());
+    }
+
+    #[test]
+    fn tcp_adv_win_scale_recommendation_skips_a_full_window() {
+        // Through 6.5 the value feeds tcp_win_from_space(), whose
+        // non-positive branch returns `space >> -scale`: at 0 the window
+        // already covers the whole buffer, so raising the value to the target
+        // 2 would count a quarter of that space back as overhead and shrink
+        // the window the reason promises to grow.
+        assert!(tcp_adv_win_scale_recommendation(0, "5.10.0").is_none());
+        assert!(tcp_adv_win_scale_recommendation(0, "6.5.0").is_none());
+        // Values that really sit below the target still fire.
+        assert!(tcp_adv_win_scale_recommendation(1, "5.10.0").is_some());
+        assert!(tcp_adv_win_scale_recommendation(-1, "5.10.0").is_some());
     }
 
     #[test]
