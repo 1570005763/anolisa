@@ -2145,6 +2145,18 @@ fn eval_sched_migration_cost(info: &SystemInfo, recs: &mut Vec<Recommendation>) 
 /// `proc_dointvec` with no min/max, so "-1" round-trips verbatim — and
 /// `task_hot()` special-cases it: -1 keeps every task cache-hot (migration
 /// effectively disabled) while 0 makes no task cache-hot (always migrate).
+///
+/// A negative value sits on the cache-hot side of that comparison, never
+/// below the rule's 5 ms target: `proc_dointvec` stores the signed input in
+/// the table's `unsigned int` slot, so `task_hot()`'s
+/// `delta < (s64)sysctl_sched_migration_cost` reads it as ≈4.29e9 ns, and -1
+/// short-circuits to "hot" outright (v5.12 `kernel/sched/fair.c`:7452-7459,
+/// the same shape at 7.3-rc6 `:10670-10685`). A host that pinned tasks this
+/// way already keeps them where they run — at least as strictly as the 5 ms
+/// the target accepts — so writing 5000000 could only make tasks migratable
+/// again, the opposite of the reason's promise. A negative value is left
+/// alone: the same "already at the target" silence the tcp_adv_win_scale
+/// rule keeps for its 0.
 fn eval_sched_migration_cost_at(
     info: &SystemInfo,
     recs: &mut Vec<Recommendation>,
@@ -2160,6 +2172,11 @@ fn eval_sched_migration_cost_at(
     // or the unsigned fallback maps it to 0, the opposite "always migrate"
     // policy, and the report misdiagnoses a pinned host.
     let current = read_sysctl_i64(path);
+    // Every negative value is the pinned side of the comparison (see above):
+    // there is no migration tendency left for the target to raise.
+    if current < 0 {
+        return 1;
+    }
     if current < 5000000 {
         recs.push(Recommendation {
             param: "kernel.sched_migration_cost_ns".to_string(),
@@ -9714,48 +9731,47 @@ mod tests {
     }
 
     #[test]
-    fn test_sched_migration_cost_minus_one_reads_signed() {
-        // -1 is task_hot()'s "every task stays cache-hot" sentinel: migration
-        // is effectively disabled (kernel/sched/fair.c special-cases it next
-        // to 0, the "always migrate" value). The unsigned reader parsed
-        // "-1" to Err and fell back to 0 — the *opposite* migration policy —
-        // so the report diagnosed a deliberately pinned host as aggressively
-        // migrating, and current_value lied about the live kernel setting.
-        let path = std::env::temp_dir().join(format!(
-            "ktuner_sched_mig_{}_{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::write(&path, b"-1\n").unwrap();
+    fn test_sched_migration_cost_negative_values_are_already_pinned() {
+        // A negative value is not a migration cost below the 5 ms target.
+        // `proc_dointvec` stores it through an `int` into the table's unsigned
+        // slot, so task_hot()'s `delta < (s64)sysctl_sched_migration_cost`
+        // compares against ≈4.29e9 ns — 858 times the runtime gap the target
+        // accepts — and -1 is short-circuited to "hot" outright.
+        // The host is therefore already at least as sticky as this rule asks
+        // for; writing 5000000 could only make tasks migratable again, the
+        // opposite of the reason's promise. The signed read is what makes the
+        // value visible at all: an unsigned reader maps "-1" to 0, the
+        // "always migrate" policy, and would fire here.
         let mut info = make_test_info();
         info.cpu_cores = 32;
-        let mut recs = Vec::new();
-        let checked = eval_sched_migration_cost_at(&info, &mut recs, path.to_str().unwrap());
-        std::fs::remove_file(&path).ok();
-        assert_eq!(checked, 1);
-        assert_eq!(
-            recs.len(),
-            1,
-            "-1 is far below 5000000, so it must be reported"
-        );
-        assert_eq!(recs[0].param, "kernel.sched_migration_cost_ns");
-        assert_eq!(
-            recs[0].current_value, "-1",
-            "current must be faithful: 0 is the opposite migration policy"
-        );
-        assert_eq!(recs[0].recommended_value, "5000000");
+        for value in ["-1", "-500000"] {
+            let path = std::env::temp_dir().join(format!(
+                "ktuner_sched_mig_neg_{}_{:?}_{value}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::write(&path, format!("{value}\n")).unwrap();
+            let mut recs = Vec::new();
+            let checked = eval_sched_migration_cost_at(&info, &mut recs, path.to_str().unwrap());
+            std::fs::remove_file(&path).ok();
+            assert_eq!(checked, 1);
+            assert!(
+                recs.is_empty(),
+                "{value} already keeps tasks on their CPU; nothing to raise"
+            );
+        }
     }
 
     #[test]
     fn test_sched_migration_cost_boundaries() {
         // 5000000 (the recommendation itself) and anything above is already
-        // tuned; every lower value — including the -1 "never migrate"
-        // sentinel, 0 ("always migrate") and the 500000 default — must be
+        // tuned; every value below it except the pinned negatives — 0
+        // ("always migrate") and the 500000 default among them — must be
         // reported with a faithful signed echo.
         let mut info = make_test_info();
         info.cpu_cores = 32;
         for (value, expects_rec) in [
-            (-1, true),
+            (-1, false),
             (0, true),
             (500000, true),
             (4999999, true),
