@@ -61,6 +61,7 @@ sudo ktuner tune --dry-run
 # Apply recommendations (requires root)
 sudo ktuner tune               # apply all
 sudo ktuner tune --conservative
+sudo ktuner tune --exclude vm.dirty_ratio   # apply all but this one
 
 # Fix a single parameter
 sudo ktuner fix vm.swappiness
@@ -83,6 +84,16 @@ is a successful no-op (`0`); an unreadable or missing ledger is a command error 
 plus the mutually exclusive twin recorded with it, restored together because writing
 either knob zeroes the other — and reports that entry as `param` in its JSON; a
 parameter the ledger does not record is a command error (`2`).
+
+`tune --exclude <param>` (repeatable) leaves a named recommendation out of the plan:
+nothing is written for it, nothing is recorded in the rollback ledger, and nothing is
+persisted. It applies after the `--category` and `--conservative` filters, and the
+excluded entry is listed in the output (`would_skip`, reason `excluded`); a name that
+matches no recommendation in scope is reported in `unmatched_exclude` instead of
+failing the run (on an empty plan, every given name). Excluding every recommendation
+is a `blocked` run with exit code `1`, like any other plan with nothing applicable. Excluding one half of a mutually exclusive
+sysctl pair does not stop the kernel from zeroing it when the other half is written;
+ktuner records the cleared original so `rollback` can restore it.
 
 ---
 

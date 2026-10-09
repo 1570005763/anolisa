@@ -16,6 +16,7 @@ ktuner check --conservative    # high-confidence only
 sudo ktuner tune --dry-run     # preview, no changes
 sudo ktuner tune               # apply all
 sudo ktuner tune --conservative
+sudo ktuner tune --exclude vm.dirty_ratio   # apply all but this one
 
 # Fix a single parameter (requires root)
 sudo ktuner fix <param>        # e.g. sudo ktuner fix vm.swappiness
@@ -110,12 +111,45 @@ keeps reporting those parameters (exit 1) after a successful partial tune:
 The fully-blocked short-circuit body carries the same `would_skip` list
 alongside its counts.
 
+`tune --exclude <param>` (repeatable) leaves the named recommendation out of
+the plan: nothing is written for it, nothing enters the rollback ledger, and
+nothing is persisted. Exclusions apply after the `--category`/`--conservative`
+filters, the excluded entry is named in `would_skip` with the reason
+`excluded` — the operator's instruction outranks `unwritable` and
+`runtime_dangerous` — and a name that matches no recommendation in scope is
+not an error: it is echoed in `unmatched_exclude`, in the spelling given, so
+an inert exclusion is visible instead of silent — an empty plan reports every
+given name.
+
+```json
+{"blocked": 1, "dry_run": true, "status": "planned", "would_apply": [ ... ], "would_skip": [{"param": "kernel.dmesg_restrict", "reason": "excluded"}]}
+```
+
+With everything excluded the run answers `status: "blocked"` and exits 1,
+like any other plan with nothing applicable (`check` still reports those
+parameters); `blocked_excluded` joins the short-circuit counts and the three
+add up to `recommendations`:
+
+```json
+{"applied": 0, "blocked": 55, "blocked_excluded": 55, "blocked_runtime_dangerous": 0, "blocked_unwritable": 0, "dry_run": true, "recommendations": 55, "status": "blocked", "would_apply": [], "would_skip": [ ... ]}
+```
+
+`--exclude` does not reach the kernel's own side effects: writing one half of
+a mutually exclusive sysctl pair — `vm.dirty_bytes`/`vm.dirty_ratio`,
+`vm.dirty_background_bytes`/`vm.dirty_background_ratio`, and
+`vm.overcommit_kbytes`/`vm.overcommit_ratio` — zeroes the other half
+(`mm/page-writeback.c`, `mm/util.c`), so a parameter excluded from the plan
+is still cleared in the kernel when its counterpart is written. ktuner keeps
+recording that cleared original in the ledger (so `rollback` restores it) and
+persists only the written half, which reproduces the same cleared state at
+boot; the built-in rules never plan both halves of a pair at once.
+
 `tune --dry-run` previews the plan instead; `status` uses the same
 vocabulary as the short-circuit path (`planned` here; `optimal`/`blocked`
 when there is nothing to apply). `would_apply` lists the entries a real run
-would write, `would_skip` names the ones this environment filters out (with
-the reason: `unwritable` or `runtime_dangerous`), and `blocked` stays their
-count:
+would write, `would_skip` names the ones this run leaves out (with the
+reason: `unwritable`, `runtime_dangerous`, or `excluded` for an `--exclude`
+name), and `blocked` stays their count:
 
 ```json
 {"blocked": 1, "dry_run": true, "status": "planned", "would_apply": [ ... ], "would_skip": [{"param": "vm.nr_hugepages", "reason": "runtime_dangerous"}]}
