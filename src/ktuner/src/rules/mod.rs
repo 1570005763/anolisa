@@ -1983,6 +1983,14 @@ fn eval_rq_affinity(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize 
 /// cannot deliver the reason's promise. Those two bits have no other reader
 /// in either tree (`block/blk-sysfs.c` shows and stores them, `block/blk-mq.c`
 /// is the only consumer).
+///
+/// Only a migration that is switched off is worth restoring. The default 1
+/// (`QUEUE_FLAG_MQ_DEFAULT` carries `QUEUE_FLAG_SAME_COMP`) already sends a
+/// completion that fired outside the submitter's cache domain back to it, and
+/// a NUMA node never shares a last-level cache with another, so cross-node
+/// completions are covered; 2 adds `QUEUE_FLAG_SAME_FORCE`, which forces the
+/// IPI for completions inside the same cache domain as well, the setting the
+/// sysfs ABI describes as maximizing the distribution of completion work.
 fn eval_rq_affinity_at(
     info: &SystemInfo,
     recs: &mut Vec<Recommendation>,
@@ -1996,12 +2004,12 @@ fn eval_rq_affinity_at(
         return 1;
     }
     for disk in &info.disks {
-        if disk.disk_type == DiskType::NVMe && has_request_queue(disk) && disk.rq_affinity != 2 {
+        if disk.disk_type == DiskType::NVMe && has_request_queue(disk) && disk.rq_affinity == 0 {
             recs.push(Recommendation {
                 param: format!("block/{}/rq_affinity", disk.name),
                 current_value: disk.rq_affinity.to_string(),
-                recommended_value: "2".to_string(),
-                reason: "多 NUMA 节点下强制 IO 完成中断在提交 CPU 上处理，减少跨节点内存访问"
+                recommended_value: "1".to_string(),
+                reason: "多 NUMA 节点下 IO 完成迁移被关闭，恢复默认值让完成回到提交 CPU 所在的缓存域，减少跨节点内存访问"
                     .to_string(),
                 confidence: Confidence::High,
                 category: Category::Performance,
@@ -9184,14 +9192,63 @@ mod tests {
         );
 
         info.numa_nodes = 2;
+        info.disks[0].rq_affinity = 0;
         let mut recs = Vec::new();
         eval_rq_affinity_at(&info, &mut recs, cmdline, version);
         let rec = recs.iter().find(|r| r.param.contains("rq_affinity"));
         assert!(
             rec.is_some(),
-            "Should recommend rq_affinity=2 on multi-NUMA NVMe"
+            "Should recommend rq_affinity=1 on multi-NUMA NVMe"
         );
-        assert_eq!(rec.unwrap().recommended_value, "2");
+        assert_eq!(rec.unwrap().recommended_value, "1");
+    }
+
+    #[test]
+    fn rq_affinity_only_restores_a_disabled_migration() {
+        // rq_affinity=1 is the blk-mq default (QUEUE_FLAG_MQ_DEFAULT carries
+        // QUEUE_FLAG_SAME_COMP) and already sends every completion that fired
+        // outside the submitter's cache domain back to it, which covers the
+        // cross-node case; 2 adds QUEUE_FLAG_SAME_FORCE, an IPI for completions
+        // that share the cache domain too. Only 0 turns the migration off.
+        let dir = std::env::temp_dir().join(format!(
+            "ktuner_rq_affinity_off_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmdline = dir.join("cmdline");
+        std::fs::write(&cmdline, "BOOT_IMAGE=/vmlinuz root=/dev/sda1\n").unwrap();
+        let version = dir.join("version");
+        std::fs::write(
+            &version,
+            "Linux version 6.6.0 (gcc) #1 SMP PREEMPT_DYNAMIC\n",
+        )
+        .unwrap();
+        let (cmdline, version) = (cmdline.to_str().unwrap(), version.to_str().unwrap());
+
+        let mut info = make_test_info();
+        info.numa_nodes = 2;
+        for current in [1, 2] {
+            info.disks[0].rq_affinity = current;
+            let mut recs = Vec::new();
+            eval_rq_affinity_at(&info, &mut recs, cmdline, version);
+            assert!(
+                !recs.iter().any(|r| r.param.contains("rq_affinity")),
+                "rq_affinity={current} already migrates cross-node completions"
+            );
+        }
+
+        info.disks[0].rq_affinity = 0;
+        let mut recs = Vec::new();
+        eval_rq_affinity_at(&info, &mut recs, cmdline, version);
+        let rec = recs.iter().find(|r| r.param.contains("rq_affinity"));
+        assert_eq!(
+            rec.map(|r| r.recommended_value.as_str()),
+            Some("1"),
+            "a disabled migration is restored to the default"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -9228,8 +9285,10 @@ mod tests {
 
         let mut info = make_test_info();
         info.numa_nodes = 2;
+        info.disks[0].rq_affinity = 0;
 
-        // Baseline: completions are still migrated, so the advice stands.
+        // Baseline: the migration is off and threads do not pin the
+        // completion, so the advice stands.
         let mut recs = Vec::new();
         eval_rq_affinity_at(
             &info,
