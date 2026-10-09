@@ -1857,6 +1857,12 @@ fn eval_read_ahead_kb(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usiz
         || info.has_process("clickhouse");
 
     for disk in &info.disks {
+        // The window this rule resizes belongs to the device a filesystem is
+        // mounted on, so a disk that cannot be a mount source has no window to
+        // resize and the advice would promise a change nothing can deliver.
+        if !can_carry_filesystem(disk) {
+            continue;
+        }
         match disk.disk_type {
             DiskType::HDD if is_streaming && disk.read_ahead_kb < 2048 => {
                 recs.push(Recommendation {
@@ -1887,6 +1893,31 @@ fn eval_read_ahead_kb(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usiz
         }
     }
     1
+}
+
+/// Whether a filesystem can be mounted on this device — the only way the
+/// read-ahead window this rule sizes can act on a workload.
+///
+/// `queue/read_ahead_kb` writes the `ra_pages` of the bdi of the device it
+/// hangs off (v6.6 `block/blk-sysfs.c`:99, 7.3-rc6 :207), and a filesystem's
+/// read-ahead window is the bdi of the device the filesystem is mounted on:
+/// `setup_bdev_super()` sets `sb->s_bdi = bdi_get(bdev->bd_disk->bdi)` (v6.6
+/// `fs/super.c`:1518, 7.3-rc6 :1821), and every window reader goes through that
+/// superblock (v6.6 `mm/readahead.c`:141 and :557, 7.3-rc6 :144 and :566). Two
+/// kinds of device can never be it:
+///
+/// - a held disk: its holder claims it exclusively, so a mount on the disk or
+///   on any of its partitions fails with `-EBUSY` (`bd_may_claim()`, v6.6
+///   `block/bdev.c`:458-484, 7.3-rc6 :585-611), and the stacked device
+///   computes its own read-ahead from the stacked limits instead of the
+///   member's `ra_pages` (v6.6 `drivers/md/dm-table.c`:2029, 7.3-rc6 :2084).
+/// - a hidden disk: the kernel registers no device number for it and never
+///   puts its `block_device` in the inode hash (v6.6 `block/genhd.c`:454 and
+///   :508, 7.3-rc6 :498 and :410), so no filesystem can be mounted there. The
+///   NVMe multipath path devices are hidden this way while the head device
+///   that does carry the filesystem is not.
+fn can_carry_filesystem(disk: &DiskInfo) -> bool {
+    !disk.hidden && disk.holders.is_empty()
 }
 
 /// Whether the device exposes a request (blk-mq) queue at all.
@@ -8638,6 +8669,8 @@ mod tests {
                 nr_requests: 256,
                 read_ahead_kb: 128,
                 rq_affinity: 1,
+                hidden: false,
+                holders: vec![],
             }],
             network: vec![],
             sysctl: SysctlValues {
@@ -9185,6 +9218,8 @@ mod tests {
             nr_requests: 256,
             read_ahead_kb: 128,
             rq_affinity: 1,
+            hidden: false,
+            holders: vec![],
         }];
         let recs = evaluate(&info).unwrap().recommendations;
         let rec = recs.iter().find(|r| r.param.contains("scheduler"));
@@ -9203,6 +9238,8 @@ mod tests {
             nr_requests: 128,
             read_ahead_kb: 128,
             rq_affinity: 1,
+            hidden: false,
+            holders: vec![],
         }];
         info.processes = vec![ProcessInfo {
             name: "kafka".to_string(),
@@ -9230,6 +9267,8 @@ mod tests {
             nr_requests: 128,
             read_ahead_kb: 128,
             rq_affinity: 1,
+            hidden: false,
+            holders: vec![],
         }];
         info.processes = vec![ProcessInfo {
             name: "bookkeeper".to_string(),
@@ -9244,6 +9283,55 @@ mod tests {
     }
 
     #[test]
+    fn read_ahead_skips_devices_without_a_mount_target() {
+        // A disk held by dm/md (a non-empty holders directory) is claimed
+        // exclusively, so mounting a filesystem on it or on any partition of
+        // it fails with -EBUSY (bd_may_claim(), v6.6 block/bdev.c:458-484),
+        // and the stacked device computes its read-ahead from the stacked
+        // limits rather than from the member's ra_pages (v6.6
+        // drivers/md/dm-table.c:2029). A hidden disk (GENHD_FL_HIDDEN) is the
+        // same dead end from the other side: no device number is registered
+        // for it (v6.6 block/genhd.c:454, :508), so nothing can be mounted
+        // there either. Both would make block/<disk>/read_ahead_kb promise a
+        // change that never reaches a workload.
+        for (disk_type, process, read_ahead_kb) in [
+            (DiskType::HDD, "kafka", 128),
+            (DiskType::NVMe, "postgres", 512),
+        ] {
+            for marker in ["holder", "hidden"] {
+                let mut info = info_with_processes(&[process]);
+                info.disks[0].disk_type = disk_type.clone();
+                info.disks[0].read_ahead_kb = read_ahead_kb;
+                if marker == "holder" {
+                    info.disks[0].holders = vec!["dm-0".to_string()];
+                } else {
+                    info.disks[0].hidden = true;
+                }
+                let mut recs = Vec::new();
+                eval_read_ahead_kb(&info, &mut recs);
+                assert!(
+                    recs.is_empty(),
+                    "a {disk_type:?} disk with a {marker} has no filesystem to read ahead for"
+                );
+            }
+
+            // The same disk without either marker — an ordinary raw device, or
+            // the NVMe multipath head carrying the filesystem — keeps its
+            // advice.
+            let mut info = info_with_processes(&[process]);
+            info.disks[0].disk_type = disk_type.clone();
+            info.disks[0].read_ahead_kb = read_ahead_kb;
+            let mut recs = Vec::new();
+            eval_read_ahead_kb(&info, &mut recs);
+            assert_eq!(
+                recs.len(),
+                1,
+                "the mountable {disk_type:?} disk must keep its read-ahead advice"
+            );
+        }
+    }
+
+    #[test]
     fn test_hdd_no_read_ahead_without_streaming() {
         let mut info = make_test_info();
         info.disks = vec![DiskInfo {
@@ -9254,6 +9342,8 @@ mod tests {
             nr_requests: 128,
             read_ahead_kb: 128,
             rq_affinity: 1,
+            hidden: false,
+            holders: vec![],
         }];
         info.processes = vec![];
         let recs = evaluate(&info).unwrap().recommendations;

@@ -25,6 +25,14 @@ pub struct DiskInfo {
     pub nr_requests: u64,
     pub read_ahead_kb: u64,
     pub rq_affinity: u64,
+    /// Whether the kernel hides the gendisk (`GENHD_FL_HIDDEN`), from the
+    /// disk's `hidden` attribute. A hidden disk is registered without a device
+    /// number, so nothing can be mounted on it.
+    pub hidden: bool,
+    /// The block devices holding this one, from the disk's `holders`
+    /// directory (a dm/md/bcache/drbd member). A held disk is claimed
+    /// exclusively, so it cannot be the device a filesystem is mounted on.
+    pub holders: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -699,6 +707,8 @@ fn read_disk_info() -> Result<Vec<DiskInfo>> {
             let nr_requests = read_nr_requests(&name);
             let read_ahead_kb = read_read_ahead_kb(&name);
             let rq_affinity = read_rq_affinity(&name);
+            let hidden = read_disk_hidden(&format!("/sys/block/{name}/hidden"));
+            let holders = read_disk_holders(&format!("/sys/block/{name}/holders"));
 
             disks.push(DiskInfo {
                 name,
@@ -708,6 +718,8 @@ fn read_disk_info() -> Result<Vec<DiskInfo>> {
                 nr_requests,
                 read_ahead_kb,
                 rq_affinity,
+                hidden,
+                holders,
             });
         }
     }
@@ -796,6 +808,44 @@ fn read_read_ahead_kb(name: &str) -> u64 {
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
+}
+
+/// Whether the kernel hides the gendisk (`GENHD_FL_HIDDEN`). A hidden disk
+/// registers no device number (v6.6 `block/genhd.c`:454, 7.3-rc6 :498) and its
+/// `block_device` never reaches the inode hash (v6.6 `block/genhd.c`:508,
+/// 7.3-rc6 :410), so nothing can open it, let alone mount a filesystem. The
+/// NVMe multipath path devices (`nvmeXcYnZ`) are hidden exactly this way
+/// (v6.6 `drivers/nvme/host/core.c`:3618-3620, 7.3-rc6 :4290-4292), while the
+/// head device that carries the filesystem is not. The path parameter keeps
+/// the reader runnable against a synthetic `/sys/block` tree.
+///
+/// An unreadable attribute reads as "not hidden", which keeps the advice
+/// emitting rather than silently dropping it.
+fn read_disk_hidden(hidden_path: &str) -> bool {
+    fs::read_to_string(hidden_path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        == 1
+}
+
+/// The names under a disk's `holders` directory — the block devices holding it
+/// open as a member. `bd_link_disk_holder()` names each entry after the holder
+/// disk (v6.6 `block/holder.c`:106, 7.3-rc6 :108); dm, md, bcache and drbd are
+/// its callers, so a non-empty directory means the disk belongs to a stacked
+/// device rather than to a filesystem. Sorted so the read is deterministic; an
+/// unreadable directory reads as no holder, the conservative side for advice.
+fn read_disk_holders(holders_dir: &str) -> Vec<String> {
+    let mut holders: Vec<String> = fs::read_dir(holders_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    holders.sort();
+    holders
 }
 
 fn read_rq_affinity(name: &str) -> u64 {
@@ -1861,6 +1911,66 @@ mod tests {
     fn test_detect_disk_type() {
         assert_eq!(detect_disk_type("nvme0n1"), DiskType::NVMe);
         assert_eq!(detect_disk_type("nvme1n1"), DiskType::NVMe);
+    }
+
+    /// A synthetic `/sys/block/<disk>` directory built from `(name, content)`
+    /// entries; a name ending in `/` becomes a subdirectory, the shape a
+    /// `holders` entry has (std-only, like the other tree fixtures).
+    fn device_tree(entries: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ktuner_device_tree_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create device dir");
+        for (name, content) in entries {
+            match name.strip_suffix('/') {
+                Some(sub) => fs::create_dir_all(dir.join(sub)).expect("create subdirectory"),
+                None => fs::write(dir.join(name), content.as_bytes()).expect("write entry"),
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn holders_read_the_holding_disks() {
+        // `/sys/block/<disk>/holders/<holder>` is one symlink per holder named
+        // after the holder's gendisk (dm-0, md0, ...); the names are all the
+        // reader needs.
+        let held = device_tree(&[("holders/dm-0/", ""), ("holders/md0/", "")]);
+        assert_eq!(
+            read_disk_holders(held.join("holders").to_str().unwrap()),
+            vec!["dm-0".to_string(), "md0".to_string()]
+        );
+
+        // An empty holders directory is the normal case for a mount source.
+        let bare = device_tree(&[("holders/", "")]);
+        assert!(read_disk_holders(bare.join("holders").to_str().unwrap()).is_empty());
+        // A missing directory (or one that cannot be read) must not invent a
+        // holder: a bare device stays a mount candidate.
+        assert!(read_disk_holders(bare.join("missing").to_str().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn hidden_attribute_reads_only_one_as_hidden() {
+        // Every disk exposes `hidden`: 1 marks a GENHD_FL_HIDDEN disk (the
+        // NVMe multipath path devices), 0 an ordinary one.
+        for (content, expected) in [
+            ("1\n", true),
+            ("0\n", false),
+            ("", false),
+            ("garbage", false),
+        ] {
+            let disk = device_tree(&[("hidden", content)]);
+            let got = read_disk_hidden(disk.join("hidden").to_str().unwrap());
+            assert_eq!(
+                got, expected,
+                "hidden file {content:?} must read as {expected}"
+            );
+        }
+        // An unreadable attribute reads as not hidden, keeping the advice.
+        assert!(!read_disk_hidden("/nonexistent/ktuner/hidden"));
     }
 
     #[test]
