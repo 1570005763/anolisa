@@ -68,9 +68,10 @@ sudo ktuner fix vm.swappiness
 # Explain why a parameter should change
 ktuner why net.core.somaxconn
 
-# Undo all changes ktuner made
+# Undo all changes ktuner made, or one recorded parameter
 sudo ktuner rollback          # destructive + terminal: restores and deletes the ledger
 sudo ktuner rollback --list   # read-only preview of what rollback would restore
+sudo ktuner rollback vm.swappiness   # restore one recorded parameter
 ```
 
 All output is JSON on stdout; errors are JSON on stderr. Exit codes: `0` success,
@@ -78,6 +79,10 @@ All output is JSON on stdout; errors are JSON on stderr. Exit codes: `0` success
 Rollback returns `1` for failed writes or missing paths, including partial restoration;
 its JSON counts remain on stdout and the ledger is kept for retry. An empty ledger
 is a successful no-op (`0`); an unreadable or missing ledger is a command error (`2`).
+`sudo ktuner rollback <param>` follows the same contract for the entry it names —
+plus the mutually exclusive twin recorded with it, restored together because writing
+either knob zeroes the other — and reports that entry as `param` in its JSON; a
+parameter the ledger does not record is a command error (`2`).
 
 ---
 

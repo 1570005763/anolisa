@@ -34,8 +34,11 @@ enum Commands {
     Fix { param: String },
     /// Explain why a parameter should be changed
     Why { param: String },
-    /// Roll back all applied changes
+    /// Roll back all applied changes, or one recorded parameter
     Rollback {
+        /// Restore only this recorded parameter, leaving the other entries
+        /// in the ledger in place
+        param: Option<String>,
         /// Show what a rollback would restore, without changing anything
         #[arg(long)]
         list: bool,
@@ -82,7 +85,7 @@ fn main() {
         } => cmd_tune(dry_run, conservative, cat),
         Commands::Fix { param } => cmd_fix(&param),
         Commands::Why { param } => cmd_why(&param),
-        Commands::Rollback { list } => cmd_rollback(list),
+        Commands::Rollback { param, list } => cmd_rollback(param.as_deref(), list),
     };
     match result {
         Ok(code) => std::process::exit(code),
@@ -603,7 +606,37 @@ fn rollback_list_output(entries: &[(String, String, String)]) -> serde_json::Val
     })
 }
 
-fn cmd_rollback(list: bool) -> Result<i32> {
+/// JSON body of `ktuner rollback`. One builder for both shapes: a full
+/// rollback keeps exactly the four keys it always had, while restoring a single
+/// parameter adds `param` — the ledger key it retired, spelled the way
+/// `rollback --list` publishes it, so the entry can be reconciled with the
+/// preview. Keys stay in alphabetical order (serde_json's map is sorted):
+/// `failed` < `param` < `restored` < `skipped` < `status`.
+fn rollback_output(param: Option<&str>, outcome: &tuner::RollbackOutcome) -> serde_json::Value {
+    let status = tuner::classify_rollback(outcome);
+    let mut body = json!({
+        "restored": outcome.restored,
+        "failed": outcome.failed,
+        "skipped": outcome.skipped,
+        "status": format!("{status:?}"),
+    });
+    if let Some(param) = param {
+        body["param"] = json!(param);
+    }
+    body
+}
+
+fn cmd_rollback(param: Option<&str>, list: bool) -> Result<i32> {
+    // `--list` keeps its read-only preview of the whole pending set, so the
+    // positional cannot be combined with it: refusing is a usage error (the
+    // README's stderr JSON, exit 2), while ignoring the parameter would
+    // silently answer a different question than the one asked. Checked before
+    // the root gate so it fails as an argument error, like the parser's own.
+    if list {
+        if let Some(param) = param {
+            anyhow::bail!("rollback --list takes no parameter (got {param})");
+        }
+    }
     let is_root = unsafe { libc::geteuid() } == 0;
     if !is_root {
         anyhow::bail!("rollback requires root (sudo ktuner rollback)");
@@ -618,15 +651,15 @@ fn cmd_rollback(list: bool) -> Result<i32> {
         print_json(&output)?;
         return Ok(0);
     }
+    if let Some(param) = param {
+        // The CLI owns the alias policy (fix/why normalize the same way); the
+        // engine matches the normalized spelling against the ledger.
+        let (resolved, outcome) = tuner::rollback_param(&normalize_param(param))?;
+        print_json(&rollback_output(Some(&resolved), &outcome))?;
+        return Ok(rollback_exit_code(&outcome));
+    }
     let outcome = tuner::rollback_quiet()?;
-    let status = tuner::classify_rollback(&outcome);
-    let output = json!({
-        "restored": outcome.restored,
-        "failed": outcome.failed,
-        "skipped": outcome.skipped,
-        "status": format!("{status:?}"),
-    });
-    print_json(&output)?;
+    print_json(&rollback_output(None, &outcome))?;
     Ok(rollback_exit_code(&outcome))
 }
 
@@ -1540,5 +1573,108 @@ mod tests {
             msg.contains("cannot read current value") && msg.contains("vm.compact_memory"),
             "error must name the parameter and the failed read: {msg}"
         );
+    }
+
+    #[test]
+    fn rollback_output_matches_the_full_rollback_body() {
+        // The positional is additive: a full rollback's body must stay exactly
+        // the four keys it had, in the same byte layout (keys alphabetical,
+        // two-space indent, no trailing newline here — the CLI adds one).
+        let full = tuner::RollbackOutcome {
+            restored: 5,
+            failed: 0,
+            skipped: 0,
+        };
+        let body = rollback_output(None, &full);
+        println!(
+            "full rollback body:\n{}",
+            serde_json::to_string_pretty(&body).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&body).unwrap(),
+            "{\n  \"failed\": 0,\n  \"restored\": 5,\n  \"skipped\": 0,\n  \"status\": \"Full\"\n}"
+        );
+        for (restored, failed, skipped, status) in [
+            (2, 1, 0, "Partial"),
+            (0, 1, 0, "Nothing"),
+            // 0 restored is Nothing whichever counter is nonzero: there is no
+            // "partial" restore to report when nothing was restored.
+            (0, 0, 1, "Nothing"),
+        ] {
+            let outcome = tuner::RollbackOutcome {
+                restored,
+                failed,
+                skipped,
+            };
+            assert_eq!(
+                rollback_output(None, &outcome),
+                json!({
+                    "restored": restored,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "status": status,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn rollback_output_names_the_restored_param() {
+        // The single-parameter body adds exactly one key, carrying the ledger
+        // entry that was retired — the spelling `rollback --list` publishes.
+        // A recorded mutually exclusive twin is restored and counted too, so
+        // `restored` may be 2 while `param` names the entry the caller chose.
+        let twins = tuner::RollbackOutcome {
+            restored: 2,
+            failed: 0,
+            skipped: 0,
+        };
+        let body = rollback_output(Some("vm.dirty_bytes"), &twins);
+        println!(
+            "single-parameter rollback body:\n{}",
+            serde_json::to_string_pretty(&body).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_string_pretty(&body).unwrap(),
+            "{\n  \"failed\": 0,\n  \"param\": \"vm.dirty_bytes\",\n  \"restored\": 2,\n  \"skipped\": 0,\n  \"status\": \"Full\"\n}"
+        );
+        let skipped = tuner::RollbackOutcome {
+            restored: 0,
+            failed: 0,
+            skipped: 1,
+        };
+        assert_eq!(
+            serde_json::to_string_pretty(&rollback_output(Some("vm.swappiness"), &skipped))
+                .unwrap(),
+            "{\n  \"failed\": 0,\n  \"param\": \"vm.swappiness\",\n  \"restored\": 0,\n  \"skipped\": 1,\n  \"status\": \"Nothing\"\n}"
+        );
+    }
+
+    #[test]
+    fn rollback_param_follows_the_fix_why_alias_policy() {
+        // cmd_rollback feeds the engine normalize_param's output — the same
+        // function fix/why use — so the spellings this command accepts cannot
+        // drift from those commands, and a ledger key normalizes to itself
+        // (otherwise the lookup would miss the entry the CLI just spelled).
+        for (input, expected) in [
+            ("vm/swappiness", "vm.swappiness"),
+            ("VM.SWAPPINESS", "vm.swappiness"),
+            (
+                "net/ipv4/conf/Br0.100/forwarding",
+                "net.ipv4.conf.Br0.100.forwarding",
+            ),
+            ("block/sda/scheduler", "block/sda/scheduler"),
+            (
+                "transparent_hugepage/enabled",
+                "transparent_hugepage/enabled",
+            ),
+        ] {
+            assert_eq!(normalize_param(input), expected, "{input}");
+            assert_eq!(
+                normalize_param(expected),
+                expected,
+                "a ledger key must normalize to itself: {expected}"
+            );
+        }
     }
 }

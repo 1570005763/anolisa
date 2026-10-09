@@ -23,9 +23,10 @@ sudo ktuner fix <param>        # 例如 sudo ktuner fix vm.swappiness
 # 解释某个参数为何需要修改
 ktuner why <param>             # 例如 ktuner why net.core.somaxconn
 
-# 回滚所有变更（需要 root 权限）
+# 回滚变更（需要 root 权限）
 sudo ktuner rollback          # 破坏性且终结（删除 ledger）
 sudo ktuner rollback --list   # 只读预览回滚将恢复的内容
+sudo ktuner rollback <param>  # 回滚单个已记录参数，例如 vm.dirty_bytes
 ```
 
 ## JSON 输出
@@ -123,6 +124,24 @@ sudo ktuner rollback --list   # 只读预览回滚将恢复的内容
 ```json
 {"failed": 0, "restored": 5, "skipped": 0, "status": "Full"}
 ```
+
+### rollback <param> 输出
+
+`sudo ktuner rollback <param>` 只恢复该参数命中的账本条目，其余条目保留。参数拼写与
+`fix`、`why` 相同（点/斜杠别名、含字面点的网卡名）：
+
+```json
+{"failed": 0, "param": "vm.dirty_bytes", "restored": 2, "skipped": 0, "status": "Full"}
+```
+
+`param` 是被恢复的账本条目，拼写与 `rollback --list` 一致。持久化文件按剩余账本重新
+生成；账本清空时走与全量 rollback 相同的收尾（先删持久化文件，再删账本）。内核互斥的
+参数对（`vm.dirty_bytes` / `vm.dirty_ratio`、`vm.overcommit_kbytes` /
+`vm.overcommit_ratio`、`dirty_background_` 对）连同账本记录的孪生一起恢复：写任一半都会
+把另一半清零，只恢复一半无法让账本描述内核的真实状态，因此 `restored` 把两条都计入。
+写入失败或路径缺失的条目连同其孪生一起保留，退出码 `1`，可重试；账本里没有的参数是命令
+错误（`2`，stderr JSON），绝不静默成功。`status` 描述本次尝试（`Full` / `Partial` /
+`Nothing`），不表示账本已清空。普通 `ktuner rollback` 与 `ktuner rollback --list` 行为不变。
 
 ### rollback --list 输出
 

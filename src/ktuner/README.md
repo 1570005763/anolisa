@@ -23,9 +23,10 @@ sudo ktuner fix <param>        # e.g. sudo ktuner fix vm.swappiness
 # Explain why a parameter should change
 ktuner why <param>             # e.g. ktuner why net.core.somaxconn
 
-# Undo all changes (requires root)
+# Undo changes (requires root)
 sudo ktuner rollback          # destructive + terminal (deletes the ledger)
 sudo ktuner rollback --list   # read-only preview of what rollback would restore
+sudo ktuner rollback <param>  # restore one recorded parameter, e.g. vm.dirty_bytes
 ```
 
 ## JSON output
@@ -131,6 +132,31 @@ carries the reason without a dry run.
 ```json
 {"failed": 0, "restored": 5, "skipped": 0, "status": "Full"}
 ```
+
+### rollback <param> output
+
+`sudo ktuner rollback <param>` restores just the recorded entry the parameter
+names and leaves the rest of the ledger in place. It accepts the same spellings
+`fix` and `why` do (slash/dot aliases, and the literal-dot interface names):
+
+```json
+{"failed": 0, "param": "vm.dirty_bytes", "restored": 2, "skipped": 0, "status": "Full"}
+```
+
+`param` is the ledger entry that was restored, spelled the way `rollback --list`
+publishes it. The persisted file is regenerated from the entries that remain;
+when the ledger empties, the same terminal cleanup as a full rollback runs
+(persisted files, then the ledger). A parameter the kernel keeps mutually
+exclusive with a twin (`vm.dirty_bytes` / `vm.dirty_ratio`,
+`vm.overcommit_kbytes` / `vm.overcommit_ratio`, and the `dirty_background_`
+pair) is restored together with the twin the ledger recorded: writing either
+knob zeroes the other, so a half restore could not leave the ledger describing
+the live kernel, and `restored` counts both entries. An entry whose write failed
+or whose path is gone keeps its record (and its twin's), exits `1`, and can be
+retried; a parameter the ledger does not record is a command error (`2`, stderr
+JSON), never a silent success. `status` classifies this attempt
+(`Full` / `Partial` / `Nothing`), not whether the ledger is now empty. Plain
+`ktuner rollback` and `ktuner rollback --list` are unchanged.
 
 ### rollback --list output
 

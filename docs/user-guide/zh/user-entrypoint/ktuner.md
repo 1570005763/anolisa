@@ -66,15 +66,19 @@ sudo ktuner fix vm.swappiness
 # 解释某个参数为何应该改
 ktuner why net.core.somaxconn
 
-# 撤销 ktuner 做的所有改动
+# 撤销 ktuner 做的所有改动，或单个已记录参数
 sudo ktuner rollback          # 破坏性且终结：恢复并删除 ledger
 sudo ktuner rollback --list   # 只读预览回滚将恢复的内容
+sudo ktuner rollback vm.swappiness   # 回滚单个已记录参数
 ```
 
 所有输出为 stdout 上的 JSON，错误为 stderr 上的 JSON。退出码：`0` 成功、
 `1` check 发现可改进项或 rollback 仍有值未恢复、`2` 命令错误。
 回滚遇到写入失败或路径缺失时返回 `1`（包括部分恢复），仍在 stdout 输出 JSON 计数，
 并保留记录以便重试。空记录为成功的无操作（`0`）；记录缺失或无法读取为命令错误（`2`）。
+`sudo ktuner rollback <param>` 对命中的账本条目遵循同一套契约——账本同时记录互斥孪生时
+两者一起恢复（写任一半都会把另一半清零）——并在 JSON 中以 `param` 回显该条目；
+账本里没有的参数是命令错误（`2`）。
 
 ---
 
