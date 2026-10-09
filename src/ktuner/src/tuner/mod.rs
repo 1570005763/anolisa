@@ -1567,8 +1567,9 @@ fn remove_persisted(path: &str, quiet: bool) -> bool {
 }
 
 /// Delete the persisted config `tune` wrote and, only when every file is gone,
-/// the rollback ledger at `ledger`. Returns how many persisted files could not
-/// be removed.
+/// the rollback ledger at `ledger`. Returns how many removals failed — the
+/// persisted files plus the ledger itself, because a rollback that leaves any
+/// of them behind is not finished.
 ///
 /// The removal result used to be discarded while the 已清理 line printed
 /// unconditionally and the ledger was deleted anyway: on an `/etc` that refuses
@@ -1576,6 +1577,12 @@ fn remove_persisted(path: &str, quiet: bool) -> bool {
 /// place) `rollback` reported success, exited 0, and dropped the only record of
 /// the originals — the next boot then re-applied every tuned value from the
 /// surviving file with nothing left to roll it back with.
+///
+/// The ledger's own removal counts the same way, and it is the `ledger` file
+/// this function removes last: it is the record a retry restores from and the
+/// set `rollback --list` publishes, so a run that could not drop it and still
+/// returned 0 would keep reporting a pending rollback of values that are
+/// already restored. A ledger that is already gone is not a failure.
 fn finalize_rollback_at(
     ledger: &str,
     sysctl_path: &str,
@@ -1598,7 +1605,18 @@ fn finalize_rollback_at(
         failed += 1;
     }
     if failed == 0 {
-        fs::remove_file(ledger).ok();
+        match fs::remove_file(ledger) {
+            Ok(()) => {}
+            // Only a delete that left the ledger behind counts: ENOENT — the
+            // ledger already gone — is the state this call exists to reach.
+            Err(error) if Path::new(ledger).exists() => {
+                if !quiet {
+                    println!("  {} {ledger} : {error}（未清理）", "✗".red());
+                }
+                failed += 1;
+            }
+            Err(_) => {}
+        }
     }
     failed
 }
@@ -1619,10 +1637,11 @@ fn rollback_inner(quiet: bool) -> Result<RollbackOutcome> {
     } = restore_entries(&data, quiet);
 
     // A persisted file that survived cleanup re-applies the tuned values on the
-    // next boot, so the restoration is not complete. Counting it like a failed
-    // or skipped restore is what keeps the ledger for a retry and turns the exit
-    // code into 1 (#4535), instead of a silent success that deletes the
-    // originals.
+    // next boot, and a ledger that survived it keeps the record a retry
+    // restores from, so the restoration is not complete either way. Counting
+    // both like a failed or skipped restore is what keeps the ledger for a
+    // retry and turns the exit code into 1 (#4535), instead of a silent success
+    // that deletes the originals.
     let mut cleanup_failed = 0;
     if rollback_should_finalize(failed, skipped) {
         cleanup_failed = finalize_rollback_at(
@@ -1638,7 +1657,7 @@ fn rollback_inner(quiet: bool) -> Result<RollbackOutcome> {
     if !quiet {
         if cleanup_failed > 0 {
             println!(
-                "  {} {} 项持久化配置未能删除，已保留 {} 以便重试（其中的调优值仍会在下次启动时生效）",
+                "  {} {} 项清理未能完成，已保留 {} 以便重试（未能删除的持久化配置会在下次启动时重新生效）",
                 "⚠".yellow(),
                 cleanup_failed,
                 ROLLBACK_PATH
@@ -3209,6 +3228,65 @@ mod tests {
             !ledger.exists(),
             "a complete cleanup drops the ledger with the persisted config"
         );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The ledger is the third thing a cleanup deletes, and its removal used to
+    /// be the one result thrown away: a ledger that survived the delete left
+    /// `rollback --list` reporting a pending rollback of values the run had
+    /// already restored, while `rollback` reported a finished cleanup and exited
+    /// 0. It is the record a retry restores from, so a delete that fails leaves
+    /// the cleanup incomplete the same way a surviving persisted file does.
+    ///
+    /// A directory standing in for the ledger makes `remove_file` fail with
+    /// `EISDIR` on every filesystem, so this needs neither root nor a
+    /// read-only `/var/lib`.
+    #[test]
+    fn test_cleanup_counts_a_ledger_that_could_not_be_removed() {
+        let dir = std::env::temp_dir().join(format!(
+            "ktuner_cleanup_ledger_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let ledger = dir.join("rollback.json");
+        fs::create_dir_all(&ledger).expect("create a directory where the ledger belongs");
+        let sysctl = dir.join("99-ktuner.conf");
+        fs::write(&sysctl, b"vm.swappiness = 10\n").expect("write sysctl file");
+        let service = dir.join("ktuner-nonsysctl.service");
+        let script = dir.join("apply-nonsysctl.sh");
+        fs::write(&script, b"#!/bin/sh\n").expect("write script");
+
+        let cleanup_failed = finalize_rollback_at(
+            ledger.to_str().unwrap(),
+            sysctl.to_str().unwrap(),
+            service.to_str().unwrap(),
+            script.to_str().unwrap(),
+            true,
+        );
+
+        assert_eq!(
+            cleanup_failed, 1,
+            "the persisted files went, so the ledger is the removal that failed"
+        );
+        assert!(
+            ledger.exists(),
+            "the record a retry restores from is still there, so the cleanup is \
+             not finished"
+        );
+        assert!(!sysctl.exists() && !script.exists());
+
+        // What the count means for the caller: the rollback is incomplete, so
+        // `rollback` exits 1 instead of reporting a finished cleanup.
+        let outcome = RollbackOutcome {
+            restored: 3,
+            failed: cleanup_failed,
+            skipped: 0,
+        };
+        assert!(!outcome.is_complete());
+        assert_eq!(classify_rollback(&outcome), RollbackStatus::Partial);
 
         fs::remove_dir_all(&dir).ok();
     }
