@@ -64,7 +64,7 @@ fn main() {
             // that never reached the consumer.
             if let Err(error) = write_stdout(&e.to_string()) {
                 let out = json!({ "error": format!("{error:#}") });
-                eprintln!("{}", serde_json::to_string_pretty(&out).unwrap());
+                print_error_json(&out);
                 std::process::exit(2);
             }
             std::process::exit(e.exit_code());

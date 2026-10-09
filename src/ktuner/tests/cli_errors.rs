@@ -95,3 +95,36 @@ fn an_unwritable_stderr_keeps_the_error_exit_code() {
         );
     }
 }
+
+/// The error path a failed `--help` / `--version` write takes must keep its
+/// status when stderr is unwritable too. Its diagnostic cannot be delivered,
+/// but the status is what a caller reads, and the two sibling error paths
+/// already answer this way.
+#[test]
+fn a_failed_help_write_keeps_its_status_with_a_full_stderr() {
+    let (Some(stdout_full), Some(stderr_full)) = (
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .ok(),
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .ok(),
+    ) else {
+        eprintln!("skipping: /dev/full is not available on this host");
+        return;
+    };
+
+    let out = Command::new(env!("CARGO_BIN_EXE_ktuner"))
+        .arg("--help")
+        .stdout(Stdio::from(stdout_full))
+        .stderr(Stdio::from(stderr_full))
+        .output()
+        .expect("run ktuner --help with both streams full");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a failed help write must keep the documented error code when nothing can be printed"
+    );
+}
