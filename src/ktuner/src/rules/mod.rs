@@ -5294,12 +5294,40 @@ fn eval_tcp_moderate_rcvbuf(info: &SystemInfo, recs: &mut Vec<Recommendation>) -
 }
 
 fn eval_flow_limit_table_len(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize {
-    let path = "/proc/sys/net/core/flow_limit_table_len";
+    eval_flow_limit_table_len_at(
+        info,
+        recs,
+        "/proc/sys/net/core/flow_limit_table_len",
+        "/proc/sys/net/core/flow_limit_cpu_bitmap",
+    )
+}
+
+/// Path-injectable form of [`eval_flow_limit_table_len`] (the `eval_*_at`
+/// idiom) so the flow-limit precondition is assertable against temp files.
+///
+/// The table this rule sizes exists only on the CPUs set in
+/// `flow_limit_cpu_bitmap`: `flow_limit_cpu_sysctl()` allocates a CPU's table
+/// when its bit is written and frees it when the bit is cleared, and
+/// `skb_flow_limit()` drops nothing on a CPU whose `sd->flow_limit` is NULL
+/// (net/core/sysctl_net_core.c, net/core/dev.c). The bitmap defaults to empty —
+/// "Flow limit is compiled in by default (CONFIG_NET_FLOW_LIMIT), but not
+/// turned on" (Documentation/networking/scaling.rst) — so on a host that never
+/// enabled it no table exists and the length changes nothing. A bitmap that
+/// cannot be read is not evidence and keeps the advice.
+fn eval_flow_limit_table_len_at(
+    info: &SystemInfo,
+    recs: &mut Vec<Recommendation>,
+    path: &str,
+    bitmap_path: &str,
+) -> usize {
     if !std::path::Path::new(path).exists() {
         return 1;
     }
     let max_speed = info.network.iter().map(|n| n.speed_mbps).max().unwrap_or(0);
     if max_speed < 10000 {
+        return 1;
+    }
+    if std::fs::read_to_string(bitmap_path).is_ok_and(|mask| cpumask_is_empty(&mask)) {
         return 1;
     }
     let current = read_sysctl_u64(path);
@@ -5319,6 +5347,12 @@ fn eval_flow_limit_table_len(info: &SystemInfo, recs: &mut Vec<Recommendation>) 
         });
     }
     1
+}
+
+/// Whether a procfs cpumask (comma-separated hex words, as `dump_cpumask()`
+/// prints `flow_limit_cpu_bitmap` and `rps_cpus`) has no CPU set.
+fn cpumask_is_empty(mask: &str) -> bool {
+    mask.trim().chars().filter(|c| *c != ',').all(|c| c == '0')
 }
 
 fn eval_tcp_l3mdev_accept(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize {
@@ -10945,6 +10979,58 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flow_limit_table_len_skipped_while_flow_limit_is_off() {
+        // A flow-limit table exists only on the CPUs set in
+        // flow_limit_cpu_bitmap, which is empty by default, so sizing it
+        // changes nothing until some CPU has the feature turned on.
+        let dir = std::env::temp_dir().join(format!(
+            "ktuner_flow_limit_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let table_len = dir.join("flow_limit_table_len");
+        std::fs::write(&table_len, "4096\n").unwrap();
+        let bitmap = dir.join("flow_limit_cpu_bitmap");
+
+        let mut info = make_test_info();
+        info.network = vec![NetInfo {
+            name: "eth0".to_string(),
+            speed_mbps: 10000,
+        }];
+        let advised = |mask: Option<&str>| {
+            match mask {
+                Some(mask) => std::fs::write(&bitmap, mask).unwrap(),
+                None => {
+                    std::fs::remove_file(&bitmap).ok();
+                }
+            }
+            let mut recs = Vec::new();
+            eval_flow_limit_table_len_at(
+                &info,
+                &mut recs,
+                table_len.to_str().unwrap(),
+                bitmap.to_str().unwrap(),
+            );
+            recs.iter()
+                .any(|r| r.param == "net.core.flow_limit_table_len")
+        };
+
+        assert!(!advised(Some("000\n")), "no CPU has a table to resize");
+        assert!(
+            !advised(Some("00000000,00000000\n")),
+            "a multi-word empty mask has no table either"
+        );
+        assert!(
+            advised(Some("00000000,00000030\n")),
+            "CPUs 4 and 5 run flow limit, so the length matters"
+        );
+        assert!(advised(None), "an unreadable bitmap keeps the advice");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
