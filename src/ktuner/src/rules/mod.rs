@@ -5039,12 +5039,17 @@ fn eval_default_log_martians_at(
 }
 
 fn eval_laptop_mode(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize {
-    let path = "/proc/sys/vm/laptop_mode";
+    eval_laptop_mode_at(info, recs, "/proc/sys/vm/laptop_mode")
+}
+
+/// Path-injectable form of [`eval_laptop_mode`] (the `eval_*_at` idiom) so the
+/// signed read is assertable against a temp file on any host.
+fn eval_laptop_mode_at(info: &SystemInfo, recs: &mut Vec<Recommendation>, path: &str) -> usize {
     if !std::path::Path::new(path).exists() {
         return 1;
     }
     if let Some(rec) = laptop_mode_recommendation(
-        read_sysctl_u64(path),
+        read_sysctl_i64(path),
         info.memory_total_gb,
         &info.kernel_version,
     ) {
@@ -5069,8 +5074,21 @@ fn eval_laptop_mode(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize 
 /// (mm/page-writeback.c). Recommending 0 there promises less write delay that
 /// can no longer happen, and each applied write adds a deprecation warning to
 /// the kernel log, so from 7.0 on the rule stays quiet.
+/// `current` is signed because the knob's handler is `proc_dointvec_jiffies`
+/// (v6.6 mm/page-writeback.c:2287-2293, registered with no `extra1`/`extra2`):
+/// any int is legal, and a stored negative prints back with its sign (v6.6
+/// kernel/sysctl.c:1164-1175). Every consumer tests the knob's truthiness —
+/// `sc.may_writepage = !laptop_mode` (v6.6 mm/vmscan.c:7052, :7096, :7140,
+/// :7492), `if (laptop_mode)` (v6.6 fs/sync.c:107, fs/xfs/xfs_super.c:792),
+/// `laptop_mode && ...` (v6.6 block/blk-mq.c:728) — so a negative value means
+/// the mode is ON, and the documentation spells the polarity out from the
+/// other side: "Setting the knob to 0 disables laptop mode"
+/// (Documentation/admin-guide/laptops/laptop-mode.rst). The unsigned reader
+/// turned that negative into 0, the value the guard below reads as "already
+/// off", so the rule stayed quiet on exactly the host it exists to warn
+/// about.
 fn laptop_mode_recommendation(
-    current: u64,
+    current: i64,
     memory_total_gb: u64,
     kernel_version: &str,
 ) -> Option<Recommendation> {
@@ -12299,6 +12317,35 @@ mod tests {
         // Already off, or not a big-memory host: no advice on any version.
         assert!(laptop_mode_recommendation(0, 64, "6.19.0").is_none());
         assert!(laptop_mode_recommendation(5, 8, "6.19.0").is_none());
+    }
+
+    #[test]
+    fn laptop_mode_signed_read_survives_the_file_reader() {
+        // The reader was the defect: the knob's handler accepts any int, a
+        // negative value means the mode is ON, and every consumer tests its
+        // truthiness. read_sysctl_u64 parsed "-1" to Err and fell back to 0 —
+        // the value the guard reads as "already off" — so the rule stayed
+        // quiet on exactly the host it warns about. The path-injectable form
+        // keeps the branch assertable on any host.
+        let path = std::env::temp_dir().join(format!("ktuner-laptop-mode-{}", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        for (value, expect_rec) in [("-1", true), ("5", true), ("0", false)] {
+            std::fs::write(&path, value).unwrap();
+            let info = make_test_info();
+            let mut recs = Vec::new();
+            eval_laptop_mode_at(&info, &mut recs, path_str);
+            let rec = recs.iter().find(|r| r.param == "vm.laptop_mode");
+            assert_eq!(
+                rec.is_some(),
+                expect_rec,
+                "value={value}: recommendation presence"
+            );
+            if let Some(rec) = rec {
+                assert_eq!(rec.current_value, value);
+                assert_eq!(rec.recommended_value, "0");
+            }
+        }
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
