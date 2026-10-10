@@ -23,17 +23,17 @@ pub(crate) const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 /// reused by a competing writer is never deleted by someone else's failure.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EntryIdentity {
-    device: u64,
+    device: rustix::fs::Dev,
     inode: u64,
 }
 
 impl EntryIdentity {
     /// Captures the identity of the entry behind an already-open handle.
     pub(crate) fn of(file: &File, path: &Path) -> Result<Self, SkillSecError> {
-        let metadata = file.metadata().map_err(|e| io_error(path, e))?;
+        let stat = rustix::fs::fstat(file).map_err(|e| io_error(path, e))?;
         Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
+            device: stat.st_dev,
+            inode: stat.st_ino,
         })
     }
 }
@@ -357,7 +357,7 @@ mod tests {
         // EEXIST and the existing entry — partial output of that other
         // invocation — must survive untouched.
         let temporary = tempfile::tempdir().unwrap();
-        let parent = Directory::open(temporary.path()).unwrap();
+        let parent = Directory::open(&temporary.path().canonicalize().unwrap()).unwrap();
         let existing = parent.fresh_child("snapshot").unwrap();
         fs::write(existing.path.join("partial"), b"other export").unwrap();
 
@@ -386,7 +386,7 @@ mod tests {
         // tree at the same name: the identity no longer matches, so the
         // cleanup must skip it, and only the matching identity removes it.
         let temporary = tempfile::tempdir().unwrap();
-        let parent = Directory::open(temporary.path()).unwrap();
+        let parent = Directory::open(&temporary.path().canonicalize().unwrap()).unwrap();
         let ours = parent.fresh_child("snapshot").unwrap();
         let identity = EntryIdentity::of(&ours.file, &ours.path).unwrap();
 
@@ -419,9 +419,25 @@ mod tests {
     }
 
     #[test]
+    fn remove_child_if_same_preserves_an_entry_on_a_different_device() {
+        let temporary = tempfile::tempdir().unwrap();
+        let parent = Directory::open(&temporary.path().canonicalize().unwrap()).unwrap();
+        let child = parent.fresh_child("snapshot").unwrap();
+        let mut identity = EntryIdentity::of(&child.file, &child.path).unwrap();
+        identity.device ^= 1;
+
+        assert!(
+            !parent
+                .remove_child_if_same("snapshot", &identity, deadline())
+                .unwrap()
+        );
+        assert!(child.path.exists());
+    }
+
+    #[test]
     fn remove_child_if_same_treats_a_missing_entry_as_removed() {
         let temporary = tempfile::tempdir().unwrap();
-        let parent = Directory::open(temporary.path()).unwrap();
+        let parent = Directory::open(&temporary.path().canonicalize().unwrap()).unwrap();
         let ours = parent.fresh_child("manifest.json").unwrap();
         let identity = EntryIdentity::of(&ours.file, &ours.path).unwrap();
         fs::remove_dir(&ours.path).unwrap();
