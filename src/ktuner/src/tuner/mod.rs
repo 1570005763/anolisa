@@ -1463,7 +1463,7 @@ fn rollback_param_at(
     // persisted files from it, so the file no longer replays what this run
     // rolled back.
     save_ledger_at(ledger, &data)?;
-    persist_from_rollback_at(&guard, sysctl_path, script_path, service_path)?;
+    persist_from_rollback_at(&guard, sysctl_path, script_path, service_path, "systemctl")?;
     Ok((key, outcome))
 }
 
