@@ -11,6 +11,37 @@ fn directory() -> tempfile::TempDir {
 }
 
 #[test]
+fn lease_verification_rejects_replaced_database() {
+    for symlink in [false, true] {
+        let dir = directory();
+        let path = dir.path().canonicalize().unwrap().join("policy-state.db");
+        let lease = DatabaseLease::acquire(&path).unwrap();
+        lease.verify().unwrap();
+        let saved = path.with_file_name("saved.db");
+        std::fs::rename(&path, &saved).unwrap();
+        if symlink {
+            std::os::unix::fs::symlink(&saved, &path).unwrap();
+        } else {
+            std::fs::copy(&saved, &path).unwrap();
+        }
+        assert!(matches!(lease.verify(), Err(RepositoryError::UnsafePath)));
+    }
+}
+
+#[test]
+fn lease_verification_rejects_replaced_directory() {
+    let dir = directory();
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("state/policy-state.db");
+    let lease = DatabaseLease::acquire(&path).unwrap();
+    lease.verify().unwrap();
+    std::fs::rename(root.join("state"), root.join("saved-state")).unwrap();
+    let replacement = DatabaseLease::acquire(&path).unwrap();
+    replacement.verify().unwrap();
+    assert!(matches!(lease.verify(), Err(RepositoryError::UnsafePath)));
+}
+
+#[test]
 fn readonly_probe_fails_and_reopened_connection_recovers() {
     let dir = directory();
     let repo = SqlitePolicyRepository::open(&dir.path().join("policy-state.db")).unwrap();

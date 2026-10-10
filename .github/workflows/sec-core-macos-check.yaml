@@ -34,3 +34,5 @@ jobs:
         run: cargo check --locked --workspace --all-targets
       - name: Test SkillSec ledger entry identity checks
         run: cargo test --locked -p asc-capability-skill-sec --lib ledger::storage::tests
+      - name: Test SQLite policy path identity checks
+        run: cargo test --locked -p asc-policy-repository-sqlite --lib lease_verification_

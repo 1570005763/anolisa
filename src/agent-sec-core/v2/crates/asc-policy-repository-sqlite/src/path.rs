@@ -1,8 +1,8 @@
 //! Owned directory and database identity checks, held through daemon drain.
 use crate::RepositoryError;
 use rustix::fs::{
-    AtFlags, FileType, FlockOperation, Mode, OFlags, Stat, flock, fstat, mkdirat, open, openat,
-    statat,
+    AtFlags, Dev, FileType, FlockOperation, Mode, OFlags, Stat, flock, fstat, lstat, mkdirat, open,
+    openat, statat,
 };
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
@@ -13,7 +13,7 @@ pub struct DatabaseLease {
     pub(crate) path: PathBuf,
     directory: File,
     _lock: File,
-    identity: (u64, u64),
+    identity: (Dev, u64),
 }
 
 impl DatabaseLease {
@@ -67,12 +67,12 @@ impl DatabaseLease {
             }
         })?;
         let db = owned_file(&directory, "policy-state.db", true)?;
-        let m = db.metadata()?;
+        let m = fstat(&db)?;
         let lease = Self {
             path: path.to_owned(),
             directory,
             _lock: lock,
-            identity: (m.dev(), m.ino()),
+            identity: (m.st_dev, m.st_ino),
         };
         lease.verify()?;
         Ok(lease)
@@ -86,10 +86,10 @@ impl DatabaseLease {
             AtFlags::SYMLINK_NOFOLLOW,
         )?;
         validate_file(&m)?;
-        let visible = std::fs::symlink_metadata(&self.path)?;
+        let visible = lstat(&self.path)?;
         if (m.st_dev, m.st_ino) != self.identity
-            || (visible.dev(), visible.ino()) != self.identity
-            || visible.file_type().is_symlink()
+            || (visible.st_dev, visible.st_ino) != self.identity
+            || FileType::from_raw_mode(visible.st_mode) == FileType::Symlink
         {
             return Err(RepositoryError::UnsafePath);
         }
