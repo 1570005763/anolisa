@@ -8,6 +8,15 @@ const HOOK_POLICY_ALIASES: Record<string, HookPolicy> = {
   deny: "block",
 };
 
+/** Keep approval text within its UTF-16 budget without splitting a surrogate pair. */
+export function truncateApprovalText(text: string, maxLength = 256): string {
+  if (text.length <= maxLength) return text;
+  let end = maxLength - 1;
+  const lastUnit = text.charCodeAt(end - 1);
+  if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) end -= 1;
+  return text.slice(0, end) + "…";
+}
+
 export function envFlagEnabled(name: string, defaultValue = true): boolean {
   const value = process.env[name];
   if (value === undefined) {

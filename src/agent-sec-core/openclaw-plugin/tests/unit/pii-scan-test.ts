@@ -546,6 +546,7 @@ describe("pii-scan-user-input", () => {
 
     assert.equal(result?.requireApproval?.title, "PII Checker Security Review");
     assert.equal(result?.requireApproval?.severity, "critical");
+    assert.ok(result?.requireApproval?.description.length <= 256);
     assert.match(
       result?.requireApproval?.description,
       /检测到 1 项高风险敏感信息/,
@@ -567,6 +568,40 @@ describe("pii-scan-user-input", () => {
       result?.requireApproval?.description,
       /仅提醒|继续处理/,
     );
+  });
+
+  it("keeps summary-count approval bounded without exposing evidence", async () => {
+    const { hooks, logs } = registerHandlers(policyConfig("ask"));
+    const beforeToolCall = hooks.find((hook) => hook.hookName === "before_tool_call");
+    assert.ok(beforeToolCall);
+    mockCli({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        verdict: "deny",
+        findings: [denyFinding, warnFinding],
+        summary: {
+          findings_truncated: true,
+          total: 12000,
+          by_severity: { deny: 8000, warn: 4000 },
+        },
+      }),
+      stderr: "",
+    });
+
+    const result = await beforeToolCall.handler({
+      toolName: "exec",
+      params: { command: "password=secret alice@example.com" },
+    }, {});
+
+    const description = result?.requireApproval?.description;
+    assert.equal(typeof description, "string");
+    assert.ok(description.length <= 256);
+    assert.match(description, /12000 项敏感信息（高风险 8000、一般风险 4000；明细已省略）/);
+    assert.match(description, /当前策略要求确认，请确认后继续/);
+    assert.doesNotMatch(JSON.stringify({ result, logs }), /password=secret|alice@example\.com/);
+    assert.doesNotMatch(description, /credential|password=\[REDACTED\]|a\*\*\*@example\.com/);
+    assert.equal(result.requireApproval.title, "PII Checker Security Review");
+    assert.equal(result.requireApproval.severity, "critical");
   });
 
   it("ask policy falls back to a warning before dispatch", async () => {
