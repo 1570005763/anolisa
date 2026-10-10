@@ -203,12 +203,12 @@ describe("pii-scan-user-input", () => {
     }
   }
 
-  it("scans model-bound context without changing the event", async () => {
+  it("scans only the current prompt without changing the event", async () => {
     const { api, hooks } = createMockApi({}, "2026.9.2");
     piiScan.register(api);
     mockCli(scanResult("pass", []));
     const event = {
-      prompt: "current prompt",
+      prompt: "  current prompt\nwith whitespace  ",
       systemPrompt: "system text",
       senderId: "excluded-sender",
       messages: [
@@ -244,20 +244,50 @@ describe("pii-scan-user-input", () => {
     };
     const original = structuredClone(event);
     await hooks[0].handler(event);
-    assert.equal(
-      lastCliOpts?.stdin,
-      [
-        "system text",
-        "current prompt",
-        "history text",
-        "assistant text",
-        "reasoning text",
-        '{"command":"tool argument"}',
-        "tool result",
-      ].join("\n\n"),
-    );
+    assert.equal(lastCliOpts?.stdin, event.prompt);
     assert.deepEqual(event, original);
   });
+
+  it("blocks a sensitive prompt without blocking a later clean prompt on history", async () => {
+    const { api, hooks } = createMockApi(policyConfig("block"), "2026.9.2");
+    piiScan.register(api);
+    _setCliMock(async (_args, opts) =>
+      opts?.stdin?.includes("password=secret")
+        ? scanResult("deny", [denyFinding])
+        : scanResult("pass", []),
+    );
+    const context = {
+      systemPrompt: "password=secret",
+      messages: [{ role: "user", content: "password=secret" }],
+    };
+    assert.equal(
+      (await hooks[0].handler({ ...context, prompt: "password=secret" }))
+        ?.outcome,
+      "block",
+    );
+    assert.equal(
+      await hooks[0].handler({ ...context, prompt: "Hello" }),
+      undefined,
+    );
+  });
+
+  for (const prompt of [undefined, null, "", " \n ", 42]) {
+    it(`skips a missing or empty current prompt (${JSON.stringify(prompt)})`, async () => {
+      const { api, hooks } = createMockApi(policyConfig("block"), "2026.9.2");
+      piiScan.register(api);
+      mockCli(scanResult("deny", [denyFinding]));
+      assert.equal(
+        await hooks[0].handler({
+          prompt,
+          content: "password=secret",
+          systemPrompt: "password=secret",
+          messages: [{ role: "user", content: "password=secret" }],
+        }),
+        undefined,
+      );
+      assert.equal(lastCliArgs, undefined);
+    });
+  }
 
   it("skips empty model input and preserves the environment policy override", async () => {
     process.env.PII_CHECKER_MODE = "observe";

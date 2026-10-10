@@ -395,7 +395,8 @@ The shared CLI `--trace-context` adapter propagates attribution through the top-
 envelope; `params.traceContext` is not supported.
 
 OpenClaw records model-entry scans as `source=model_input` on stable `>=2026.5.12`;
-older supported hosts retain inbound scanning. Input blocking depends on policy,
+this input hook scans only the current `prompt`, excluding system prompts and history.
+Older supported hosts retain inbound scanning. Input blocking depends on policy,
 and tool-output hooks remain observation-only.
 
 Details: [PII Checker User Guide](../../docs/user-guide/en/agent-security/agent-sec-core/pii-checker.md).
