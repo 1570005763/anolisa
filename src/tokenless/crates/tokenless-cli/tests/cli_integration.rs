@@ -3113,6 +3113,69 @@ fn html_extraction_is_env_gated_and_recovers_the_original_page() {
     }
 }
 
+#[test]
+fn html_zero_rowspan_preserves_columns_and_recovers_the_page() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("data");
+    let html = format!(
+        "<!DOCTYPE html><html><head><title>Service inventory</title></head><body>\
+         <p>This service inventory records deployment regions, service names, \
+         and instance counts for the production environment.</p>\
+         <table><thead><tr><th>Region</th><th>Service</th><th>Count</th></tr></thead>\
+         <tbody><tr><td rowspan=\"0\">EU</td><td>api</td><td>10</td></tr>\
+         <tr><td>worker</td><td>20</td></tr></tbody></table>\
+         <script>{}</script></body></html>",
+        "var padding = 12345; ".repeat(100)
+    );
+    let mut request: serde_json::Value =
+        serde_json::from_str(&post_tool_request_json(&html, true, "html-zero-rowspan")).unwrap();
+    request["input"]["capabilities"]["replace_with_text"] = true.into();
+    let output = spawn_with_stdin(
+        tokenless_bin()
+            .env("TOKENLESS_DATA_DIR", &state)
+            .env_remove("TOKENLESS_STATS_DB")
+            .env_remove("TOKENLESS_STASH_DB")
+            .env("TOKENLESS_HTML_EXTRACTION_ENABLED", "1")
+            .env("TOKENLESS_COMPRESSION_ENABLED", "1")
+            .env("TOKENLESS_STATS_ENABLED", "0")
+            .env("TOKENLESS_SLS_ENABLED", "0"),
+        &["compress"],
+        &request.to_string(),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let result = &response["result"];
+    assert_eq!(result["disposition"], "applied");
+    assert_eq!(
+        result["applied_operations"],
+        serde_json::json!(["html_extraction"])
+    );
+    assert_eq!(result["recoverability"], "retrievable");
+    let rendered = result["output"].as_str().unwrap();
+    assert!(
+        rendered.contains(
+            "| Region | Service | Count |\n| --- | --- | --- |\n\
+         | EU | api | 10 |\n|  | worker | 20 |"
+        ),
+        "{rendered}"
+    );
+    let hash = result["stash_keys"][0].as_str().unwrap();
+    let retrieved = tokenless_bin()
+        .env("TOKENLESS_DATA_DIR", &state)
+        .env_remove("TOKENLESS_STASH_DB")
+        .env("TOKENLESS_STATS_ENABLED", "0")
+        .env("TOKENLESS_SLS_ENABLED", "0")
+        .args(["retrieve", hash])
+        .output()
+        .unwrap();
+    assert!(retrieved.status.success());
+    assert_eq!(retrieved.stdout, html.as_bytes());
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Fail-soft warnings must survive an unwritable stderr (fd 2 → /dev/full)
 // ─────────────────────────────────────────────────────────────────────
