@@ -1,5 +1,0 @@
-#!/bin/sh
-# Keep assessment dependencies separate from the V2 system CLI and daemon.
-set -eu
-score_prefix=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
-exec "$score_prefix/lib/anolisa/sec-core/skill-score/cli/bin/agent-sec-cli" "$@"

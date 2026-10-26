@@ -52,8 +52,6 @@ def stage_score(stage: Path, payload: Path, version: str) -> None:
     # Raw installation owns regular files and their modes, never source symlinks.
     for path in score_root.rglob("*"):
         path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
-    shutil.copyfile(component / "packaging/raw/assets/bin/agent-sec-skill-score", launcher)
-    launcher.chmod(0o755)
     contract_text, count = re.subn(
         r'(?m)^version = "' + re.escape(base) + r'"$',
         f'version = "{version}"',
@@ -62,17 +60,11 @@ def stage_score(stage: Path, payload: Path, version: str) -> None:
     )
     if count != 1:
         raise ValueError("raw component version declaration was not found")
-    for source, target in (
-        ("bin/agent-sec-skill-score", "{bindir}/agent-sec-skill-score"),
-        (f"{SCORE_ROOT}/", "{libdir}/sec-core/skill-score/"),
-    ):
-        contract_text += (
-            "\n[[component.layout.files]]\n"
-            f"source = {json.dumps(source)}\n"
-            f"target = {json.dumps(target)}\n"
-        )
-        if not source.endswith("/"):
-            contract_text += 'mode = "0755"\ntype = "executable"\n'
+    contract_text += (
+        "\n[[component.layout.files]]\n"
+        f"source = {json.dumps(f'{SCORE_ROOT}/')}\n"
+        'target = "{libdir}/sec-core/skill-score/"\n'
+    )
     contract_path.write_text(contract_text)
 
 

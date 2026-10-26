@@ -13,9 +13,9 @@ sudo anolisa --install-mode system install sec-core --backend raw \
   --repo 'file:///absolute/path/to/preview/v1' --version '<预览版本号>'
 ```
 
-版本号取自通过构建验收的 `sec-core` 预览 release。官方安装器会对不以 `/v1` 结尾的根地址追加 `/v1`，因此 GitHub Release 的平铺附件地址不能直接作为仓库根；SkillEval bundle 脚本自动准备本地 v1 布局。正式默认渠道尚未包含此评测扩展。标准 raw 包同时包含 V2 二进制和独立评分 CLI/worker 及锁定的 Python 依赖。评分入口是 `/usr/local/bin/agent-sec-skill-score`，`/usr/local/bin/agent-sec-cli` 继续提供 V2 CLI。评分私有运行时安装到 `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`，不需要额外运行评分 daemon。安装前核对目标 CPU 与 glibc 基线。
+版本号取自通过构建验收的 `sec-core` 预览 release。官方安装器会对不以 `/v1` 结尾的根地址追加 `/v1`，因此 GitHub Release 的平铺附件地址不能直接作为仓库根；SkillEval bundle 脚本自动准备本地 v1 布局。正式默认渠道尚未包含此评测扩展。标准 raw 包同时包含 V2 二进制和独立评分 CLI/worker 及锁定的 Python 依赖。公开入口统一为 `/usr/local/bin/agent-sec-cli skillsec score plan/run`。Rust CLI 直接用私有 Python 评分运行时替换当前进程，复用原评分逻辑；不再安装旧预览入口 `agent-sec-skill-score`。评分私有运行时安装到 `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`，不需要额外运行评分 daemon。安装前核对目标 CPU 与 glibc 基线。
 
-同一 release 提供 `release-manifest.json`（`agent-sec-skill-score/release-v2`）、标准 raw 索引、`skill-score-images.tar.gz`、`images.json`、工具清单及源码归档。发布清单须来自可信发布渠道，并逐项核对制品长度与 SHA-256。镜像不放入 raw 包；在干净的模板构建环境执行 `docker load -i skill-score-images.tar.gz`，按 `images.json` 核对不可变 image ID。
+同一 release 提供 `release-manifest.json`（`agent-sec-skill-score/release-v2`）、标准 raw 索引、`skill-score-images.tar.gz`、`images.json`、工具清单及源码归档。发布清单须来自可信发布渠道，并逐项核对制品长度与 SHA-256。清单必须声明 `cli: "agent-sec-cli"` 与 `command_prefix: ["skillsec", "score"]`；消费端拒绝旧预览命令契约。镜像不放入 raw 包；在干净的模板构建环境执行 `docker load -i skill-score-images.tar.gz`，按 `images.json` 核对不可变 image ID。
 
 工作镜像和 ASC 网络侧车缺一不可；运行时不构建或拉取缺失镜像。需要 Linux x86_64、Docker Compose、可用网络 namespace、包内使用的防火墙/conntrack 规则以及 ptrace/strace。内层容器申请 4096 MiB，外层还需为 Docker、CLI、worker 和侧车留出内存。镜像构建成功不代表运行验收通过。
 
@@ -24,10 +24,10 @@ sudo anolisa --install-mode system install sec-core --backend raw \
 通过进程环境或平台密钥注入提供 `ANTHROPIC_API_KEY`，按需设置 `ANTHROPIC_BASE_URL`。凭据不要放入命令参数、任务 JSON、模板或发布清单。
 
 ```sh
-agent-sec-skill-score skill-score plan \
+agent-sec-cli skillsec score plan \
   /work/input/skill --output-file /work/output/task.json
 
-agent-sec-skill-score skill-score run \
+agent-sec-cli skillsec score run \
   /work/output/task.json --output-file /work/output/report.json \
   --evidence-dir /work/output/evidence
 ```
@@ -35,6 +35,8 @@ agent-sec-skill-score skill-score run \
 `plan` 接受一个含 `SKILL.md` 的目录，输出 `agent-sec-skill-score/task-v1`，记录 Skill 的绝对路径、内容 hash、审计结果和探针。执行 `run` 时必须保留相同内容与绝对路径；内容发生变化会在调用 worker 前拒绝。也可通过 `run -` 从 stdin 读取任务。
 
 输出文件必须尚不存在，证据目录必须不存在或为空。输出须位于被测 Skill 目录之外，不能占用内部证据路径。每次尝试使用独立输出目录。stdout 同样包含公开 JSON；平台有命令输出上限时，建议通过文件接口传输。
+
+评分在本地执行，不经过 daemon；显式传入 `--socket`、`--timeout-ms`、`--otel-context` 或 `--trace-context` 会被拒绝。评测期限和取消由调用端控制。`skill-ledger` 保留为 `skillsec` 的兼容别名；软件包缺少可选评分运行时时，执行评分阶段会明确报告安装错误。
 
 ## 理解结果
 

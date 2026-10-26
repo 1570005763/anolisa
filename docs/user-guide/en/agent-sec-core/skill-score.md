@@ -13,9 +13,9 @@ sudo anolisa --install-mode system install sec-core --backend raw \
   --repo 'file:///absolute/path/to/preview/v1' --version '<preview-version>'
 ```
 
-Use the version from a successful `sec-core` preview release. The official installer appends `/v1` when the repository root does not end with it, so the flat GitHub Release asset URL cannot be used directly as the repository root. The SkillEval bundle script prepares this local v1 layout automatically. The official default channel does not yet contain this optional assessment. The standard raw package contains the V2 binaries and an isolated scoring CLI/worker with pinned Python dependencies. The scoring entry point is `/usr/local/bin/agent-sec-skill-score`; it leaves `/usr/local/bin/agent-sec-cli` as the V2 CLI. Private scoring runtimes reside under `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`. No additional scoring daemon is required. Match the target CPU and glibc baseline before installing.
+Use the version from a successful `sec-core` preview release. The official installer appends `/v1` when the repository root does not end with it, so the flat GitHub Release asset URL cannot be used directly as the repository root. The SkillEval bundle script prepares this local v1 layout automatically. The official default channel does not yet contain this optional assessment. The standard raw package contains the V2 binaries and an isolated scoring CLI/worker with pinned Python dependencies. The public entry point is `/usr/local/bin/agent-sec-cli skillsec score plan/run`. The Rust CLI directly replaces its process with the private Python scoring runtime; the scoring logic is unchanged. The old preview launcher `agent-sec-skill-score` is not installed. Private scoring runtimes reside under `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`. No additional scoring daemon is required. Match the target CPU and glibc baseline before installing.
 
-The same release provides `release-manifest.json` (`agent-sec-skill-score/release-v2`), the raw repository indexes, `skill-score-images.tar.gz`, `images.json`, tool inventory and source archive. Verify all lengths and SHA-256 values against a manifest obtained from the trusted release channel. Container images are separate from the raw package. During a clean template build, load the matching archive with `docker load -i skill-score-images.tar.gz` and verify image IDs against `images.json`.
+The same release provides `release-manifest.json` (`agent-sec-skill-score/release-v2`), the raw repository indexes, `skill-score-images.tar.gz`, `images.json`, tool inventory and source archive. Verify all lengths and SHA-256 values against a manifest obtained from the trusted release channel. The manifest must declare `cli: "agent-sec-cli"` and `command_prefix: ["skillsec", "score"]`; consumers reject older preview command contracts. Container images are separate from the raw package. During a clean template build, load the matching archive with `docker load -i skill-score-images.tar.gz` and verify image IDs against `images.json`.
 
 Both the work image and the ASC egress sidecar are required; runtime startup does not build or pull missing images. A Linux x86_64 host, Docker Compose, usable network namespaces, the packaged firewall/conntrack rules, and ptrace/strace support are required. Reserve memory outside the inner container's 4096 MiB allocation for Docker, the CLI, worker and sidecar. An image build alone is not runtime acceptance.
 
@@ -24,10 +24,10 @@ Both the work image and the ASC egress sidecar are required; runtime startup doe
 Provide `ANTHROPIC_API_KEY` and, when needed, `ANTHROPIC_BASE_URL` through the process environment or your platform's secret injection. Do not put credentials into command arguments, task JSON, templates or release manifests.
 
 ```sh
-agent-sec-skill-score skill-score plan \
+agent-sec-cli skillsec score plan \
   /work/input/skill --output-file /work/output/task.json
 
-agent-sec-skill-score skill-score run \
+agent-sec-cli skillsec score run \
   /work/output/task.json --output-file /work/output/report.json \
   --evidence-dir /work/output/evidence
 ```
@@ -35,6 +35,8 @@ agent-sec-skill-score skill-score run \
 `plan` accepts one directory containing `SKILL.md`. Its task uses `agent-sec-skill-score/task-v1`, records the resolved Skill path and content hash, and carries the audit and probes. Keep the exact content and absolute path available to `run`. `run` rejects content drift before invoking the worker. A task can also be read from stdin with `run -`.
 
 Output files must not already exist. Evidence directories must be absent or empty. Outputs must be outside the evaluated Skill, and may not conflict with internal evidence paths. Prefer new output directories for every attempt. Standard output also contains the public JSON; file transfer is recommended when a platform limits command output.
+
+Scoring runs locally and does not use the daemon. Explicit `--socket`, `--timeout-ms`, `--otel-context` and `--trace-context` options are rejected for scoring. The caller controls the evaluation deadline and cancellation. `skill-ledger` remains a compatibility alias for `skillsec`; a package without the optional scoring payload reports an installation error when executing a scoring stage.
 
 ## Interpret results
 

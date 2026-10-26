@@ -48,6 +48,8 @@ def prepare(directory: Path, source_commit: str, version: str, components: Path)
             for m in archive.getmembers()
         ):
             raise ValueError("Docker image archive must remain outside the raw package")
+        if any(m.name.lstrip("./") == "bin/agent-sec-skill-score" for m in archive.getmembers()):
+            raise ValueError("raw preview must use the unified agent-sec-cli entrypoint")
     images = json.loads((directory / "images.json").read_text())
     expected = {"agent-sec-skill-score:1", "agent-sec-skill-score-egress:1"}
     details = images.get("image_details", [])
@@ -99,7 +101,8 @@ manifest_digest = "sha256:{hashlib.sha256(contract_bytes).hexdigest()}"
         "version": version,
         "raw_package": package.name,
         "raw_repository": "v1",
-        "cli": "agent-sec-skill-score",
+        "cli": "agent-sec-cli",
+        "command_prefix": ["skillsec", "score"],
         "python_cli": "3.11.6",
         "python_worker": "3.12.11",
         "harbor": "0.22.0",
