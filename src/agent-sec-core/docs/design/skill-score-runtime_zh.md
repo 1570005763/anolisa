@@ -16,6 +16,8 @@ Harbor 0.22.0 保持原样。worker 生成任务公开的 `environment/docker-co
 
 契约使用 `agent-sec-skill-score/task-v1` 和 `agent-sec-skill-score/report-v1`。内容不匹配时在调用 worker 前拒绝 run。非零退出可能已有报告；平台完成状态必须分别检查退出码、内容绑定、全部计划探针和证据覆盖。安全分高不等于动态执行成功。
 
+Report-v1 增加可选的 `planning_notes: string[]`，从任务 `audit.limitations` 复制。未经验证的非阻断计划说明同时保留在公开报告和 `internal-report.json`，不再进入表示动态不足的 `limitations`；task-v1 输入不变。真实的规划错误及执行、观测或裁决失败保留原有的限制和失败处理。消费方单独展示计划说明，并继续拒绝覆盖不完整的结果，不因分数高而放行，也不通过过滤限制文案推断成功。
+
 预览构建生成标准 `sec-core` raw 包及发布索引、独立压缩镜像、源码归档和 release-v2 清单，将校验后的平铺附件组织为本地 `v1/` 仓库，复用 ANOLISA 安装器；另保留独立的 RPM 维护者构建路径。输出不会反写源码里的 inventory。可选构建网络参数只影响 Docker 构建步骤。正式发布要求干净源码提交，dirty 开发制品明确标记。
 
 验证分为三层：可移植契约/配置测试、Linux 原生包与网络回归、真实模型/observer/评分端到端验收。早期原型成功不能证明新包或部署通过后两层。[用户契约](../../../../docs/user-guide/zh/agent-sec-core/skill-score.md)说明命令和结果语义。

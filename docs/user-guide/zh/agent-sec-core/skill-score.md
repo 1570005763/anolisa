@@ -48,6 +48,8 @@ agent-sec-cli skillsec score run \
 
 公开报告使用 `agent-sec-skill-score/report-v1`，通过 `content_hash` 绑定任务。`score` 和 `decision` 表达安全评测结论，不证明动态执行完整。检查 `execution` 是否覆盖全部计划探针，且每项均为 `completed: true`；非空 `limitations` 表示覆盖不完整。证据缺失或环境不支持应明确显示。高安全分加上不完整执行，不等于动态评测通过。
 
+可选的 `planning_notes` 字符串数组保留任务 `audit.limitations` 中的非阻断说明，例如不存在某类输入。应将其展示为未经验证的计划背景；这些说明本身既不证明，也不阻止动态执行完整。真实的规划错误、环境不可用、超时、缺少观测和裁决失败仍属于不完整情况。`internal-report.json` 同样保留 `planning_notes`，任务格式不变。
+
 一起保存公开 task/report 和证据目录，包括 `environment.json`、`internal-report.json`、`evidence-catalog.json`。失败时先收集部分证据，再删除沙箱。证据可能包含敏感 Skill 内容，访问和留存由平台控制。
 
 ## 运行职责

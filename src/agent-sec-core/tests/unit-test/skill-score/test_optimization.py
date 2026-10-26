@@ -742,6 +742,7 @@ def test_partial_source_context_survives_handoff_and_blocks_empty_100(
     report = run(task, tmp_path / "run")
     assert report["decision"] == "inconclusive" and report["score"] is None
     assert "scripts/check.py" in report["reason"]
+    assert report["planning_notes"] == task.audit.limitations
     assert task.audit.omitted_sources == ["engine.bin (binary)"]
 
 
@@ -753,7 +754,56 @@ def test_generic_caveats_cannot_veto_instruction_only_skill(subject: Path, tmp_p
     ]
     report = run(task, tmp_path / "run")
     assert report["decision"] == "scored" and report["score"] == 100.0
-    assert len(report["limitations"]) == 2
+    assert report["planning_notes"] == task.audit.limitations
+    assert "limitations" not in report
+    assert report["execution"][0]["completed"]
+    assert "partial/unverified" not in report["reason"]
+    internal = read(tmp_path / "run/internal-report.json")
+    assert internal["planning_notes"] == report["planning_notes"]
+    assert internal["limitations"] == []
+
+
+@pytest.mark.parametrize("failure", ["environment", "timeout", "observations", "judge"])
+def test_planning_notes_do_not_hide_dynamic_incompleteness(
+    subject: Path, tmp_path: Path, failure: str
+) -> None:
+    task = make_task(subject, tmp_path)
+    task.audit.limitations = ["This simple Skill has no applicable network operation"]
+
+    class UnavailableRuntime(FakeRuntime):
+        def environment(self) -> dict:
+            if failure == "environment":
+                raise ContractError("required execution environment unavailable")
+            return super().environment()
+
+        def run(self, skill: Path, probe: Probe, output: Path, timeout: float) -> dict:
+            if failure == "timeout":
+                raise TimeoutError("execution deadline reached")
+            return super().run(skill, probe, output, timeout)
+
+    report = run(
+        task,
+        tmp_path / "run",
+        judge=FakeJudge(fail="final" if failure == "judge" else None),
+        runtime=UnavailableRuntime(incomplete=failure == "observations"),
+    )
+    assert report["planning_notes"] == task.audit.limitations
+    assert report["limitations"]
+    assert not report["execution"][0]["completed"]
+    internal = read(tmp_path / "run/internal-report.json")
+    assert internal["planning_notes"] == report["planning_notes"]
+    assert internal["limitations"] == report["limitations"]
+
+
+def test_planning_notes_do_not_hide_failed_probe_planning(subject: Path, tmp_path: Path) -> None:
+    task = make_task(subject, tmp_path)
+    task.audit.limitations = ["This Skill is small"]
+    task.audit.probes = []
+    task.audit.planning_errors = {"baseline": "No valid baseline could be planned"}
+    report = run(task, tmp_path / "run")
+    assert report["planning_notes"] == task.audit.limitations
+    assert "planning/baseline: No valid baseline could be planned" in report["limitations"]
+    assert not report["execution"]
 
 
 def test_missing_implementation_requires_actual_source_basis(subject: Path, tmp_path: Path) -> None:
