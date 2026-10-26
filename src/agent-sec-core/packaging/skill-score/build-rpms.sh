@@ -17,41 +17,13 @@ mkdir -p "$score_output"
 [ -z "$(ls -A "$score_output")" ] || { echo "output directory must be empty" >&2; exit 2; }
 score_work="$(mktemp -d)"
 trap 'rm -rf "$score_work"' EXIT
-score_prefix="$score_work/payload/opt/agent-sec"
-score_cli="$score_prefix/skill-score-cli"
-score_runtime="$score_prefix/skill-score-runtime"
-score_python_cache="$score_work/python311.tgz"
-bash "$score_component/packaging/raw/prepare_python_runtime.sh" "$score_cli" "$score_python_cache"
-score_python="$score_cli/bin/python3.11"
-score_version="$("$score_python" -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' "$score_component/agent-sec-cli/pyproject.toml")"
+bash "$score_component/packaging/skill-score/build-payload.sh" "$score_output" ${2:+"$2"}
+gzip -d "$score_output/skill-score-images.tar.gz"
+score_version="$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],"rb"))["project"]["version"])' "$score_component/agent-sec-cli/pyproject.toml")"
 score_glibc="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
 [[ "$score_glibc" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "cannot determine build glibc" >&2; exit 1; }
-uv export --quiet --frozen --project "$score_component/agent-sec-cli" --extra skill-score \
-    --no-dev --no-emit-project --format requirements-txt --output-file "$score_work/requirements.txt"
-uv pip install --python "$score_python" --no-deps --require-hashes \
-    --index-url https://mirrors.aliyun.com/pypi/simple/ -r "$score_work/requirements.txt"
-uv run --project "$score_component/agent-sec-cli" --frozen --extra skill-score \
-    maturin build --manifest-path "$score_component/agent-sec-cli/Cargo.toml" \
-    --release --locked --interpreter "$score_python" --manylinux off --out "$score_work/wheels"
-uv pip install --python "$score_python" --no-deps "$score_work"/wheels/*.whl
-install -m 0755 "$score_component/packaging/skill-score/agent-sec-cli" "$score_cli/bin/agent-sec-cli"
-# This prefix exposes only the score CLI; the wheel's host-daemon entrypoint is not a service.
-rm -f "$score_cli/bin/agent-sec-daemon"
-bash "$score_component/skill-score-runtime/prepare-runtime.sh" "$score_runtime"
-PYTHONPATH="$score_component/skill-score-runtime/src" "$score_python" \
-    "$score_component/skill-score-runtime/image/build.py" "$score_output" \
-    --build-network "${ASC_IMAGE_BUILD_NETWORK:-default}"
-install -m 0644 "$score_output/tool-inventory.json" \
-    "$score_cli/lib/python3.11/site-packages/agent_sec_cli/skill_score/tool-inventory.json"
-"$score_cli/bin/agent-sec-cli" skill-score plan --help >/dev/null
-"$score_python" -I -c 'from agent_sec_cli import _native; import json; assert json.loads(_native.scan_prompt_json("A harmless test", mode="fast"))["degraded"] is False'
-"$score_runtime/bin/python3.12" -I -c 'from agent_sec_skill_score_runtime.worker import main; import harbor'
-tar -czf "$score_output/source.tar.gz" -C "$score_component" \
-    --exclude=.venv --exclude=target --exclude=__pycache__ --exclude=.pytest_cache \
-    agent-sec-cli skill-score-runtime packaging LICENSE
 score_rpmbuild="$score_work/rpmbuild"
 mkdir -p "$score_rpmbuild"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
-tar --owner=0 --group=0 -czf "$score_output/skill-score-payload.tar.gz" -C "$score_work/payload" opt
 cp "$score_output/skill-score-payload.tar.gz" "$score_rpmbuild/SOURCES/"
 sed -e "s/@VERSION@/$score_version/g" -e "s/@GLIBC_VERSION@/$score_glibc/g" \
     "$score_component/packaging/skill-score/skill-score.spec.in" > "$score_rpmbuild/SPECS/skill-score.spec"
@@ -59,4 +31,4 @@ rpmbuild -bb --define "_topdir $score_rpmbuild" "$score_rpmbuild/SPECS/skill-sco
 cp "$score_rpmbuild"/RPMS/x86_64/*.rpm "$score_output/"
 score_verify_args=("$score_output" --source-commit "$(git -C "$score_repo" rev-parse HEAD)")
 [ -z "$score_dirty" ] || score_verify_args+=(--development)
-"$score_python" "$score_component/packaging/skill-score/verify-release.py" "${score_verify_args[@]}"
+python3 "$score_component/packaging/skill-score/verify-release.py" "${score_verify_args[@]}"
