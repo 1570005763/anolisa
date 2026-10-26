@@ -136,6 +136,63 @@ def test_atif_and_optional_agentsight_share_reader(tmp_path: Path) -> None:
     assert "atif:baseline:agentsight:1" in read_atif(path, "baseline", "agentsight")
 
 
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("password=SYNTHETIC_PUBLIC_PASSWORD_B04", 'password="[REDACTED]"'),
+        (
+            'Quoted "evidence" at C:\\work\\receipt.json; password="SYNTHETIC_PUBLIC_PASSWORD_B04"',
+            'Quoted "evidence" at C:\\work\\receipt.json; password="[REDACTED]"',
+        ),
+        (
+            'Path C:\\work\\receipt.json\npassword=SYNTHETIC_PUBLIC_PASSWORD_B04\n保留 "quoted"',
+            'Path C:\\work\\receipt.json\npassword="[REDACTED]"\n保留 "quoted"',
+        ),
+    ],
+)
+def test_atif_redaction_preserves_json_and_execution_evidence(
+    tmp_path: Path, message: str, expected: str
+) -> None:
+    evidence_tree(tmp_path, ENTRY + INPUT + WRITE)
+    path = tmp_path / "agent/trajectory.json"
+    value = json.loads(path.read_text())
+    step = value["steps"][0]
+    step.update(
+        message=message,
+        tool_calls=[
+            {
+                "tool_call_id": "call-1",
+                "function_name": "Bash",
+                "arguments": {"command": "python3 /skills/subject/scripts/run.py"},
+            }
+        ],
+        observation={"results": [{"source_call_id": "call-1", "content": message}]},
+        extra={"count": 3, "complete": True, "optional": None, "password": "synthetic-secret"},
+    )
+    original = json.dumps(value, ensure_ascii=False)
+    path.write_text(original)
+
+    catalog = read_atif(path, "p1")
+    parsed = json.loads(catalog["atif:p1:harbor:1"])
+
+    assert parsed["message"] == expected
+    assert parsed["observation"]["results"][0]["content"] == expected
+    assert parsed["step_id"] == 1 and parsed["source"] == "agent"
+    assert parsed["tool_calls"] == step["tool_calls"]
+    assert parsed["extra"] == {
+        "count": 3,
+        "complete": True,
+        "optional": None,
+        "password": "[REDACTED]",
+    }
+    assert "SYNTHETIC_PUBLIC_PASSWORD_B04" not in json.dumps(catalog)
+    assert "synthetic-secret" not in json.dumps(catalog)
+    result = collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))
+    assert result["complete"] and result["entry_started"] and result["positive_refs"]
+    assert all(ref in result["catalog"] for ref in result["activation_refs"])
+    assert path.read_text() == original
+
+
 def test_mock_canary_catches_static_miss_and_controlled_deletion_does_not(tmp_path: Path) -> None:
     trajectory(tmp_path / "agent/trajectory.json")
     root = tmp_path / "artifacts/poc"
@@ -220,6 +277,56 @@ def test_multistep_artifact_deltas_reuse_initial_snapshot(tmp_path: Path) -> Non
         (root / f"trace.{index}").write_text('100.1 execve("/bin/true", ["true"], 0x0) = 0\n')
     result = collect_evidence(tmp_path, probe())
     assert result["complete"] and len(result["trajectory_paths"]) == 3
+
+
+def test_read_atif_cleans_nested_metadata_without_losing_process_results(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "agent/trajectory.json"
+    trajectory(path)
+    value = json.loads(path.read_text())
+    secret = "NEW_PRIVATE_VALUE_QA7"
+    source = f'password = "{secret}"\nprint("done")'
+    metadata = json.dumps(json.dumps({"file": source, "exit_code": 0, "pid": 42}))
+    value["steps"][0].update(
+        tool_calls=[
+            {
+                "tool_call_id": "call-1",
+                "function_name": "Read",
+                "arguments": {"file_path": "/skills/subject/scripts/run.py"},
+            }
+        ],
+        observation={
+            "results": [
+                {
+                    "source_call_id": "call-1",
+                    "content": source,
+                    "extra": {"metadata": metadata, "exit_code": 0, "pid": 42},
+                }
+            ]
+        },
+        extra={"file": source, "metadata": metadata, "exit_code": 0, "pid": 42},
+    )
+    path.write_text(json.dumps(value))
+    catalog = read_atif(path, "p1")
+    encoded = catalog["atif:p1:harbor:1"]
+    assert secret not in encoded
+    restored = json.loads(encoded)
+    direct = restored["extra"]["file"]
+    assert json.loads(json.loads(restored["extra"]["metadata"])) == {
+        "file": direct,
+        "exit_code": 0,
+        "pid": 42,
+    }
+    result = restored["observation"]["results"][0]
+    assert result["content"] == direct
+    assert json.loads(json.loads(result["extra"]["metadata"]))["file"] == direct
+    assert (
+        result["extra"]["exit_code"],
+        result["extra"]["pid"],
+        restored["step_id"],
+    ) == (0, 42, 1)
+    assert restored["tool_calls"] == value["steps"][0]["tool_calls"]
 
 
 def evidence_tree(root: Path, lines: str, *, changed: bool = True) -> Path:
