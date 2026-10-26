@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,15 @@ from agent_sec_cli.skill_score.evidence.redact import redact_text
 from agent_sec_cli.skill_score.io import read, save, scrub_configured_key
 from agent_sec_cli.skill_score.provider.bailian import resolve_payg_auth
 
-WORKER_PYTHON = Path("/opt/agent-sec/skill-score-runtime/bin/python3.12")
+
+def worker_python(prefix: Path) -> Path:
+    """Resolve the sibling raw runtime; preserve the optional RPM layout."""
+    if prefix.name == "cli" and prefix.parent.name == "skill-score":
+        return prefix.parent / "runtime/bin/python3.12"
+    return Path("/opt/agent-sec/skill-score-runtime/bin/python3.12")
+
+
+WORKER_PYTHON = worker_python(Path(sys.prefix))
 
 
 class Runtime:
@@ -23,7 +32,7 @@ class Runtime:
     def _invoke(self, request: dict[str, Any], root: Path, timeout: float) -> dict[str, Any]:
         if not WORKER_PYTHON.is_file():
             raise ContractError(
-                "install agent-sec-skill-score-runtime and prepare Docker and the offline image first"
+                "install the assessment-enabled sec-core package and prepare Docker and its images first"
             )
         auth = resolve_payg_auth()
         request["config"] = self.config.model_dump()

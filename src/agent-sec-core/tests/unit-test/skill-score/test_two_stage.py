@@ -624,7 +624,7 @@ def test_missing_optional_worker_preserves_source_assessment(subject, tmp_path, 
         source_redactor=lambda x: x,
     )
     assert report["decision"] == "scored" and report["score"] == 100.0
-    assert "agent-sec-skill-score-runtime" in " ".join(report["limitations"])
+    assert "assessment-enabled sec-core package" in " ".join(report["limitations"])
     assert judge.stages == ["final"]
     assert not report["execution"][0]["completed"]
 

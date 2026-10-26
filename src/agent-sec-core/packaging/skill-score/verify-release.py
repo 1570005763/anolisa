@@ -102,10 +102,18 @@ def validate_archive(path: Path) -> None:
 def main() -> None:
     """Write the release manifest only after all required artifacts validate."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("directory", type=Path)
-    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("directory", type=Path, nargs="?")
+    parser.add_argument("--source-commit")
+    parser.add_argument("--payload-only", type=Path)
     parser.add_argument("--development", action="store_true")
     args = parser.parse_args()
+    if args.payload_only is not None:
+        if args.directory is not None or args.source_commit is not None or args.development:
+            parser.error("--payload-only cannot be combined with release arguments")
+        validate_archive(args.payload_only)
+        return
+    if args.directory is None or args.source_commit is None:
+        parser.error("directory and --source-commit are required for a release")
     if not re.fullmatch(r"[a-f0-9]{40}", args.source_commit):
         raise ValueError("source commit must be a full Git SHA")
     packages = list(args.directory.glob("*.rpm"))
