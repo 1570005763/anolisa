@@ -93,6 +93,23 @@ jobs:
         run: |
           PYTHONPATH="$PWD/skill-score-runtime/src" uv run --project agent-sec-cli --frozen \
             --extra skill-score pytest tests/unit-test/skill-score -q
+      - name: Run collector regressions with the locked Harbor runtime
+        working-directory: src/agent-sec-core
+        run: |
+          mkdir -p "$RUNNER_TEMP/score-evidence"
+          PYTHONPATH="$PWD/agent-sec-cli/src:$PWD/skill-score-runtime/src:$PWD/skill-score-runtime/image" \
+            uv run --project skill-score-runtime --python 3.12.11 --frozen --with pytest==9.0.3 \
+            pytest tests/integration-test/skill-score/test_runtime_observations.py -q \
+            --junitxml="$RUNNER_TEMP/score-evidence/collector-tests.xml"
+          python3 - "$RUNNER_TEMP/score-evidence/collector-tests.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suites = ET.parse(sys.argv[1]).getroot().findall("testsuite")
+          assert sum(int(suite.get("tests", "0")) for suite in suites) >= 40
+          for field in ("skipped", "failures", "errors"):
+              assert all(int(suite.get(field, "0")) == 0 for suite in suites), field
+          PY
       - name: Build the standard raw preview and separate image archive
         run: |
           bash src/agent-sec-core/packaging/skill-score/build-preview.sh "$RUNNER_TEMP/score-release"

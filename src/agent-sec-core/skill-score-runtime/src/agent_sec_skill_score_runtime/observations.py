@@ -191,7 +191,7 @@ def read_atif(path: Path, probe_id: str, label: str = "harbor") -> dict[str, str
     catalog = {}
     for step in value["steps"]:
         ref = f"atif:{probe_id}:{label}:{step['step_id']}"
-        catalog[ref] = redact_text(json.dumps(step, ensure_ascii=False))
+        catalog[ref] = json.dumps(redact_value(step), ensure_ascii=False)
         for index, call in enumerate(step.get("tool_calls") or []):
             args = call.get("arguments") or {}
             if isinstance(args, dict):
