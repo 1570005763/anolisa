@@ -48,6 +48,8 @@ Scoring runs locally and does not use the daemon. Explicit `--socket`, `--timeou
 
 A public report uses `agent-sec-skill-score/report-v1` and binds `content_hash` to the task. `score` and `decision` describe the safety assessment; they do not establish dynamic completeness. Verify that `execution` accounts for every planned probe and each entry is `completed: true`; nonempty `limitations` means incomplete coverage. Missing evidence or an unsupported environment must remain visible. A high score with incomplete execution is not a passed dynamic assessment.
 
+The optional `planning_notes` string array preserves non-blocking caveats from the task's `audit.limitations`, such as an absent category of input. Display these as unverified planning context; they neither establish nor prevent dynamic completion. Actual planning errors, unavailable environments, timeouts, missing observations and failed adjudication remain incomplete conditions. `planning_notes` is also retained in `internal-report.json`; the task format is unchanged.
+
 Retain the public task/report and evidence directory together, including `environment.json`, `internal-report.json` and `evidence-catalog.json`. Collect partial evidence before deleting a failed sandbox. Evidence may contain sensitive Skill content; the platform controls access and retention.
 
 ## Runtime ownership

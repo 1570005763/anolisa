@@ -174,9 +174,6 @@ def run_task(
     limitations = [
         f"planning/{identifier}: {reason}" for identifier, reason in audit.planning_errors.items()
     ]
-    limitations.extend(
-        f"Unverified planning note (not a final verdict): {note}" for note in audit.limitations
-    )
     final_available = False
     environment = {}
     baseline_task = {"completed": False, "failure_kind": "unknown", "assessable": False, "refs": []}
@@ -446,6 +443,7 @@ def run_task(
         "findings": [f.model_dump() for f in findings],
         "control_gaps": [gap.model_dump() for gap in gaps],
         "failures": failures,
+        "planning_notes": list(audit.limitations),
         "limitations": limitations,
         "audit_omitted_sources": audit.omitted_sources,
         "final_available": final_available,
@@ -582,6 +580,7 @@ def public_report(data: dict[str, Any], catalog: dict[str, str]) -> dict[str, An
         ),
         "findings": findings,
         "execution": execution,
+        **({"planning_notes": data["planning_notes"]} if data.get("planning_notes") else {}),
         **({"limitations": data["limitations"]} if data.get("limitations") else {}),
         **(
             {
