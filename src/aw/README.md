@@ -2,10 +2,37 @@
 
 [中文版](README_zh.md)
 
-AW lets different Agents share security checks, tool output compression, and custom rules.
-It starts a native Agent from one configuration and runs selected Providers around
-its tool calls. The Agent keeps its model configuration, interface, and permissions;
-AW records execution locally for inspection. The current release is a Linux Preview.
+AW provides shared Hook orchestration, managed MCP integration, and policy updates for Agents and SDK applications.
+One configuration selects Agent targets and composes security checks, tool output
+compression, and custom rules. Adapters connect native execution to these shared
+contracts while the Agent retains its model configuration, interface, and permissions.
+The current release is a Linux Preview; available capabilities depend on the Adapter
+and launch mode.
+
+## Shared capabilities
+
+| Capability | What AW provides | Integration boundary |
+| --- | --- | --- |
+| Unified Hooks | Compose custom rules and Providers such as sec-core and Tokenless around tool execution, with tool selection, ordered steps, deadlines, and audit. | The Adapter translates native events and adopts supported effects. Select security checks for the tools they cover and retain native permission checks. |
+| Managed MCP | Bring MCP tools into the same before/after policy path, with invocation identity, lifecycle ownership, and result handling. | Register tools through a supported managed factory or tool integration. Each Adapter defines the supported transport, identity evidence, and result slots. |
+| Policy hot updates | Validate and explicitly apply policy changes to an idle instance while retaining its host process. | Ordinary Qoder SDK and QwenPaw support idle updates between fully drained tasks. Restricted `--reloadable`/PID attach modes retain their own limits; other ordinary Adapters require restart. |
+
+Define targets in one `aw.yaml` and select one with
+`aw run --config aw.yaml --agent <target>`. CLI integrations install native Hooks;
+SDK applications use the documented managed factories or plugins. New Adapters
+reuse the shared configuration, Provider protocol, and lifecycle contracts and
+can add native capabilities incrementally. Required unsupported capabilities
+fail admission; each Adapter's supported effects and launch modes remain explicit.
+
+The [capability support matrix](../../docs/user-guide/en/aw/capabilities.md)
+records all 16 Hook names, managed MCP and policy-update coverage by Adapter and
+mode, with implemented boundaries and planned work separated. Policy updates
+share one framework contract; each Adapter supplies its verified switching boundary.
+
+See [custom Hooks and SDK integration](../../docs/developer-guide/en/aw/native-agents.md),
+[managed MCP](docs/design/en/adapters/claude-mcp.md), and
+[policy updates](../../docs/user-guide/en/aw/configuration.md#update-a-prewarmed-instance)
+for the current integration contracts.
 
 ## Install and use
 
@@ -138,6 +165,7 @@ for exclusive profiles, confirmation and cleanup requirements.
 | Task | Guide |
 | --- | --- |
 | Choose capabilities and get started | [AW user guide](../../docs/user-guide/en/aw/index.md) |
+| Compare Hook, MCP and hot-update support | [Capability support matrix](../../docs/user-guide/en/aw/capabilities.md) |
 | Install packages, generate configuration, and run for the first time | [Install AW](../../docs/user-guide/en/aw/installation.md) |
 | Select an Agent, enable Providers, and edit configuration | [Configure AW](../../docs/user-guide/en/aw/configuration.md) |
 | Compress tool output | [Tokenless](../../docs/user-guide/en/aw/tokenless.md) |
@@ -151,12 +179,18 @@ User documentation lives in `docs/user-guide/{en,zh}/aw/` and
 integration references in `docs/developer-guide/{en,zh}/aw/`. Component protocol
 designs remain in this directory's `docs/design/`.
 
-## Hook support
+<a id="hook-support"></a>
 
-This table is generated from the [regression matrix](tests/regression-matrix.json).
-It lists capabilities declared by the runtime and covered by CI contract tests.
-See the [native Agent integration reference](../../docs/developer-guide/en/aw/native-agents.md)
-for supported versions, tool types, and text replacement boundaries.
+## Adapter capability coverage
+
+The shared capabilities above describe AW's product scope. The table below tracks
+each Adapter's tool event/effect coverage, generated from the
+[regression matrix](tests/regression-matrix.json) and checked by CI contract tests.
+`✓` marks a declared, covered effect; `—` marks an unsupported effect.
+Check MCP integration, strict Post failure handling, resident lifecycle, and hot
+updates in the [capability support matrix](../../docs/user-guide/en/aw/capabilities.md).
+The [native Agent integration reference](../../docs/developer-guide/en/aw/native-agents.md)
+defines supported tool types and text replacement boundaries.
 
 Each ordinary managed Qoder SDK Query owns a child scope; daemon shutdown drains
 its Queries and original callbacks. An explicit application factory provides a
