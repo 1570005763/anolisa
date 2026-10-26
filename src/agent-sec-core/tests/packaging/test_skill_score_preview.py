@@ -38,7 +38,9 @@ class PreviewTest(unittest.TestCase):
             (self.directory / name).write_text("fixture")
         self.package()
 
-    def package(self, version: str = VERSION, embedded_images: bool = False) -> None:
+    def package(
+        self, version: str = VERSION, embedded_images: bool = False, old_launcher: bool = False
+    ) -> None:
         with tarfile.open(
             self.directory / f"sec-core-{VERSION}-linux-x86_64.tar.gz", "w:gz"
         ) as archive:
@@ -48,6 +50,8 @@ class PreviewTest(unittest.TestCase):
             archive.addfile(member, io.BytesIO(data))
             if embedded_images:
                 archive.addfile(tarfile.TarInfo("lib/skill-score-images.tar.gz"), io.BytesIO())
+            if old_launcher:
+                archive.addfile(tarfile.TarInfo("./bin/agent-sec-skill-score"), io.BytesIO())
 
     def prepare(self) -> dict:
         return PREVIEW.prepare(self.directory, SOURCE, VERSION, self.components)
@@ -62,6 +66,8 @@ class PreviewTest(unittest.TestCase):
         self.assertEqual(index["entries"][0]["version"], VERSION)
         self.assertEqual(manifest["source_commit"], SOURCE)
         self.assertEqual(manifest["raw_repository"], "v1")
+        self.assertEqual(manifest["cli"], "agent-sec-cli")
+        self.assertEqual(manifest["command_prefix"], ["skillsec", "score"])
         self.assertNotIn(
             "skill-score-payload.tar.gz", {item["file"] for item in manifest["artifacts"]}
         )
@@ -79,6 +85,11 @@ class PreviewTest(unittest.TestCase):
     def test_rejects_source_version_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "bind"):
             PREVIEW.prepare(self.directory, "a" * 40, VERSION, self.components)
+
+    def test_rejects_standalone_launcher(self) -> None:
+        self.package(old_launcher=True)
+        with self.assertRaisesRegex(ValueError, "unified"):
+            self.prepare()
 
     def test_rejects_missing_image(self) -> None:
         (self.directory / "skill-score-images.tar.gz").unlink()

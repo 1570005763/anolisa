@@ -4,7 +4,7 @@
 
 本次在 ANOLISA 基线 `5351c892f2e89d6be799ebdbeea948c173d3d7c2` 上纳入独立评分源码。`packaging/skill-score/source-import.json` 绑定来源附件；不会把 release tag 的基线提交视为完整源码。镜像和软件包的实际验收与单元测试分别记录。
 
-评测 CLI 负责计划、源码 hash 核验、证据解读和报告版本；Python 3.12 worker 负责既有 Docker/Harbor 执行。预览版标准 raw 包在 `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}` 安装私有运行时，并提供 `agent-sec-skill-score` 入口；保留 V2 宿主 CLI/daemon。CLI 接入当前原生 prompt backend，扫描错误、降级和截断都不能当作无风险结果。
+评测 CLI 负责计划、源码 hash 核验、证据解读和报告版本；Python 3.12 worker 负责既有 Docker/Harbor 执行。预览版标准 raw 包在 `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}` 安装私有运行时，并在 V2 CLI 中提供 `agent-sec-cli skillsec score plan/run`。该命令走明确的本地分支，在可观测运行时初始化前执行 Unix exec，保留 PID、进程组、标准输入输出和 Python 退出状态，不连接 daemon，也不继承 daemon 请求超时。原 `skill-ledger` 拼写保留为 `skillsec` 的兼容别名。CLI 接入当前原生 prompt backend，扫描错误、降级和截断都不能当作无风险结果。
 
 Harbor 0.22.0 保持原样。worker 生成任务公开的 `environment/docker-compose.yaml`，启用 Harbor public 网络模式，并另外记录 ASC 的有效静态策略。main 共享 ASC 侧车的 network namespace，并等待健康检查；两个服务都有显式健康检查。main 移除 NET_ADMIN、NET_RAW。
 

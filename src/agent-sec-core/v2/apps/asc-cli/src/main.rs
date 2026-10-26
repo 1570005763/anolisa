@@ -45,6 +45,10 @@ fn main() -> ExitCode {
             };
         }
     };
+    // Exec before starting telemetry threads; the assessment runtime owns its whole lifecycle.
+    if let Plan::SkillScore(command) = cli.plan() {
+        return exec_score(command);
+    }
     let runtime = match asc_observability::init_runtime("agent-sec-cli") {
         Ok(runtime) => runtime,
         Err(reason) => {
@@ -113,6 +117,16 @@ fn main() -> ExitCode {
     }
 }
 
+fn exec_score(command: &asc_cli::SkillScoreCommand) -> ExitCode {
+    match command.exec() {
+        Ok(never) => match never {},
+        Err(error) => {
+            eprintln!("agent-sec-cli: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run(cli: &Cli) -> Result<u8, RunError> {
     let socket = match cli.plan() {
         // The capability view describes the environment this process inherited,
@@ -135,6 +149,8 @@ fn run(cli: &Cli) -> Result<u8, RunError> {
             return Ok(0);
         }
         Plan::Daemon { socket } => socket,
+        // main replaces the process before entering this daemon/local-rendering path.
+        Plan::SkillScore(_) => unreachable!("assessment exec is handled before runtime startup"),
     };
     if let Some(result) = cli.run_observability_query(socket) {
         return result.map_err(RunError::Output);

@@ -79,7 +79,8 @@ class ScoreRawPackageTest(unittest.TestCase):
         self.assertEqual(contract["component"]["version"], self.version)
         targets = {entry["target"] for entry in contract["component"]["layout"]["files"]}
         self.assertIn("{bindir}/agent-sec-cli", targets)
-        self.assertIn("{bindir}/agent-sec-skill-score", targets)
+        self.assertNotIn("{bindir}/agent-sec-skill-score", targets)
+        self.assertFalse((self.stage / "bin/agent-sec-skill-score").exists())
         self.assertIn("{libdir}/sec-core/skill-score/", targets)
         tree = next(
             entry
@@ -91,7 +92,7 @@ class ScoreRawPackageTest(unittest.TestCase):
         self.assertFalse(any(path.is_symlink() for path in self.stage.rglob("*")))
         command = subprocess.run(
             [
-                str(self.stage / "bin/agent-sec-skill-score"),
+                str(self.stage / "lib/anolisa/sec-core/skill-score/cli/bin/agent-sec-cli"),
                 "skill-score",
                 "plan",
                 "path with spaces",
