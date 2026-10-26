@@ -2,31 +2,32 @@
 
 [English](../../en/agent-sec-core/skill-score.md)
 
-可选安全评测组件为一个 Skill 生成探针，在 Docker 中执行并给出有证据支撑的安全分。计划生成和裁决调用所支持的百炼 Anthropic 兼容模型端点，会消耗 Token。本地扫描器与 daemon 仍独立安装。
+可选安全评测组件为一个 Skill 生成探针，在 Docker 中执行并给出有证据支撑的安全分。计划生成和裁决调用所支持的百炼 Anthropic 兼容模型端点，会消耗 Token。预览版使用标准 `sec-core` raw 包，并保留其中的 V2 宿主 CLI 与 daemon。
 
 ## 安装可选组件
 
-常规 `anolisa --install-mode system install sec-core` 不安装此评测扩展。请使用 `packaging/skill-score/build-rpms.sh` 生成的专用制品；本次源码改动本身不代表已经发布版本或云模板。
-
-在兼容的 RPM 发行版上，安装同一份已核验发布中的两个包：
+在 Ubuntu 及兼容的 Linux x86_64 发行版上，下载通过验收的固定 fork release 附件并按可信发布清单核对长度和 SHA-256。将 `index-v2.toml`、`index.toml`、`components-v2.toml` 和标准 raw 包放到本地 `v1/` 目录，再复用 ANOLISA 安装器安装：
 
 ```sh
-sudo yum install ./agent-sec-skill-score-cli-*.rpm ./agent-sec-skill-score-runtime-*.rpm
+sudo anolisa --install-mode system install sec-core --backend raw \
+  --repo 'file:///absolute/path/to/preview/v1' --version '<预览版本号>'
 ```
 
-CLI 位于 `/opt/agent-sec/skill-score-cli/bin/agent-sec-cli`，worker 使用 `/opt/agent-sec/skill-score-runtime/bin/python3.12`。两个包均不覆盖 `/usr/bin/agent-sec-cli`，不注册 systemd 服务。发布还包含相同两个 prefix 的 `skill-score-payload.tar.gz`，供 Ubuntu 等环境制作镜像。解包 prefix 不等于验证了 Ubuntu 的 RPM 安装事务。目标 CPU 与 glibc 必须满足发布要求；核验清单后在干净镜像构建环境安装。
+版本号取自通过构建验收的 `sec-core` 预览 release。官方安装器会对不以 `/v1` 结尾的根地址追加 `/v1`，因此 GitHub Release 的平铺附件地址不能直接作为仓库根；SkillEval bundle 脚本自动准备本地 v1 布局。正式默认渠道尚未包含此评测扩展。标准 raw 包同时包含 V2 二进制和独立评分 CLI/worker 及锁定的 Python 依赖。评分入口是 `/usr/local/bin/agent-sec-skill-score`，`/usr/local/bin/agent-sec-cli` 继续提供 V2 CLI。评分私有运行时安装到 `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`，不需要额外运行评分 daemon。安装前核对目标 CPU 与 glibc 基线。
 
-将配套 `skill-score-images.tar` 加载到 Docker，按 `images.json` 核对不可变 image ID。工作镜像和 ASC 网络侧车缺一不可；运行时不构建或拉取缺失镜像。需要 Linux x86_64、Docker Compose、可用网络 namespace、包内使用的防火墙/conntrack 规则以及 ptrace/strace。内层容器申请 4096 MiB，外层还需为 Docker、CLI、worker 和侧车留出内存。镜像构建成功不代表运行验收通过。
+同一 release 提供 `release-manifest.json`（`agent-sec-skill-score/release-v2`）、标准 raw 索引、`skill-score-images.tar.gz`、`images.json`、工具清单及源码归档。发布清单须来自可信发布渠道，并逐项核对制品长度与 SHA-256。镜像不放入 raw 包；在干净的模板构建环境执行 `docker load -i skill-score-images.tar.gz`，按 `images.json` 核对不可变 image ID。
+
+工作镜像和 ASC 网络侧车缺一不可；运行时不构建或拉取缺失镜像。需要 Linux x86_64、Docker Compose、可用网络 namespace、包内使用的防火墙/conntrack 规则以及 ptrace/strace。内层容器申请 4096 MiB，外层还需为 Docker、CLI、worker 和侧车留出内存。镜像构建成功不代表运行验收通过。
 
 ## 生成计划并执行
 
 通过进程环境或平台密钥注入提供 `ANTHROPIC_API_KEY`，按需设置 `ANTHROPIC_BASE_URL`。凭据不要放入命令参数、任务 JSON、模板或发布清单。
 
 ```sh
-/opt/agent-sec/skill-score-cli/bin/agent-sec-cli skill-score plan \
+agent-sec-skill-score skill-score plan \
   /work/input/skill --output-file /work/output/task.json
 
-/opt/agent-sec/skill-score-cli/bin/agent-sec-cli skill-score run \
+agent-sec-skill-score skill-score run \
   /work/output/task.json --output-file /work/output/report.json \
   --evidence-dir /work/output/evidence
 ```
@@ -53,17 +54,13 @@ CLI 位于 `/opt/agent-sec/skill-score-cli/bin/agent-sec-cli`，worker 使用 `/
 
 侧车只读策略包含白名单及解析出的 IPv4 地址。GOST 使用该映射与显式空的备用 resolver，工作容器修改共享 `/etc/hosts` 不会改变代理解析。大小写不同、无法命中映射的 TLS 名称保守拒绝。代理失效时保留过滤规则；侧车启动失败时工作容器不得启动。IPv6 验收需要另外提供已启用 IPv6 的测试环境。
 
-部署平台创建外层沙箱、上传不可变 Skill 快照、调用以上命令、下载有界产物并删除精确沙箱。ASC 不接收云管理凭据，也不实现 FC 生命周期 API。采用 FC 时，两个 prefix、Docker 和镜像均安装在 FC 模板内，SkillEval 服务只负责编排。
+部署平台创建外层沙箱、上传不可变 Skill 快照、调用以上命令、下载有界产物并删除精确沙箱。ASC 不接收云管理凭据，也不实现 FC 生命周期 API。采用 FC 时，标准 raw 包、Docker 和镜像均安装在 FC 模板内，SkillEval 只负责编排。制品下载和镜像加载发生在模板构建阶段，无须每次评测重新下载。
 
 ## 构建与验证
 
-开发者在 Linux x86_64 上准备 Rust 1.93.0、uv、RPM 工具、Docker 和 Compose：
+开发者在 Linux x86_64 上准备 Rust 1.93.1、uv、原生编译依赖、Docker 和 Compose。`CI / Skill score raw preview` 工作流在 Ubuntu 构建并安装完整 raw 包，检查已安装的 CLI/worker 和 Docker 网络行为，通过后才发布 fork 预览 release。该工作流不发布 FC 模板，也不证明真实模型评分已完成验收。
 
-```sh
-bash src/agent-sec-core/packaging/skill-score/build-rpms.sh /absolute/empty/release
-```
-
-正式构建要求干净 checkout。`--allow-dirty` 生成明确标记的开发制品。发布内容包括两个 RPM、prefix payload、离线镜像、工具清单、源码归档、源码提交和制品摘要。CI 负责构建与测试；正式发布及平台模板发布是另外的操作。
+预览构建通过 `packaging/skill-score/build-payload.sh` 生成评分内容，再用 `RAW_SKILL_SCORE_PAYLOAD` 纳入标准 `make package-raw` 构建。`RAW_PREVIEW_VERSION` 只设置暂存包的预览版本，不改源码产品版本。默认 raw 构建仍仅含 V2。预览发布要求干净源码提交并绑定制品摘要；`build-rpms.sh` 保留为独立的维护者 RPM 构建路径。
 
 安装 worker 并构建最新镜像后，执行 Linux 网络回归：
 

@@ -11,6 +11,14 @@ from agent_sec_cli.skill_score.contracts import ContractError, Probe
 from agent_sec_cli.skill_score.io import read, save
 
 
+def test_worker_resolves_from_raw_install_prefix(tmp_path: Path) -> None:
+    prefix = tmp_path / "usr/local/lib/anolisa/sec-core/skill-score/cli"
+    assert runtime.worker_python(prefix) == prefix.parent / "runtime/bin/python3.12"
+    assert runtime.worker_python(Path("/opt/agent-sec/skill-score-cli")) == Path(
+        "/opt/agent-sec/skill-score-runtime/bin/python3.12"
+    )
+
+
 def test_subprocess_protocol_has_no_key_or_audit_answers(tmp_path, monkeypatch):
     worker = tmp_path / "python3.12"
     worker.touch()

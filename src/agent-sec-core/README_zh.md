@@ -43,7 +43,7 @@ CLI 命令与集成 capability surface。
 
 ## 可选 Skill 安全评测
 
-独立 `skill-score plan/run` 组件提供模型辅助计划、Docker 动态执行和有证据支撑的评分。CLI 与 worker 安装在执行环境内，平台负责沙箱生命周期和产物管理。组件使用原版 Harbor，通过公开 Compose 配置接入 ASC 自有网络侧车；可选包不替换宿主 CLI/daemon。详见[安装、接口与验证指南](../../docs/user-guide/zh/agent-sec-core/skill-score.md)。
+独立 `skill-score plan/run` 组件提供模型辅助计划、Docker 动态执行和有证据支撑的评分。CLI 与 worker 安装在执行环境内，平台负责沙箱生命周期和产物管理。组件使用原版 Harbor，通过公开 Compose 配置接入 ASC 自有网络侧车；预览版标准 `sec-core` raw 包新增 `agent-sec-skill-score`，保留 V2 宿主 CLI/daemon；镜像单独交付。详见[安装、接口与验证指南](../../docs/user-guide/zh/agent-sec-core/skill-score.md)。
 
 ## V2 SkillSec 与 Policy CLI
 
