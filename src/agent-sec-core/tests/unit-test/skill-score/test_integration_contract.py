@@ -18,6 +18,7 @@ from agent_sec_cli.skill_score.config import ScoreConfig
 from agent_sec_cli.skill_score.contracts import ContractError
 from agent_sec_cli.skill_score.entrypoint import app
 from agent_sec_cli.skill_score.io import load_source
+from agent_sec_cli.skill_score.task import task_json
 
 fake = test_two_stage.fake
 subject = test_two_stage.subject
@@ -83,6 +84,36 @@ def test_dedicated_entrypoint_keeps_public_command(
     result = CliRunner().invoke(app, ["skill-score", "plan", str(subject)])
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["schema_version"] == "agent-sec-skill-score/task-v1"
+
+
+def test_cli_exports_planning_notes_without_dynamic_limitations(
+    subject: Path, tmp_path: Path, fake: tuple[FakeJudge, FakeRuntime]
+) -> None:
+    task = make_task(subject, tmp_path)
+    task.audit.limitations = ["No untrusted input is present in this bounded Skill"]
+    output, evidence = tmp_path / "report.json", tmp_path / "evidence"
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "run",
+            json.dumps(task_json(subject, task.content_hash, task.audit)),
+            "--output-file",
+            str(output),
+            "--evidence-dir",
+            str(evidence),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.stdout)
+    assert json.loads(output.read_text()) == report
+    assert report["planning_notes"] == task.audit.limitations
+    assert "limitations" not in report
+    assert report["execution"][0]["completed"]
+    internal = json.loads((evidence / "internal-report.json").read_text())
+    assert internal["planning_notes"] == report["planning_notes"]
+    assert internal["limitations"] == []
+    preserved_task = json.loads((evidence / "task.json").read_text())
+    assert preserved_task["audit"]["limitations"] == task.audit.limitations
 
 
 @pytest.mark.parametrize("failure", ["error", "degraded", "truncated", "missing"])
