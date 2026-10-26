@@ -58,6 +58,12 @@ Provider 继续使用继承 PATH，且不会重放 profile。`shell.login_identi
 `COSH_SHELL_BOOTSTRAP_PATH=0` 会同时关闭旧 PATH 探针和这条交接。Native
 集成保持不变；Bash non-login 与 zsh 保留原有探针行为。
 
+对于 Linux 默认安装中已接纳的绝对路径 ELF Core 与 Gateway CLI，Shell 会在
+自身会话的整个生命周期内持有打开的文件描述符。即使软件包路径被原子替换，
+延迟启动仍使用已接纳的 ELF，并保留原始 `argv[0]`。相对 PATH 查找及显式配置
+的非 ELF 外部脚本保留原有行为。此保证不固定 Gateway daemon 在升级后另行
+启动的 worker 版本。
+
 ## 输入所有权与可见状态
 
 符号首先描述按下 Enter 前的输入所有者，不描述已经产生的输出。输入类型保存在

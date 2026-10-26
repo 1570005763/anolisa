@@ -66,6 +66,13 @@ fallback and reports its resulting PATH under the same contract. Setting
 Native integration is unchanged; Bash non-login and zsh retain their existing
 probe behavior.
 
+For the default Linux installation's admitted absolute ELF Core and Gateway
+CLI paths, the Shell holds an open file descriptor for its session lifetime.
+Delayed launches still use the admitted ELF after an atomic package-path
+replacement, preserving the original `argv[0]`. Relative PATH lookup and
+explicitly configured non-ELF external scripts keep their existing behavior.
+This guarantee does not pin the Gateway daemon's later workers across upgrades.
+
 ## Input Ownership and Visible State
 
 Symbols primarily describe who owns editable input before Enter, not output

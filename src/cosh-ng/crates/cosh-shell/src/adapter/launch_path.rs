@@ -18,7 +18,7 @@ pub(crate) fn record_trusted_startup_path(path: String) {
 /// Builds a provider command with the trusted startup PATH. Without a report
 /// the child keeps the inherited environment and program lookup behavior.
 pub(crate) fn command_with_trusted_startup_path(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
+    let mut command = super::session_assets::command_for_session_asset(program.as_ref());
     if let Some(path) = TRUSTED_STARTUP_PATH.get() {
         command.env("PATH", path);
     }

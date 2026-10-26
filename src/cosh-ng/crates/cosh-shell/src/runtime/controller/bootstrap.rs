@@ -26,20 +26,9 @@ use super::failopen::maybe_inject_failopen_panic;
 use super::failopen::{FailOpenFailure, FreshLoginFailOpen};
 use super::render_raw_inline_event_view;
 
-fn build_adapter(kind: AdapterKind) -> AdapterInstance {
-    match adapter_for_kind(kind) {
-        AdapterInstance::ClaudeCode(adapter) => {
-            AdapterInstance::ClaudeCode(adapter.with_model_call(true))
-        }
-        AdapterInstance::QwenCli(adapter) => {
-            AdapterInstance::QwenCli(adapter.with_model_call(true))
-        }
-        AdapterInstance::CoshCore(adapter) => {
-            AdapterInstance::CoshCore(adapter.with_model_call(true))
-        }
-        other => other,
-    }
-}
+mod adapter_factory;
+
+use adapter_factory::build_adapter;
 
 pub(crate) fn run_demo() -> i32 {
     let events = demo_events();
@@ -102,6 +91,8 @@ pub(crate) fn run_raw(
         eprintln!("unknown adapter: {adapter_name}");
         return 2;
     };
+
+    let adapter = build_adapter(kind);
 
     let work_dir =
         std::env::temp_dir().join(format!("cosh-shell-raw-session-{}", std::process::id()));
@@ -239,7 +230,6 @@ pub(crate) fn run_raw(
         config.set_assistance_control(control);
     }
 
-    let adapter = build_adapter(kind);
     let mut inline_state = InlineState::with_raw_session_dir(&config.work_dir);
     inline_state.assistance_control = assistance_control;
     inline_state.shell_session_id = Some(config.session_id.clone());

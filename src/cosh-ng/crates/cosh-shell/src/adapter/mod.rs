@@ -33,6 +33,7 @@ mod prompt;
 mod prompt_tests;
 mod qwen;
 mod qwen_stream;
+mod session_assets;
 
 pub use claude::ClaudeCodeAdapter;
 use claude_stream::ClaudeStreamParser;
@@ -60,6 +61,7 @@ pub use prompt::{
     prompt_from_request_with_evidence_policy, provider_prompt_contract,
 };
 pub use qwen::QwenCliAdapter;
+pub(crate) use session_assets::{admit_session_assets, gateway_executable};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdapterError {
