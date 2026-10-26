@@ -2,31 +2,32 @@
 
 [中文版](../../zh/agent-sec-core/skill-score.md)
 
-The optional assessment component plans probes for one Skill, executes them in Docker, and produces an evidence-qualified safety score. Planning and judging call a supported Bailian Anthropic-compatible model endpoint and consume tokens. The local scanner and daemon installation remains separate.
+The optional assessment component plans probes for one Skill, executes them in Docker, and produces an evidence-qualified safety score. Planning and judging call a supported Bailian Anthropic-compatible model endpoint and consume tokens. The preview uses the standard `sec-core` raw package and preserves its V2 host CLI and daemon.
 
 ## Install the optional component
 
-The normal `anolisa --install-mode system install sec-core` installation does not install this assessment add-on. Use the add-on release produced by `packaging/skill-score/build-rpms.sh`; this source change does not publish a release or cloud template.
-
-On compatible RPM distributions, install the two artifacts from the same verified release:
+On Ubuntu and compatible Linux x86_64 distributions, download a validated fixed fork release and check artifact sizes and SHA-256 values against its trusted manifest. Place `index-v2.toml`, `index.toml`, `components-v2.toml` and the raw package in a local `v1/` directory, then use the existing ANOLISA installer:
 
 ```sh
-sudo yum install ./agent-sec-skill-score-cli-*.rpm ./agent-sec-skill-score-runtime-*.rpm
+sudo anolisa --install-mode system install sec-core --backend raw \
+  --repo 'file:///absolute/path/to/preview/v1' --version '<preview-version>'
 ```
 
-The CLI is `/opt/agent-sec/skill-score-cli/bin/agent-sec-cli`; its worker uses `/opt/agent-sec/skill-score-runtime/bin/python3.12`. Neither package replaces `/usr/bin/agent-sec-cli` nor registers a systemd service. The release also provides `skill-score-payload.tar.gz` containing the same two prefixes for image builders, including Ubuntu. Prefix extraction does not prove an Ubuntu RPM installation transaction. Match the target CPU and the release's glibc baseline, verify the release manifest, and use a clean image build directory.
+Use the version from a successful `sec-core` preview release. The official installer appends `/v1` when the repository root does not end with it, so the flat GitHub Release asset URL cannot be used directly as the repository root. The SkillEval bundle script prepares this local v1 layout automatically. The official default channel does not yet contain this optional assessment. The standard raw package contains the V2 binaries and an isolated scoring CLI/worker with pinned Python dependencies. The scoring entry point is `/usr/local/bin/agent-sec-skill-score`; it leaves `/usr/local/bin/agent-sec-cli` as the V2 CLI. Private scoring runtimes reside under `/usr/local/lib/anolisa/sec-core/skill-score/{cli,runtime}`. No additional scoring daemon is required. Match the target CPU and glibc baseline before installing.
 
-Load the matching `skill-score-images.tar` into Docker and verify its image IDs against `images.json`. Both the work image and the ASC egress sidecar are required; runtime startup does not build or pull missing images. A Linux x86_64 host, Docker Compose, usable network namespaces, the packaged firewall/conntrack rules, and ptrace/strace support are required. Reserve memory outside the inner container's 4096 MiB allocation for Docker, the CLI, worker and sidecar. An image build alone is not runtime acceptance.
+The same release provides `release-manifest.json` (`agent-sec-skill-score/release-v2`), the raw repository indexes, `skill-score-images.tar.gz`, `images.json`, tool inventory and source archive. Verify all lengths and SHA-256 values against a manifest obtained from the trusted release channel. Container images are separate from the raw package. During a clean template build, load the matching archive with `docker load -i skill-score-images.tar.gz` and verify image IDs against `images.json`.
+
+Both the work image and the ASC egress sidecar are required; runtime startup does not build or pull missing images. A Linux x86_64 host, Docker Compose, usable network namespaces, the packaged firewall/conntrack rules, and ptrace/strace support are required. Reserve memory outside the inner container's 4096 MiB allocation for Docker, the CLI, worker and sidecar. An image build alone is not runtime acceptance.
 
 ## Plan and execute
 
 Provide `ANTHROPIC_API_KEY` and, when needed, `ANTHROPIC_BASE_URL` through the process environment or your platform's secret injection. Do not put credentials into command arguments, task JSON, templates or release manifests.
 
 ```sh
-/opt/agent-sec/skill-score-cli/bin/agent-sec-cli skill-score plan \
+agent-sec-skill-score skill-score plan \
   /work/input/skill --output-file /work/output/task.json
 
-/opt/agent-sec/skill-score-cli/bin/agent-sec-cli skill-score run \
+agent-sec-skill-score skill-score run \
   /work/output/task.json --output-file /work/output/report.json \
   --evidence-dir /work/output/evidence
 ```
@@ -53,17 +54,13 @@ Harbor 0.22.0 is consumed without editing its source. ASC supplies a task Compos
 
 The sidecar's read-only policy holds the allowlist and resolved IPv4 addresses. GOST uses that mapping and an explicit empty fallback resolver, so changes to the work container's shared `/etc/hosts` cannot redirect the proxy. A differently cased TLS name that misses the mapping fails closed. Proxy failure leaves filtering rules installed; startup failure prevents the work container from starting. IPv6 acceptance requires a separate IPv6-enabled test environment.
 
-A deployment platform creates the outer sandbox, uploads an immutable Skill snapshot, invokes these commands, downloads bounded artifacts and deletes the exact sandbox. ASC does not receive cloud credentials or implement FC lifecycle APIs. For FC, install both prefixes, Docker and the images inside the FC template; the SkillEval service only orchestrates them.
+A deployment platform creates the outer sandbox, uploads an immutable Skill snapshot, invokes these commands, downloads bounded artifacts and deletes the exact sandbox. ASC does not receive cloud credentials or implement FC lifecycle APIs. For FC, install the standard raw package, Docker and the images inside the FC template; SkillEval only orchestrates them. Artifact downloads and image loading occur during template construction, not for every evaluation.
 
 ## Build and verify
 
-Developers build on Linux x86_64 with Rust 1.93.0, uv, RPM tooling, Docker and Compose:
+Developers build on Linux x86_64 with Rust 1.93.1, uv, native compiler dependencies, Docker and Compose. The `CI / Skill score raw preview` workflow builds and installs the complete raw package on Ubuntu, checks the installed CLI/worker and Docker network behavior, and publishes a fork prerelease only after those checks pass. The workflow does not publish an FC template or prove real-model scoring acceptance.
 
-```sh
-bash src/agent-sec-core/packaging/skill-score/build-rpms.sh /absolute/empty/release
-```
-
-Release builds require a clean checkout. `--allow-dirty` creates an explicitly marked development artifact. The release includes both RPMs, prefix payload, offline images, tool inventory, source archive, source commit and artifact hashes. The CI workflow builds and tests the component; publishing and platform template release remain separate operations.
+The preview build uses `packaging/skill-score/build-payload.sh` and `RAW_SKILL_SCORE_PAYLOAD` to opt into assessment content in the standard `make package-raw` build. `RAW_PREVIEW_VERSION` sets the staged preview version without changing the source product version. The default raw build remains V2-only. Preview releases require a clean source commit and include fixed artifact hashes; `build-rpms.sh` remains a separate maintainer path for RPM delivery.
 
 Run the Linux egress regression against the installed worker and freshly built images:
 
