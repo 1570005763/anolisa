@@ -1,0 +1,43 @@
+name: CI / Skill score packages
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/agent-sec-core/agent-sec-cli/**'
+      - 'src/agent-sec-core/skill-score-runtime/**'
+      - 'src/agent-sec-core/packaging/skill-score/**'
+      - 'src/agent-sec-core/tests/unit-test/skill-score/**'
+      - 'src/agent-sec-core/tests/integration-test/skill-score/**'
+      - '.github/workflows/sec-core-skill-score.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assessment:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.0'
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          python-version: '3.11.6'
+      - name: Install package tooling
+        run: sudo apt-get update && sudo apt-get install -y rpm build-essential pkg-config libssl-dev
+      - name: Build assessment delivery
+        run: bash src/agent-sec-core/packaging/skill-score/build-rpms.sh "$RUNNER_TEMP/score-release"
+      - name: Run handoff and scoring contracts
+        working-directory: src/agent-sec-core
+        run: |
+          uv run --project agent-sec-cli --frozen --extra skill-score pytest tests/unit-test/skill-score -q
+      - name: Preserve packages and identity manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-score-linux-x86_64
+          path: ${{ runner.temp }}/score-release/
+          if-no-files-found: error
