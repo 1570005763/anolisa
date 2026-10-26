@@ -60,6 +60,9 @@ kept conservatively; a long session spanning rotation may not be reclaimed
 automatically.
 
 Core session files have a separate per-user 100 MiB budget, including staging.
+Atomic replacement admits the old file and the incoming staging file together
+before writing; when that peak cannot fit, it preserves the old file and refuses
+the commit.
 Core/Shell diagnostic logs share 20 MiB and retain today plus the previous two
 UTC dates. Storage ownership checks refuse unsafe entries before writes or
 cleanup.

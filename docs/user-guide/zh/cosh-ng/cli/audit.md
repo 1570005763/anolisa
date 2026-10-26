@@ -55,9 +55,10 @@ cosh-cli audit prune --dry-run
 segment 内的实际行序配对。现有事件缺少 invocation identity，因此跨 segment
 未配对的 Session 证据会保守保留；长会话跨越轮转后可能无法自动回收。
 
-Core 会话文件使用独立的每用户 100 MiB 预算，包含 staging。Core/Shell 诊断日志
-共享 20 MiB，并保留今天及前两个 UTC 日期。存储所有权检查会在写入或清理前
-拒绝不安全条目。
+Core 会话文件使用独立的每用户 100 MiB 预算，包含 staging。原子替换会在写入前
+同时计算旧文件和新 staging 文件；峰值空间不足时保留旧文件并拒绝提交。
+Core/Shell 诊断日志共享 20 MiB，并保留今天及前两个 UTC 日期。存储所有权检查
+会在写入或清理前拒绝不安全条目。
 
 ## 策略命令
 
