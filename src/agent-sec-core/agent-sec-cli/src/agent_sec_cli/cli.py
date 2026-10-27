@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import typer
-
 from agent_sec_cli.capabilities.cli import app as capabilities_app
 from agent_sec_cli.cli_logging import setup_cli_logging
 from agent_sec_cli.correlation_context import (
@@ -103,7 +102,9 @@ def _is_read_only_skill_analyze(argv: list[str]) -> bool:
             return False
         command_tokens.append(arg)
         index += 1
-    return command_tokens == ["skill-ledger", "analyze"] or command_tokens[:1] == ["skill-score"]
+    return command_tokens == ["skill-ledger", "analyze"] or command_tokens[:1] == [
+        "skill-score"
+    ]
 
 
 @app.callback(invoke_without_command=True)
@@ -134,7 +135,14 @@ def main_callback(
 
 # Mount skill-ledger as a subcommand group: agent-sec-cli skill-ledger <cmd>
 app.add_typer(skill_ledger_app, name="skill-ledger")
-app.add_typer(skill_score_app, name="skill-score")
+# Preserve explicit calls from the Python preview during migration to native skillsec score.
+app.add_typer(
+    skill_score_app,
+    name="skill-score",
+    hidden=True,
+    deprecated=True,
+    help="Use the native agent-sec-cli skillsec score command.",
+)
 app.add_typer(observability_app, name="observability")
 app.add_typer(capabilities_app, name="capabilities")
 
@@ -176,7 +184,9 @@ def _with_default_harden_args(args: list[str]) -> list[str]:
         and "--dry-run" not in normalized
     ):
         normalized.insert(0, "--scan")
-    if "--config" not in normalized and not any(arg.startswith("--config=") for arg in normalized):
+    if "--config" not in normalized and not any(
+        arg.startswith("--config=") for arg in normalized
+    ):
         normalized.extend(["--config", DEFAULT_HARDEN_CONFIG])
     return normalized
 
@@ -412,7 +422,9 @@ def _format_table(events_list: list[Any]) -> str:
     ]
 
     # Compute column widths: max(header, all values) + 2 padding
-    col_widths = [max(len(h), *(len(r[i]) for r in rows)) + 2 for i, h in enumerate(headers)]
+    col_widths = [
+        max(len(h), *(len(r[i]) for r in rows)) + 2 for i, h in enumerate(headers)
+    ]
 
     lines: list[str] = []
     lines.append("".join(h.ljust(w) for h, w in zip(headers, col_widths)).rstrip())
@@ -440,10 +452,15 @@ def events(
     category: str | None = typer.Option(
         None,
         "--category",
-        help=("Filter by category. " f"Known categories: {', '.join(sorted(_VALID_CATEGORIES))}."),
+        help=(
+            "Filter by category. "
+            f"Known categories: {', '.join(sorted(_VALID_CATEGORIES))}."
+        ),
     ),
     trace_id: str | None = typer.Option(None, "--trace-id", help="Filter by trace ID."),
-    session_id: str | None = typer.Option(None, "--session-id", help="Filter by session ID."),
+    session_id: str | None = typer.Option(
+        None, "--session-id", help="Filter by session ID."
+    ),
     run_id: str | None = typer.Option(None, "--run-id", help="Filter by run ID."),
     since: str | None = typer.Option(
         None, "--since", help="Inclusive lower bound (ISO-8601 timestamp)."
@@ -458,7 +475,9 @@ def events(
     ),
     limit: int = typer.Option(100, "--limit", help="Max results (default 100)."),
     offset: int = typer.Option(0, "--offset", help="Skip N results (default 0)."),
-    count: bool = typer.Option(False, "--count", help="Output only the count of matching events."),
+    count: bool = typer.Option(
+        False, "--count", help="Output only the count of matching events."
+    ),
     count_by: str | None = typer.Option(
         None,
         "--count-by",
@@ -565,7 +584,9 @@ def events(
             summary_hours = 24.0
 
         try:
-            resolved_since, resolved_until = _resolve_time_range(summary_hours, since, until)
+            resolved_since, resolved_until = _resolve_time_range(
+                summary_hours, since, until
+            )
         except ValueError as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1)
@@ -593,7 +614,9 @@ def events(
     # --- count mode ---
     if count:
         try:
-            resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
+            resolved_since, resolved_until = _resolve_time_range(
+                last_hours, since, until
+            )
         except ValueError as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1)
@@ -614,7 +637,9 @@ def events(
     # --- count-by mode ---
     if count_by is not None:
         try:
-            resolved_since, resolved_until = _resolve_time_range(last_hours, since, until)
+            resolved_since, resolved_until = _resolve_time_range(
+                last_hours, since, until
+            )
         except ValueError as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1)
