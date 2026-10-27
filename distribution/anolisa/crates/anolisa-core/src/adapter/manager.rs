@@ -5534,6 +5534,7 @@ mod tests {
                 ..Default::default()
             }],
             health_check: None,
+            prepare: None,
         }
     }
 
