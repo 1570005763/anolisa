@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-27
+
+### Added
+
+- Install dynamic Skill assessment dependencies explicitly with
+  `anolisa install sec-core-skill-score`. Installing, updating, or repairing
+  base `sec-core` does not download the optional runtime or its images.
+- Prepare verified Raw component dependencies before replacing an installed
+  version, retaining the old environment when preparation fails. Repair can
+  restore missing dependencies of an already installed optional component.
+
 ## [0.3.18] - 2026-10-15
 
 ### Added
