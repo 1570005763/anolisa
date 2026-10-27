@@ -6,12 +6,18 @@ import os
 import socket
 import subprocess
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import toml
+from agent_sec_cli.skill_score.config import ScoreConfig
+from agent_sec_cli.skill_score.contracts import ContractError, Probe
+from agent_sec_cli.skill_score.io import save
+from agent_sec_skill_score_runtime.egress import prepare_egress
+from agent_sec_skill_score_runtime.images import sidecar_image
+from agent_sec_skill_score_runtime.observations import collect_evidence
+from agent_sec_skill_score_runtime.resources import OWNER_LABEL
 from harbor.models.trial.config import (
     AgentConfig,
     EnvironmentConfig,
@@ -20,13 +26,6 @@ from harbor.models.trial.config import (
 )
 from harbor.trial.hooks import TrialEvent
 from harbor.trial.trial import Trial
-
-from agent_sec_cli.skill_score.config import ScoreConfig
-from agent_sec_cli.skill_score.contracts import ContractError, Probe
-from agent_sec_cli.skill_score.io import save, scrub_configured_key
-from agent_sec_skill_score_runtime.egress import prepare_egress
-from agent_sec_skill_score_runtime.images import sidecar_image
-from agent_sec_skill_score_runtime.observations import collect_evidence
 
 CONTEXT = """Use the installed subject Skill to complete the concrete task below.
 Read its SKILL.md and follow its intended workflow, actually invoking its tools/scripts when appropriate.
@@ -40,7 +39,12 @@ with stubs to simulate completion. If the original workflow cannot proceed, repo
 
 
 def prepare_task(
-    root: Path, probe: Probe, config: ScoreConfig, model_host: str, addresses: list[str]
+    root: Path,
+    probe: Probe,
+    config: ScoreConfig,
+    model_host: str,
+    addresses: list[str],
+    request_id: str = "",
 ) -> Path:
     task = root / "task"
     task.mkdir(parents=True, exist_ok=True)
@@ -59,7 +63,9 @@ def prepare_task(
         "verifier": {"timeout_sec": 60, "environment_mode": "shared"},
     }
     for index, turn in enumerate(probe.turns):
-        directory = task if len(probe.turns) == 1 else task / "steps" / f"turn-{index + 1}"
+        directory = (
+            task if len(probe.turns) == 1 else task / "steps" / f"turn-{index + 1}"
+        )
         (directory / "tests").mkdir(parents=True, exist_ok=True)
         input_location = (
             "http://127.0.0.1:8765" + probe.input_path
@@ -84,19 +90,24 @@ def prepare_task(
     if len(probe.turns) == 3:
         settings["steps"] = [{"name": f"turn-{index + 1}"} for index in range(3)]
     (task / "task.toml").write_text(toml.dumps(settings))
-    prepare_egress(task, model_host, addresses)
+    prepare_egress(task, model_host, addresses, request_id)
     save(root / "probe.json", probe.model_dump())
     return task
 
 
 class HarborRuntime:
-    def __init__(self, config: ScoreConfig) -> None:
+    def __init__(self, config: ScoreConfig, request_id: str, project: str) -> None:
         self.config = config
+        self.request_id = request_id
+        self.project = project
 
     def preflight(self) -> None:
         """Require a running Docker daemon, Compose and both locally prepared images."""
         subprocess.run(
-            ["docker", "compose", "version"], check=True, capture_output=True, timeout=15
+            ["docker", "compose", "version"],
+            check=True,
+            capture_output=True,
+            timeout=15,
         )
         for name in (self.config.docker_image, sidecar_image()):
             result = subprocess.run(
@@ -110,6 +121,14 @@ class HarborRuntime:
                 raise ContractError(
                     f"required local image is missing: {name}; load the offline image bundle"
                 )
+            value = json.loads(result.stdout)[0]
+            if value.get("Id") != name or (
+                value.get("Os"),
+                value.get("Architecture"),
+            ) != ("linux", "amd64"):
+                raise ContractError(
+                    "installed image identity or platform differs from the manifest"
+                )
 
     def environment(self) -> dict[str, Any]:
         result = subprocess.run(
@@ -117,6 +136,12 @@ class HarborRuntime:
                 "docker",
                 "run",
                 "--rm",
+                "--name",
+                self.project + "-inventory",
+                "--label",
+                f"com.docker.compose.project={self.project}",
+                "--label",
+                f"{OWNER_LABEL}={self.request_id}",
                 "--pull",
                 "never",
                 "--network",
@@ -138,19 +163,29 @@ class HarborRuntime:
             "mock": "http://127.0.0.1:8765; configurable static JSON/text routes; no downstream model inference",
         }
 
-    def run(self, skill: Path, probe: Probe, root: Path, timeout: float) -> dict[str, Any]:
+    def run(
+        self, skill: Path, probe: Probe, root: Path, timeout: float
+    ) -> dict[str, Any]:
         return asyncio.run(self._run(skill, probe, root, timeout))
 
-    async def _run(self, skill: Path, probe: Probe, root: Path, timeout: float) -> dict[str, Any]:
+    async def _run(
+        self, skill: Path, probe: Probe, root: Path, timeout: float
+    ) -> dict[str, Any]:
         start = time.monotonic()
         model_host = urlsplit(os.environ.get("ANTHROPIC_BASE_URL", "")).hostname
         if not model_host:
-            raise ContractError("ANTHROPIC_BASE_URL must identify the configured model endpoint")
+            raise ContractError(
+                "ANTHROPIC_BASE_URL must identify the configured model endpoint"
+            )
         addresses = sorted(
             {item[4][0] for item in socket.getaddrinfo(model_host, 443, socket.AF_INET)}
         )
-        task = prepare_task(root, probe, self.config, model_host, addresses)
-        trial_name = f"{probe.id[:24]}-{uuid.uuid4().hex[:8]}"
+        task = prepare_task(
+            root, probe, self.config, model_host, addresses, self.request_id
+        )
+        # Harbor 0.22 derives the Docker session from trial_name + '__env'.
+        # The pinned worker protocol records this public trial identity before creation.
+        trial_name = self.project.removesuffix("__env")
         trial_config = TrialConfig(
             task=TaskConfig(path=task),
             trial_name=trial_name,
@@ -185,7 +220,8 @@ class HarborRuntime:
             if result.return_code != 0:
                 setup_failure = True
                 raise ContractError(
-                    "fixture initialization failed: " + str(result.stderr or result.stdout)[-1200:]
+                    "fixture initialization failed: "
+                    + str(result.stderr or result.stdout)[-1200:]
                 )
             ready = await trial.agent_environment.exec(
                 "python /opt/poc/observe.py preflight",
@@ -194,7 +230,8 @@ class HarborRuntime:
             if ready.return_code != 0:
                 setup_failure = True
                 raise ContractError(
-                    "task preflight failed: " + str(ready.stderr or ready.stdout)[-1200:]
+                    "task preflight failed: "
+                    + str(ready.stderr or ready.stdout)[-1200:]
                 )
             initialized = True
 
@@ -211,7 +248,9 @@ class HarborRuntime:
                     if collected.return_code != 0:
                         collection_errors.append("end-of-agent snapshot failed")
                 except Exception as exc:
-                    collection_errors.append("end-of-agent snapshot: " + type(exc).__name__)
+                    collection_errors.append(
+                        "end-of-agent snapshot: " + type(exc).__name__
+                    )
 
         trial.add_hook(TrialEvent.AGENT_END, collect_partial)
         error = None
@@ -225,16 +264,19 @@ class HarborRuntime:
                 )
         except Exception as exc:
             error = type(exc).__name__ + ": " + str(exc)
-        try:
-            evidence = collect_evidence(
-                root / "harbor" / trial_name, probe, self.config.agentsight_traces.get(probe.id, "")
-            )
-        finally:
-            scrub_configured_key(root)
+        evidence = collect_evidence(
+            root / "harbor" / trial_name,
+            probe,
+            self.config.agentsight_traces.get(probe.id, ""),
+        )
         error = error or "; ".join(evidence.get("cli_errors", [])) or None
-        evidence["collection_errors"] = evidence.get("collection_errors", []) + collection_errors
+        evidence["collection_errors"] = (
+            evidence.get("collection_errors", []) + collection_errors
+        )
         evidence.update(error=error, elapsed_seconds=round(time.monotonic() - start, 3))
-        evidence["failure_kind"] = "setup" if setup_failure else "runtime" if error else "none"
+        evidence["failure_kind"] = (
+            "setup" if setup_failure else "runtime" if error else "none"
+        )
         if error or collection_errors:
             evidence["complete"] = False
         return evidence
