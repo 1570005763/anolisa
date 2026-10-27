@@ -3,21 +3,27 @@
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from agent_sec_skill_score_runtime.images import sidecar_image
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
-    parser.add_argument("--build-network", choices=("default", "host"), default="default")
+    parser.add_argument(
+        "--build-network", choices=("default", "host"), default="default"
+    )
+    parser.add_argument(
+        "--version", required=True, help="Component version used for both image tags"
+    )
     args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", args.version):
+        parser.error("version is not a Docker tag")
     component = Path(__file__).resolve().parents[2]
-    image = "agent-sec-skill-score:1"
+    image = f"agent-sec-skill-score:{args.version}"
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="skill-score-image-") as temporary:
         context = Path(temporary)
@@ -30,7 +36,9 @@ def main() -> None:
         # Only genuine code-scanner modules needed by the subject scanner Skill, not CLI/ML.
         for name in ("code_scanner", "model_service"):
             shutil.copytree(
-                source / name, target / name, ignore=shutil.ignore_patterns("__pycache__")
+                source / name,
+                target / name,
+                ignore=shutil.ignore_patterns("__pycache__"),
             )
         subprocess.run(
             [
@@ -45,7 +53,7 @@ def main() -> None:
             ],
             check=True,
         )
-    sidecar = sidecar_image()
+    sidecar = f"agent-sec-skill-score-egress:{args.version}"
     subprocess.run(
         [
             "docker",
@@ -87,7 +95,14 @@ def main() -> None:
     text = json.dumps(inventory, ensure_ascii=False, indent=2) + "\n"
     (args.output / "tool-inventory.json").write_text(text)
     subprocess.run(
-        ["docker", "save", "-o", str(args.output / "skill-score-images.tar"), image, sidecar],
+        [
+            "docker",
+            "save",
+            "-o",
+            str(args.output / "skill-score-images.tar"),
+            image,
+            sidecar,
+        ],
         check=True,
     )
     details = json.loads(
@@ -143,6 +158,7 @@ def main() -> None:
                         "name": name,
                         "id": detail["Id"],
                         "repo_digests": detail.get("RepoDigests", []),
+                        "platform": f"{detail['Os']}/{detail['Architecture']}",
                     }
                     for name, detail in zip((image, sidecar), details, strict=True)
                 ],
