@@ -43,7 +43,7 @@ CLI 命令与集成 capability surface。
 
 ## 可选 Skill 安全评测
 
-`agent-sec-cli skillsec score plan/run` 组件提供模型辅助计划、Docker 动态执行和有证据支撑的评分。CLI 与 worker 安装在执行环境内，平台负责沙箱生命周期和产物管理。组件使用原版 Harbor，通过公开 Compose 配置接入 ASC 自有网络侧车；预览版标准 `sec-core` raw 包通过 V2 CLI 暴露评分命令，并随包交付私有 Python 运行时；镜像单独交付。详见[安装、接口与验证指南](../../docs/user-guide/zh/agent-sec-core/skill-score.md)。
+`agent-sec-cli skillsec score plan/run` 提供 Rust 原生规划和评分。基础 `sec-core` 安装保持轻量，需要 Harbor 动态执行时显式安装匹配的 `sec-core-skill-score` 组件；安装阶段获取锁定的第三方依赖和单独校验的镜像归档。单机 Linux 与 SkillEval FC 复用同一 CLI、worker 和 ASC 网络侧车。共享模型服务通过密钥引用配置，已有本地扫描器默认行为保持不变。详见[安装、接口与验证指南](../../docs/user-guide/zh/agent-sec-core/skill-score.md)。
 
 ## V2 SkillSec 与 Policy CLI
 
