@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from agent_sec_cli.skill_score.contracts import ContractError
 from agent_sec_cli.skill_score.evidence.redact import (
     assert_redacted,
@@ -11,7 +10,9 @@ from agent_sec_cli.skill_score.evidence.redact import (
 )
 
 
-def test_redact_text_removes_common_secret_shapes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_redact_text_removes_common_secret_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     environment_secret = "sk-ant-environment-secret-value"
     monkeypatch.setenv("ANTHROPIC_API_KEY", environment_secret)
     raw = (
@@ -109,3 +110,26 @@ def test_benign_digests_and_token_counts_are_not_redacted() -> None:
 
     assert redact_value(value) == value
     assert_redacted(value)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "Path('/app/guard/token').read_text()",
+        "os.environ['TOKEN']",
+        "get_secret()",
+        "config.token",
+    ],
+)
+def test_source_expression_is_preserved(expression: str) -> None:
+    source = f"token = {expression}\n"
+    assert redact_text(source) == source
+    assert "credential_assignment" not in find_secret_markers(source)
+
+
+def test_source_literal_and_exact_configured_secret_are_still_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_SEC_MODEL_API_KEY", "actualconfiguredvalue")
+    assert "actualconfiguredvalue" not in redact_text("token = actualconfiguredvalue")
+    assert redact_text('token = "literal-secret-value"') == 'token = "[REDACTED]"'

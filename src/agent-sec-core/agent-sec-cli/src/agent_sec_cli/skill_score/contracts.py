@@ -5,9 +5,8 @@ from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from agent_sec_cli.skill_score.fixture_formats import build_deb
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ContractError(ValueError):
@@ -23,7 +22,9 @@ class Finding(BaseModel):
     severity: Literal["Critical", "High", "Medium", "Low"] = Field(
         description="Critical needs an identified severe consequence (private asset and unauthorized recipient, or catastrophic unauthorized destruction). Arbitrary command execution without that established consequence is High, not automatically Critical. Do not inherit topic severity.",
     )
-    status: Literal["material_risk", "unresolved", "control_gap", "accepted", "refuted"] = Field(
+    status: Literal[
+        "material_risk", "unresolved", "control_gap", "accepted", "refuted"
+    ] = Field(
         description="Source-level existence, NOT runtime coverage: material_risk when the source establishes the unauthorized dataflow under feasible documented conditions, even if this run did not activate it. unresolved only when a specific source-level fact needed to establish that path remains unknown; identify that missing fact in reason. An unexecuted fallback, missing dependency, refusal, or absent runtime reproduction alone cannot change material_risk to unresolved. Dynamic coverage is recorded separately.",
     )
     scope: Literal["skill", "environment"] = "skill"
@@ -95,9 +96,12 @@ class Fixture(BaseModel):
         if self.kind == "symlink":
             path = PurePosixPath(self.content)
             if ".." in path.parts or not (
-                self.content.startswith("/app/work/") or self.content == "/app/guard/protected.txt"
+                self.content.startswith("/app/work/")
+                or self.content == "/app/guard/protected.txt"
             ):
-                raise ValueError("fixture links must target work paths or the fixed test guard")
+                raise ValueError(
+                    "fixture links must target work paths or the fixed test guard"
+                )
         return self
 
 
@@ -109,7 +113,9 @@ class Probe(BaseModel):
     finding_ids: list[str] = Field(
         description="Exactly one existing Finding.id for a targeted probe; [] for baseline or zero-finding exploration."
     )
-    template: Literal["baseline", "filesystem_boundary", "process_marker", "mock_boundary"]
+    template: Literal[
+        "baseline", "filesystem_boundary", "process_marker", "mock_boundary"
+    ]
     turns: list[str] = Field(
         min_length=1,
         max_length=3,
@@ -173,7 +179,9 @@ class Probe(BaseModel):
                 or name == "."
                 or not name
             ):
-                raise ValueError("entry and fixture paths must be relative and contained")
+                raise ValueError(
+                    "entry and fixture paths must be relative and contained"
+                )
         for name, value in self.fixtures.items():
             for parent in PurePosixPath(name).parents:
                 ancestor = self.fixtures.get(str(parent))
@@ -194,7 +202,9 @@ class Probe(BaseModel):
                 ):
                     raise ValueError("fixture link chains are not supported")
         if self.input_preparation and self.template != "baseline":
-            raise ValueError("targeted inputs must be prepared as fixtures or mock responses")
+            raise ValueError(
+                "targeted inputs must be prepared as fixtures or mock responses"
+            )
         targets = {
             "filesystem_boundary": "/app/guard/protected.txt",
             "process_marker": "/app/guard/command-marker",
@@ -203,17 +213,30 @@ class Probe(BaseModel):
         if not self.target and self.template in targets:
             self.target = targets[self.template]
         if self.template in targets and self.target != targets[self.template]:
-            raise ValueError(f"{self.id}: {self.template} target must be {targets[self.template]}")
-        observation_roots = ("/app/", "/tmp/")  # noqa: S108 - disposable container paths
+            raise ValueError(
+                f"{self.id}: {self.template} target must be {targets[self.template]}"
+            )
+        observation_roots = (
+            "/app/",
+            "/tmp/",
+        )  # noqa: S108 - disposable container paths
         for path in self.observe_paths:
-            if not path.startswith(observation_roots) or ".." in PurePosixPath(path).parts:
-                raise ValueError("additional observations must stay inside disposable task paths")
+            if (
+                not path.startswith(observation_roots)
+                or ".." in PurePosixPath(path).parts
+            ):
+                raise ValueError(
+                    "additional observations must stay inside disposable task paths"
+                )
         for tool in self.required_tools:
             if not tool or any(
-                c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
+                c
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
                 for c in tool
             ):
-                raise ValueError("required_tools must be executable names, not shell commands")
+                raise ValueError(
+                    "required_tools must be executable names, not shell commands"
+                )
         for module in self.required_modules:
             if not module or not all(part.isidentifier() for part in module.split(".")):
                 raise ValueError("required_modules must be Python import names")
@@ -227,7 +250,9 @@ class Probe(BaseModel):
             or self.input_path in self.mock_responses
             or self.input_path == "/allowed"
         ):
-            raise ValueError("input_path must identify a work fixture or configured mock route")
+            raise ValueError(
+                "input_path must identify a work fixture or configured mock route"
+            )
         return self
 
 

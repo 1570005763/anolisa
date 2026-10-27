@@ -8,7 +8,7 @@ For the Rust V2 SkillSec core migration, see the [V2 guide](skillsec-v2.md).
 Release installation and the Agent integrations below describe V1; source builds
 install the V2 Rust CLI and daemon.
 
-The optional [Skill safety assessment](skill-score.md) uses a separate CLI/worker and model calls for planning and judging.
+The optional [Skill safety assessment](skill-score.md) uses the native ASC CLI and shared model configuration for planning and judging. Base installation remains lightweight; explicitly install `sec-core-skill-score` for Docker/Harbor execution.
 
 ## Overview
 
