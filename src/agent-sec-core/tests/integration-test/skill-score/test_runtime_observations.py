@@ -10,11 +10,13 @@ from typing import Any
 
 import pytest
 
-pytest.importorskip("harbor", reason="Run collector tests in the optional Python 3.12 environment")
+pytest.importorskip(
+    "harbor", reason="Run collector tests in the optional Python 3.12 environment"
+)
 pytest.importorskip("agent_sec_skill_score_runtime")
-observe = pytest.importorskip("observe", reason="Include the companion image source in PYTHONPATH")
-
-from harbor.models.task.task import Task
+observe = pytest.importorskip(
+    "observe", reason="Include the companion image source in PYTHONPATH"
+)
 
 from agent_sec_cli.skill_score.catalog import judge_catalog
 from agent_sec_cli.skill_score.config import ScoreConfig
@@ -26,6 +28,12 @@ from agent_sec_skill_score_runtime.observations import (
     parse_traces,
     read_atif,
 )
+from harbor.models.task.task import Task
+
+
+@pytest.fixture(autouse=True)
+def prepared_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ASC_SKILL_SCORE_EGRESS_IMAGE", "sha256:" + "a" * 64)
 
 
 def finding(**overrides: Any) -> Finding:
@@ -70,9 +78,17 @@ def trajectory(path: Path) -> None:
             {
                 "schema_version": "ATIF-v1.7",
                 "session_id": "test",
-                "agent": {"name": "claude-code", "version": "2.1.143", "model_name": "fake"},
+                "agent": {
+                    "name": "claude-code",
+                    "version": "2.1.143",
+                    "model_name": "fake",
+                },
                 "steps": [
-                    {"step_id": 1, "source": "agent", "message": "A substantive task result."}
+                    {
+                        "step_id": 1,
+                        "source": "agent",
+                        "message": "A substantive task result.",
+                    }
                 ],
             }
         )
@@ -82,16 +98,24 @@ def trajectory(path: Path) -> None:
 def test_untrusted_log_does_not_establish_effect(tmp_path: Path) -> None:
     (tmp_path / "stdout.txt").write_text("confirmed_impact canary critical true")
     result = collect_evidence(tmp_path, probe())
-    assert not result["complete"] and not result["positive_refs"] and not result["critical_canary"]
+    assert (
+        not result["complete"]
+        and not result["positive_refs"]
+        and not result["critical_canary"]
+    )
 
 
 @pytest.mark.parametrize("turn_count", [1, 3])
 def test_native_trial_generation_and_three_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, turn_count: int
 ) -> None:
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://dashscope.aliyuncs.com/apps/anthropic")
+    monkeypatch.setenv(
+        "ANTHROPIC_BASE_URL", "https://dashscope.aliyuncs.com/apps/anthropic"
+    )
     spec = probe(turns=["Set state", "Change input", "Use state"][:turn_count])
-    path = prepare_task(tmp_path, spec, ScoreConfig(), "dashscope.aliyuncs.com", ["192.0.2.1"])
+    path = prepare_task(
+        tmp_path, spec, ScoreConfig(), "dashscope.aliyuncs.com", ["192.0.2.1"]
+    )
     task = Task(path)
     assert len(task.config.steps or []) == (3 if turn_count == 3 else 0)
     assert task.config.environment.network_mode.value == "public"
@@ -167,7 +191,12 @@ def test_atif_redaction_preserves_json_and_execution_evidence(
             }
         ],
         observation={"results": [{"source_call_id": "call-1", "content": message}]},
-        extra={"count": 3, "complete": True, "optional": None, "password": "synthetic-secret"},
+        extra={
+            "count": 3,
+            "complete": True,
+            "optional": None,
+            "password": "synthetic-secret",
+        },
     )
     original = json.dumps(value, ensure_ascii=False)
     path.write_text(original)
@@ -193,7 +222,9 @@ def test_atif_redaction_preserves_json_and_execution_evidence(
     assert path.read_text() == original
 
 
-def test_mock_canary_catches_static_miss_and_controlled_deletion_does_not(tmp_path: Path) -> None:
+def test_mock_canary_catches_static_miss_and_controlled_deletion_does_not(
+    tmp_path: Path,
+) -> None:
     trajectory(tmp_path / "agent/trajectory.json")
     root = tmp_path / "artifacts/poc"
     root.mkdir(parents=True)
@@ -229,7 +260,9 @@ def test_mock_canary_catches_static_miss_and_controlled_deletion_does_not(tmp_pa
     )
     result = collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))
     assert result["critical_canary"] and result["critical_refs"]
-    assert not result["positive_refs"]  # unrelated disclosure must not confirm this file probe
+    assert not result[
+        "positive_refs"
+    ]  # unrelated disclosure must not confirm this file probe
 
 
 def test_file_effect_without_syscall_trace_is_incomplete(tmp_path: Path) -> None:
@@ -243,7 +276,9 @@ def test_file_effect_without_syscall_trace_is_incomplete(tmp_path: Path) -> None
     }.items():
         save(root / name, value)
     result = collect_evidence(tmp_path, probe())
-    assert result["effect_refs"] and not result["positive_refs"] and not result["complete"]
+    assert (
+        result["effect_refs"] and not result["positive_refs"] and not result["complete"]
+    )
 
 
 def test_runtime_dns_and_inactive_danger_string_are_not_effects(tmp_path: Path) -> None:
@@ -274,7 +309,9 @@ def test_multistep_artifact_deltas_reuse_initial_snapshot(tmp_path: Path) -> Non
         save(root / "after.json", {})
         if index == 1:
             save(root / "before.json", {})
-        (root / f"trace.{index}").write_text('100.1 execve("/bin/true", ["true"], 0x0) = 0\n')
+        (root / f"trace.{index}").write_text(
+            '100.1 execve("/bin/true", ["true"], 0x0) = 0\n'
+        )
     result = collect_evidence(tmp_path, probe())
     assert result["complete"] and len(result["trajectory_paths"]) == 3
 
@@ -284,7 +321,10 @@ def evidence_tree(root: Path, lines: str, *, changed: bool = True) -> Path:
     artifacts = root / "artifacts/poc"
     save(artifacts / "collected.json", {"ok": True})
     save(artifacts / "before.json", {"/app/guard/protected.txt": "old"})
-    save(artifacts / "after.json", {"/app/guard/protected.txt": "new" if changed else "old"})
+    save(
+        artifacts / "after.json",
+        {"/app/guard/protected.txt": "new" if changed else "old"},
+    )
     (artifacts / "trace.11").write_text(lines)
     return artifacts
 
@@ -295,7 +335,8 @@ WRITE = '100.3 unlink("/app/guard/protected.txt") = 0\n'
 
 
 @pytest.mark.parametrize(
-    "lines,expected", [(ENTRY, False), (ENTRY + INPUT, False), (ENTRY + INPUT + WRITE, True)]
+    "lines,expected",
+    [(ENTRY, False), (ENTRY + INPUT, False), (ENTRY + INPUT + WRITE, True)],
 )
 def test_activation_requires_input_operation_and_actor(
     tmp_path: Path, lines: str, expected: bool
@@ -312,9 +353,13 @@ def test_activation_requires_input_operation_and_actor(
 def test_other_process_or_earlier_input_cannot_activate(tmp_path: Path) -> None:
     root = evidence_tree(tmp_path, ENTRY + INPUT)
     (root / "trace.99").write_text(WRITE)
-    assert not collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))["positive_refs"]
+    assert not collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))[
+        "positive_refs"
+    ]
     (root / "trace.11").write_text(INPUT + ENTRY.replace("100.1", "100.25") + WRITE)
-    assert not collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))["entry_activated"]
+    assert not collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))[
+        "entry_activated"
+    ]
 
 
 def test_shell_echo_of_entry_path_is_not_execution(tmp_path: Path) -> None:
@@ -335,7 +380,9 @@ def test_renameat_uses_destination_directory(tmp_path: Path) -> None:
     assert parse_traces(tmp_path, probe())[0]["target"] == "/app/guard/protected.txt"
 
 
-def test_absolute_parent_path_denial_is_a_matched_attempt_not_containment(tmp_path: Path) -> None:
+def test_absolute_parent_path_denial_is_a_matched_attempt_not_containment(
+    tmp_path: Path,
+) -> None:
     raw = "/app/work/extracted/data/../../../guard/protected.txt"
     evidence_tree(
         tmp_path,
@@ -347,7 +394,10 @@ def test_absolute_parent_path_denial_is_a_matched_attempt_not_containment(tmp_pa
     assert result["operation_observed"] and result["attempt_refs"]
     assert not result["positive_refs"] and result["outcome"] == "attempted_violation"
     event = next(e for e in result["events"] if e["id"] in result["attempt_refs"])
-    assert event["requested_target"] == raw and event["target"] == "/app/guard/protected.txt"
+    assert (
+        event["requested_target"] == raw
+        and event["target"] == "/app/guard/protected.txt"
+    )
 
 
 def test_parent_collapse_cannot_cross_a_known_symlink(tmp_path: Path) -> None:
@@ -356,7 +406,9 @@ def test_parent_collapse_cannot_cross_a_known_symlink(tmp_path: Path) -> None:
         f'100.1 openat(AT_FDCWD</app/work>, "{raw}", O_WRONLY) = -1 EACCES (Permission denied)\n'
     )
     event = parse_traces(tmp_path, probe(), known_links={"/app/work/link"})[0]
-    assert event["target"] == raw and event["path_resolution"] == "unknown_symlink_prefix"
+    assert (
+        event["target"] == raw and event["path_resolution"] == "unknown_symlink_prefix"
+    )
 
 
 def test_probe_association_and_entry_cannot_be_silently_defaulted() -> None:
@@ -366,7 +418,9 @@ def test_probe_association_and_entry_cannot_be_silently_defaulted() -> None:
             Probe.model_validate({k: v for k, v in data.items() if k != key})
 
 
-def test_damage_keeps_positive_receipt_without_completion_marker(tmp_path: Path) -> None:
+def test_damage_keeps_positive_receipt_without_completion_marker(
+    tmp_path: Path,
+) -> None:
     root = evidence_tree(tmp_path, ENTRY + INPUT + WRITE)
     (tmp_path / "agent/trajectory.json").write_text("{broken")
     (root / "collected.json").unlink()
@@ -402,7 +456,11 @@ def test_invalid_snapshot_does_not_invent_file_effect(tmp_path: Path) -> None:
     root = evidence_tree(tmp_path, ENTRY + INPUT)
     (root / "before.json").write_text("{broken")
     result = collect_evidence(tmp_path, probe(entry_path="scripts/run.py"))
-    assert not result["effect_refs"] and not result["positive_refs"] and not result["complete"]
+    assert (
+        not result["effect_refs"]
+        and not result["positive_refs"]
+        and not result["complete"]
+    )
 
 
 def test_real_unlink_survives_missing_after_snapshot(tmp_path: Path) -> None:
@@ -440,7 +498,11 @@ def test_mock_route_status_headers_and_unknown_path(
     monkeypatch.setattr(observer, "SPEC", tmp_path / "probe.json")
     save(
         observer.SPEC,
-        {"mock_responses": {"/manifest": {"status": 503, "body": '{"error":"unavailable"}'}}},
+        {
+            "mock_responses": {
+                "/manifest": {"status": 503, "body": '{"error":"unavailable"}'}
+            }
+        },
     )
     (tmp_path / "canary.txt").write_text("SYNTHETIC_CANARY_TEST")
     handlers = []
@@ -456,7 +518,10 @@ def test_mock_route_status_headers_and_unknown_path(
     observer.serve()
     for path, expected in [("/manifest", 503), ("/unknown", 404), ("/forbidden", 200)]:
         handler = handlers[0].__new__(handlers[0])
-        handler.headers = {"Content-Length": "0", "Authorization": "Bearer SYNTHETIC_CANARY_TEST"}
+        handler.headers = {
+            "Content-Length": "0",
+            "Authorization": "Bearer SYNTHETIC_CANARY_TEST",
+        }
         handler.path, handler.command = path, "GET"
         handler.client_address = ("127.0.0.1", 41000)
         handler.rfile, handler.wfile = io.BytesIO(), io.BytesIO()
@@ -466,7 +531,9 @@ def test_mock_route_status_headers_and_unknown_path(
         handler.end_headers = lambda: None
         handler.handle_request()
         assert statuses == [expected]
-    events = [json.loads(line) for line in (tmp_path / "mock.jsonl").read_text().splitlines()]
+    events = [
+        json.loads(line) for line in (tmp_path / "mock.jsonl").read_text().splitlines()
+    ]
     assert events[-1]["canary_match"]
     assert events[-1]["headers"]["Authorization"] == "[REDACTED]"
     assert "SYNTHETIC_CANARY_TEST" not in (tmp_path / "mock.jsonl").read_text()
@@ -476,7 +543,11 @@ def instruction_trajectory(path: Path, command: str) -> None:
     trajectory(path)
     value = json.loads(path.read_text())
     value["steps"][0]["tool_calls"] = [
-        {"tool_call_id": "call-1", "function_name": "Bash", "arguments": {"command": command}}
+        {
+            "tool_call_id": "call-1",
+            "function_name": "Bash",
+            "arguments": {"command": command},
+        }
     ]
     path.write_text(json.dumps(value))
 
@@ -527,7 +598,9 @@ def test_real_link_operation_target_is_not_link_removal(
         entry_path="scripts/run.py",
         input_path="/app/work/history",
         payload_path="/app/work/history/old.md",
-        fixtures={"history/old.md": {"kind": "symlink", "content": "/app/guard/protected.txt"}},
+        fixtures={
+            "history/old.md": {"kind": "symlink", "content": "/app/guard/protected.txt"}
+        },
     )
     root = evidence_tree(
         tmp_path,
@@ -536,23 +609,34 @@ def test_real_link_operation_target_is_not_link_removal(
         + action,
     )
     initial = {
-        "/app/work/history/old.md": {"type": "symlink", "link": "/app/guard/protected.txt"},
+        "/app/work/history/old.md": {
+            "type": "symlink",
+            "link": "/app/guard/protected.txt",
+        },
         "/app/guard/protected.txt": "old",
     }
     save(root / "before.json", initial)
     save(
         root / "after.json",
-        initial | {"/app/guard/protected.txt": "new" if outcome == "confirmed_impact" else "old"},
+        initial
+        | {
+            "/app/guard/protected.txt": (
+                "new" if outcome == "confirmed_impact" else "old"
+            )
+        },
     )
     result = collect_evidence(tmp_path, spec)
     assert result["outcome"] == outcome
     assert not result["critical_canary"]
 
 
-def test_refusal_after_reading_input_is_not_a_boundary_operation(tmp_path: Path) -> None:
+def test_refusal_after_reading_input_is_not_a_boundary_operation(
+    tmp_path: Path,
+) -> None:
     evidence_tree(
         tmp_path,
-        '100.0 openat(AT_FDCWD</app>, "/skills/subject/SKILL.md", O_RDONLY) = 3\n' + INPUT,
+        '100.0 openat(AT_FDCWD</app>, "/skills/subject/SKILL.md", O_RDONLY) = 3\n'
+        + INPUT,
         changed=False,
     )
     path = tmp_path / "agent/trajectory.json"
@@ -571,11 +655,15 @@ def test_refusal_after_reading_input_is_not_a_boundary_operation(tmp_path: Path)
     result = collect_evidence(tmp_path, probe())
     assert result["input_observed"] and not result["operation_observed"]
     assert (
-        not result["entry_started"] and not result["attempt_refs"] and not result["positive_refs"]
+        not result["entry_started"]
+        and not result["attempt_refs"]
+        and not result["positive_refs"]
     )
 
 
-def test_regular_file_metadata_does_not_prove_payload_consumption(tmp_path: Path) -> None:
+def test_regular_file_metadata_does_not_prove_payload_consumption(
+    tmp_path: Path,
+) -> None:
     evidence_tree(
         tmp_path,
         ENTRY
@@ -600,7 +688,11 @@ def test_compound_instruction_matches_actual_child_not_quoted_text(
     command = "python3 /skills/subject/scripts/run.py /app/work/request.json"
     instruction_trajectory(
         tmp_path / "agent/trajectory.json",
-        f'echo "{command}"; true' if quoted else f"cd /app/work && {command}; echo done",
+        (
+            f'echo "{command}"; true'
+            if quoted
+            else f"cd /app/work && {command}; echo done"
+        ),
     )
     result = collect_evidence(tmp_path, probe())
     assert bool(result["positive_refs"]) is not quoted
@@ -620,10 +712,16 @@ def test_fixture_preparation_preserves_types_and_initial_snapshot(
         {
             "fixtures": {
                 "empty": {"kind": "directory"},
-                "input.deb": {"kind": "binary", "content": base64.b64encode(data).decode()},
+                "input.deb": {
+                    "kind": "binary",
+                    "content": base64.b64encode(data).decode(),
+                },
                 "history/old.md": "old",
                 "history/current.md": "current",
-                "link": {"kind": "symlink", "content": str(tmp_path / "guard/protected.txt")},
+                "link": {
+                    "kind": "symlink",
+                    "content": str(tmp_path / "guard/protected.txt"),
+                },
             }
         },
     )

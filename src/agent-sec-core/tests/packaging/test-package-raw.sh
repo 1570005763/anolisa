@@ -127,16 +127,22 @@ with tarfile.open(sys.argv[1], "w:gz") as archive:
         member.size, member.mode = len(data), 0o755
         archive.addfile(member, io.BytesIO(data))
 PY
-PREVIEW_VERSION="${VERSION}-skillscore.1234567"
-RAW_SKILL_SCORE_PAYLOAD="$SCORE_PAYLOAD" RAW_PREVIEW_VERSION="$PREVIEW_VERSION" \
-    run_package "$TMP/score-out"
+PREVIEW_VERSION="${VERSION}-skillscore.123456789abc"
+if RAW_SKILL_SCORE_PAYLOAD="$SCORE_PAYLOAD" RAW_PREVIEW_VERSION="$PREVIEW_VERSION" \
+    run_package "$TMP/legacy-score-out" > "$TMP/legacy-score.log" 2>&1; then
+    echo "ERROR: base raw package accepted an embedded scoring runtime" >&2
+    exit 1
+fi
+grep -Fq 'base packages cannot embed assessment payloads' "$TMP/legacy-score.log"
+test ! -e "$TMP/legacy-score-out/sec-core-${PREVIEW_VERSION}-linux-x86_64.tar.gz"
+RAW_PREVIEW_VERSION="$PREVIEW_VERSION" run_package "$TMP/score-out"
 mkdir "$TMP/score-stage"
 tar -xzf "$TMP/score-out/sec-core-${PREVIEW_VERSION}-linux-x86_64.tar.gz" \
     -C "$TMP/score-stage"
 cmp "$BUILD/v2/bin/agent-sec-cli" "$TMP/score-stage/bin/agent-sec-cli"
 test ! -e "$TMP/score-stage/bin/agent-sec-skill-score"
-test -x "$TMP/score-stage/lib/anolisa/sec-core/skill-score/cli/bin/agent-sec-cli"
-test -x "$TMP/score-stage/lib/anolisa/sec-core/skill-score/runtime/bin/python3.12"
+test ! -e "$TMP/score-stage/lib/anolisa/sec-core/skill-score"
+test ! -e "$TMP/score-stage/lib/anolisa/sec-core-skill-score"
 grep -Fxq "version = \"$PREVIEW_VERSION\"" "$TMP/score-stage/.anolisa/component.toml"
 test -z "$(find "$TMP/score-stage" -name '*.tar*' -print -quit)"
 python3 "$ROOT/tests/packaging/test_skill_score_raw.py"
