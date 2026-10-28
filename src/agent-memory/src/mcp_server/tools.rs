@@ -699,3 +699,51 @@ impl ServerHandler for MemoryMcpServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// The packaged catalog is what external MCP clients read for discovery,
+    /// so a tool present only in the runtime registry is effectively
+    /// invisible to them. Both directions have to hold: every registered
+    /// tool is listed, and nothing is listed that the server does not
+    /// register. The catalog is profile-agnostic, so this compares against
+    /// the unfiltered registry — the `expert` profile hides a Tier B subset
+    /// at both `tools/list` and `tools/call`, before and after this test.
+    #[test]
+    fn packaged_catalog_matches_registered_tools() {
+        let raw = include_str!("../../config/mcp-server.json");
+        let catalog: serde_json::Value =
+            serde_json::from_str(raw).expect("config/mcp-server.json must be valid JSON");
+        let listed: BTreeSet<String> = catalog["tools"]
+            .as_array()
+            .expect("catalog tools must be an array")
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .expect("catalog tool names must be strings")
+                    .to_string()
+            })
+            .collect();
+
+        let registered: BTreeSet<String> = memory_tool_box()
+            .list()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        let missing: Vec<&String> = registered.difference(&listed).collect();
+        let unknown: Vec<&String> = listed.difference(&registered).collect();
+
+        assert!(
+            missing.is_empty(),
+            "config/mcp-server.json does not list registered tools: {missing:?}"
+        );
+        assert!(
+            unknown.is_empty(),
+            "config/mcp-server.json lists tools the server does not register: {unknown:?}"
+        );
+    }
+}
