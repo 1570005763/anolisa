@@ -65,7 +65,8 @@ The current crates are:
   whole-network permission schema, strict SDK validation, common-subset checks
   through `validate` and official typed PST output through `pst`. Agent Hook
   actions can add separate typed contexts.
-  It is not yet connected to PAP, RPC, persistence or target translation. See the
+  PAP/RPC and SQLite retain validated source; sandbox PDP reads current selected
+  revisions. AgentSight translation still accepts only native policies. See the
   [frontend contract and tests](../docs/design/POLICY_FRONTEND_AST_AND_TRANSLATION.md#86-cedar-frontend-library).
 - `asc-policy-adapter-agentsight`: deterministic file-deletion and pinned-process
   translation directly from the Binding's template into an AgentSight/ActPlane

@@ -6,7 +6,11 @@ use asc_policy_types::cedar::CedarPolicySource;
 use cedar_policy::{PolicySet, PrincipalConstraint, ValidationMode, ValidationWarning, Validator};
 use cedar_policy_core::ast::{ExprKind, Var};
 
-use crate::{CedarError, schema::load_schema};
+use crate::{
+    CedarError,
+    advice::Advice,
+    schema::{RUNTIME_SCHEMA_REVISION, load_schema},
+};
 
 pub(super) fn parse_and_validate(
     source: &CedarPolicySource,
@@ -14,7 +18,8 @@ pub(super) fn parse_and_validate(
     PolicySource::Cedar(source.clone()).validate()?;
     let schema = load_schema(&source.schema)?;
     let policies: PolicySet = source.text.parse().map_err(Box::new)?;
-    check_subset(&policies)?;
+    let runtime = source.schema.revision.get() == RUNTIME_SCHEMA_REVISION;
+    check_subset(&policies, runtime)?;
 
     let validation = Validator::new(schema).validate(&policies, ValidationMode::Strict);
     // The SDK reports action applicability as a warning; admission rejects it.
@@ -31,7 +36,7 @@ pub(super) fn parse_and_validate(
     }
 
     for policy in policies.policies() {
-        if references_principal(policy) {
+        if !runtime && references_principal(policy) {
             return Err(unsupported(
                 policy.id().as_ref(),
                 "principal conditions are assigned through Scope/Binding",
@@ -44,7 +49,7 @@ pub(super) fn parse_and_validate(
     ))
 }
 
-fn check_subset(policies: &PolicySet) -> Result<(), CedarError> {
+fn check_subset(policies: &PolicySet, runtime: bool) -> Result<(), CedarError> {
     if let Some(template) = policies.templates().next() {
         return Err(unsupported(
             template.id().as_ref(),
@@ -58,13 +63,33 @@ fn check_subset(policies: &PolicySet) -> Result<(), CedarError> {
         ));
     }
     for policy in policies.policies() {
-        if policy.principal_constraint() != PrincipalConstraint::Any {
+        if !runtime && policy.principal_constraint() != PrincipalConstraint::Any {
             return Err(unsupported(
                 policy.id().as_ref(),
                 "principal constraints are assigned through Scope/Binding",
             ));
         }
-        if policy.annotations().next().is_some() {
+        if runtime {
+            for (name, value) in policy.annotations() {
+                match name {
+                    "id" if !value.is_empty() => {}
+                    "advice" if policy.effect() == cedar_policy::Effect::Permit => {
+                        Advice::parse(value).map_err(|_| {
+                            unsupported(
+                                policy.id().as_ref(),
+                                "advice must follow the supported execution contract",
+                            )
+                        })?;
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            policy.id().as_ref(),
+                            "unsupported annotation or advice on forbid",
+                        ));
+                    }
+                }
+            }
+        } else if policy.annotations().next().is_some() {
             return Err(unsupported(
                 policy.id().as_ref(),
                 "annotations, including advice, are not supported",

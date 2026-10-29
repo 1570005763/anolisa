@@ -236,6 +236,7 @@ dependencies = [
  "asc-model-client",
  "asc-observability",
  "asc-pap",
+ "asc-pep-runtime",
  "asc-persistence-sqlite",
  "asc-policy-repository-sqlite",
  "asc-policy-types",
@@ -278,6 +279,7 @@ dependencies = [
  "asc-observability",
  "asc-pap",
  "asc-pcp",
+ "asc-pdp-runtime",
  "asc-persistence-sqlite",
  "asc-policy-adapter-agentsight",
  "asc-policy-repository",
@@ -315,6 +317,7 @@ dependencies = [
  "nix",
  "opentelemetry",
  "opentelemetry_sdk",
+ "serde",
  "serde_json",
  "socket2",
  "thiserror",
@@ -467,6 +470,7 @@ name = "asc-pap"
 version = "1.1.2"
 dependencies = [
  "asc-foundation-types",
+ "asc-policy-cedar",
  "asc-policy-repository",
  "asc-policy-repository-sqlite",
  "asc-policy-types",
@@ -492,6 +496,37 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "asc-pdp-runtime"
+version = "1.1.2"
+dependencies = [
+ "asc-policy-cedar",
+ "asc-policy-types",
+ "cedar-policy",
+ "cedar-policy-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "asc-pep-runtime"
+version = "1.1.2"
+dependencies = [
+ "asc-daemon-client",
+ "asc-daemon-protocol",
+ "asc-policy-types",
+ "clap",
+ "linux-sandbox",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -527,6 +562,7 @@ dependencies = [
  "asc-policy-types",
  "cedar-policy",
  "cedar-policy-core",
+ "serde",
  "serde_json",
  "thiserror",
 ]
@@ -595,6 +631,7 @@ dependencies = [
  "asc-foundation-types",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 
@@ -1723,6 +1760,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "linux-sandbox"
+version = "0.0.0"
+dependencies = [
+ "asc-policy-types",
+ "clap",
+ "dirs",
+ "libc",
+ "path-absolutize",
+ "schemars 0.8.22",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "litemap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1997,6 +2052,24 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "path-absolutize"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4af381fe79fa195b4909485d99f73a80792331df0625188e707854f0b3383f5"
+dependencies = [
+ "path-dedot",
+]
+
+[[package]]
+name = "path-dedot"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07ba0ad7e047712414213ff67533e6dd477af0a4e1d14fb52343e53d30ea9397"
+dependencies = [
+ "once_cell",
 ]
 
 [[package]]
@@ -2371,6 +2444,18 @@ dependencies = [
 
 [[package]]
 name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "dyn-clone",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
@@ -2394,10 +2479,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "seccompiler"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4ae55de56877481d112a559bbc12667635fdaf5e005712fd4e2b2fa50ffc884"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "semver"
@@ -2433,6 +2539,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

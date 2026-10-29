@@ -25,7 +25,7 @@ fn native_source_reuses_the_existing_snapshot_fixture() {
     let source_json = json!({"language": "seccore", "content": snapshot_json["template"]});
     let source: PolicySource = serde_json::from_value(source_json.clone()).unwrap();
     source.validate().unwrap();
-    assert_eq!(source, PolicySource::SecCore(snapshot.template.clone()));
+    assert_eq!(source, snapshot.template);
     assert_eq!(serde_json::to_value(source).unwrap(), source_json);
 
     assert_eq!(serde_json::to_value(snapshot).unwrap(), snapshot_json);

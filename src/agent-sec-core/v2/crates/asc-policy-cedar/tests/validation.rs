@@ -99,7 +99,7 @@ fn validate_returns_non_blocking_warnings_with_policy_identity() {
 #[test]
 fn validate_and_pst_enforce_the_same_admission_contract() {
     let mut unknown_schema = source(DELETE_POLICY);
-    unknown_schema.schema.revision = Revision::new(SCHEMA_REVISION + 1).unwrap();
+    unknown_schema.schema.revision = Revision::new(u32::MAX).unwrap();
     for input in [
         source(DELETE_POLICY),
         source(""),
@@ -136,7 +136,7 @@ fn unknown_schema_versions_never_fall_back_to_the_builtin() {
         Err(CedarError::UnsupportedSchema { .. })
     ));
     input.schema.schema_id = ResourceId::new(SCHEMA_ID).unwrap();
-    input.schema.revision = Revision::new(SCHEMA_REVISION + 1).unwrap();
+    input.schema.revision = Revision::new(u32::MAX).unwrap();
     assert!(matches!(
         validate(&input),
         Err(CedarError::UnsupportedSchema { .. })
