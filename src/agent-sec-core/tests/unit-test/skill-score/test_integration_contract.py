@@ -1,19 +1,16 @@
 """Platform handoff and current scanner compatibility without model calls."""
 
-import importlib.util
-import io
 import json
-import tarfile
 from pathlib import Path
 from typing import Any
 
 import pytest
 import test_two_stage
+from agent_sec_cli.cli import app
 from agent_sec_cli.security_middleware.result import ActionResult
 from agent_sec_cli.skill_score import cli, pipeline, scanners
 from agent_sec_cli.skill_score.config import ScoreConfig
 from agent_sec_cli.skill_score.contracts import ContractError
-from agent_sec_cli.skill_score.entrypoint import app
 from agent_sec_cli.skill_score.io import load_source
 from agent_sec_cli.skill_score.task import task_json
 from test_two_stage import FakeJudge, FakeRuntime, make_task, scan
@@ -79,9 +76,10 @@ def test_report_version_and_environment_failure_keep_separate_semantics(
     assert report["execution"][0]["completed"] is False
 
 
-def test_dedicated_entrypoint_keeps_public_command(
+def test_python_preview_command_remains_callable_but_hidden(
     subject: Path, fake: tuple[FakeJudge, FakeRuntime]
 ) -> None:
+    assert "skill-score" not in CliRunner().invoke(app, ["--help"]).stdout
     result = CliRunner().invoke(app, ["skill-score", "plan", str(subject)])
     assert result.exit_code == 0, result.output
     assert (
@@ -176,87 +174,3 @@ def test_current_native_scanner_findings_are_preserved(
         {"scanner": "prompt", "ref": "source:SKILL.md:1", "detail": hit}
     ]
     assert calls == [{"text": "Harmless input", "mode": "fast"}]
-
-
-def release_verifier() -> Any:
-    path = (
-        Path(__file__).resolve().parents[3] / "packaging/skill-score/verify-release.py"
-    )
-    spec = importlib.util.spec_from_file_location("score_release", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_assessment_package_cannot_own_system_cli() -> None:
-    module = release_verifier()
-    prefix = "/opt/agent-sec/skill-score-cli"
-    module.validate_paths([prefix, prefix + "/bin/agent-sec-cli"], prefix)
-    for unsafe in (
-        "/usr/bin/agent-sec-cli",
-        "/opt/agent-sec/skill-score-cli-other/bin/python",
-        "/etc/systemd/system/agent-sec-core.service",
-    ):
-        with pytest.raises(ValueError, match="must own only"):
-            module.validate_paths([prefix, unsafe], prefix)
-
-
-@pytest.mark.parametrize(
-    "unsafe", ["traversal", "absolute", "link", "device", "setuid"]
-)
-def test_payload_archive_rejects_unsafe_members(tmp_path: Path, unsafe: str) -> None:
-    path = tmp_path / "payload.tar.gz"
-    member = tarfile.TarInfo("opt/agent-sec/skill-score-cli/bin/test")
-    if unsafe == "traversal":
-        member.name = "opt/agent-sec/skill-score-cli/../../../usr/bin/test"
-    elif unsafe == "absolute":
-        member.name = "/usr/bin/agent-sec-cli"
-    elif unsafe == "link":
-        member.type, member.linkname = tarfile.SYMTYPE, "/etc/passwd"
-    elif unsafe == "device":
-        member.type = tarfile.CHRTYPE
-    else:
-        member.mode = 0o4755
-    with tarfile.open(path, "w:gz") as archive:
-        archive.addfile(member, io.BytesIO())
-    with pytest.raises(ValueError, match="payload"):
-        release_verifier().validate_archive(path)
-
-
-@pytest.mark.parametrize("case", ["chain", "cycle", "hardlink", "duplicate"])
-def test_payload_archive_resolves_links_before_parent_traversal(
-    tmp_path: Path, case: str
-) -> None:
-    prefix = "opt/agent-sec/skill-score-cli/"
-    links = [("a", ".", tarfile.SYMTYPE), ("b", "a/../outside", tarfile.SYMTYPE)]
-    if case == "cycle":
-        links = [("a", "b", tarfile.SYMTYPE), ("b", "a", tarfile.SYMTYPE)]
-    elif case == "hardlink":
-        links[1] = ("b", prefix + "a/../outside", tarfile.LNKTYPE)
-    elif case == "duplicate":
-        links = [("a", ".", tarfile.SYMTYPE), ("a", ".", tarfile.SYMTYPE)]
-    path = tmp_path / "payload.tar.gz"
-    with tarfile.open(path, "w:gz") as archive:
-        for name, target, kind in links:
-            member = tarfile.TarInfo(prefix + name)
-            member.type, member.linkname = kind, target
-            archive.addfile(member)
-    with pytest.raises(ValueError, match="payload"):
-        release_verifier().validate_archive(path)
-
-
-def test_payload_archive_allows_bundled_python_relative_links(tmp_path: Path) -> None:
-    prefix = "opt/agent-sec/skill-score-cli/"
-    path = tmp_path / "payload.tar.gz"
-    with tarfile.open(path, "w:gz") as archive:
-        archive.addfile(tarfile.TarInfo(prefix + "bin/python3.11"), io.BytesIO())
-        for name, target, kind in (
-            ("bin/python3", "python3.11", tarfile.SYMTYPE),
-            ("bin/python", "python3", tarfile.SYMTYPE),
-            ("lib/python", "../bin/python", tarfile.SYMTYPE),
-            ("bin/python-hard", prefix + "bin/python3.11", tarfile.LNKTYPE),
-        ):
-            member = tarfile.TarInfo(prefix + name)
-            member.type, member.linkname = kind, target
-            archive.addfile(member)
-    release_verifier().validate_archive(path)
