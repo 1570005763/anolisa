@@ -454,6 +454,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "ureq",
  "url",
