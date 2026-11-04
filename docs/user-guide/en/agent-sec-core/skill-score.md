@@ -6,7 +6,7 @@ Skill Score plans tasks for one Skill, executes them in controlled Docker enviro
 
 ## Install
 
-The fork preview has two independent delivery archives, each with a `.sha256` file. The base `sec-core-bundle-<version>-linux-x86_64.tar.gz` contains the standard base raw package, indexes, release manifest and matching ANOLISA installer. Downloading or installing it does not require the optional bundle. Verify the checksum from the trusted release, extract into an empty directory, then unpack its `v1/anolisa-cli-0.3.20-linux-x86_64.tar.gz` to obtain the installer. The formal default channel may not contain this preview yet.
+The fork preview has two independent delivery archives, each with a `.sha256` file. The base `sec-core-bundle-<version>-linux-x86_64.tar.gz` contains the standard base raw package, indexes, release manifest and matching ANOLISA installer. Downloading or installing it does not require the optional bundle. Verify the checksum from the trusted release, extract into an empty directory, then unpack its `v1/anolisa-cli-<installer-version>-linux-x86_64.tar.gz` to obtain the installer. The formal default channel may not contain this preview yet.
 
 Install the base component from the extracted repository:
 
@@ -20,9 +20,12 @@ Base install, update and repair do not obtain the scoring Python/Harbor runtime 
 For dynamic execution, download and verify `skill-score-bundle-<version>-linux-x86_64.tar.gz`, then extract it into the same directory. It contains the small optional raw package, source archive and runtime manifest, with Dockerfiles, build scripts, worker code and dependency locks. It contains no prebuilt container images or third-party Python runtime. Provide Linux x86_64, local Docker with BuildKit/Compose, usable network namespaces, firewall/conntrack and ptrace/strace, then explicitly install:
 
 ```sh
-sudo anolisa --install-mode system install sec-core-skill-score --backend raw \
-  --repo 'file:///absolute/path/to/preview/v1' --version '<preview-version>'
+sudo agent-sec-cli skillsec score install-runtime
 ```
+
+On a system raw installation, this command invokes ANOLISA with the repository and exact version recorded for the base component. Install the release-matched ANOLISA executable in /usr/local/bin or /usr/bin and keep the verified repository available. If a local repository moved, restore the matching release at its original location. Operators with a verified temporary installer, including FC template builders, can continue to use its explicit raw install command with the pinned repository and version.
+
+On Linux x86_64 with the V2 RPM, install the base with `sudo dnf install agent-sec-core`, then use the same command above. The existing `agent-sec-core` RPM supplies build recipes. Explicit installation prepares the runtime under `/usr/lib/agent-sec-core/skill-score`; repeat the command after an RPM upgrade. Final package removal cleans owned generated environments. Mixed system raw and RPM CLI installations must be resolved before using this command.
 
 Installation builds the work image and ASC network sidecar from the verified sources, obtains locked Python 3.12/Harbor dependencies, and checks the generated environment. The base image is pinned by digest; package managers inside the Dockerfiles still need network access. Different builds can produce different image IDs because not every system/transitive package is locked. An installation-local `image-build.json` binds the release manifest hash, actual base, tool inventory and both immutable config IDs, plus manifest IDs when present in the OCI export; readiness and execution verify that receipt. No pre-known output digest is claimed. Legacy Docker exports bind verified config IDs without inventing manifest IDs. A failed, timed-out or cancelled build reports the path to its private diagnostic log; successful builds remove that log.
 

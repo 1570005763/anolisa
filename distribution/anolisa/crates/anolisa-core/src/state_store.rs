@@ -660,6 +660,7 @@ source_repo = "anolisa"
             scope: InstallationScope::System,
             binding: ProviderBinding::Owned {
                 artifact: OwnedArtifact {
+                    repository: None,
                     version: version.to_string(),
                     distribution_source: None,
                     raw_package: None,

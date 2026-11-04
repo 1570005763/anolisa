@@ -307,15 +307,24 @@ def validate_manifest(manifest: dict[str, Any], payload: Path, prefix: Path) -> 
         or manifest.get("harbor_version") != "0.22.0"
     ):
         raise ValueError("unsupported optional runtime manifest")
-    contract = prefix / "share/anolisa/components/sec-core/component.toml"
-    text = contract.read_text()
-    component = re.search(r"(?ms)^\[component\]\s*$(.*?)(?=^\[|\Z)", text)
-    version = (
-        re.search(r'^version\s*=\s*"([^"]+)"\s*$', component[1], re.M)
-        if component
-        else None
-    )
-    if version is None or version[1] != manifest["version"]:
+    if prefix == Path("/usr"):
+        version = run(
+            ["/usr/bin/rpm", "-q", "--qf", "%{VERSION}", "agent-sec-core"]
+        ).strip()
+    else:
+        contract = (
+            prefix.parents[1]
+            / "var/lib/anolisa/component-manifests/sec-core/component.toml"
+        )
+        text = contract.read_text()
+        component = re.search(r"(?ms)^\[component\]\s*$(.*?)(?=^\[|\Z)", text)
+        match = (
+            re.search(r'^version\s*=\s*"([^"]+)"\s*$', component[1], re.M)
+            if component
+            else None
+        )
+        version = match[1] if match else None
+    if version != manifest["version"]:
         raise ValueError(
             "install the matching sec-core version before sec-core-skill-score"
         )
@@ -583,8 +592,14 @@ def build_environment(
     python_check(candidate, manifest)
 
 
+def runtime_root(prefix: Path) -> Path:
+    if prefix == Path("/usr"):
+        return prefix / "lib/agent-sec-core/skill-score"
+    return prefix / "lib/anolisa/sec-core-skill-score"
+
+
 def prepare(payload: Path, prefix: Path, cache_root: Path) -> Path:
-    root = prefix / "lib/anolisa/sec-core-skill-score"
+    root = runtime_root(prefix)
     with exclusive(root, create=True):
         pending_cleanup(root)
         request_directory(root)
@@ -607,7 +622,7 @@ def prepare_locked(payload: Path, prefix: Path, cache_root: Path) -> Path:
         os.environ.get("ANOLISA_SKILL_SCORE_OFFLINE") == "1"
         or os.environ.get("ANOLISA_SKILL_SCORE_DEPENDENCIES_OFFLINE") == "1"
     )
-    environments = prefix / "lib/anolisa/sec-core-skill-score/environments"
+    environments = runtime_root(prefix) / "environments"
     environments.mkdir(parents=True, exist_ok=True)
     target = environments / manifest_digest
     if ready_matches(target, manifest_digest, manifest):
@@ -700,7 +715,7 @@ def main() -> None:
         payload = Path(__file__).resolve().parent
         prefix = args.prefix.absolute()
         if args.check:
-            root = prefix / "lib/anolisa/sec-core-skill-score"
+            root = runtime_root(prefix)
             with exclusive(root):
                 pending_cleanup(root)
                 manifest_path = payload / "runtime-manifest.json"
