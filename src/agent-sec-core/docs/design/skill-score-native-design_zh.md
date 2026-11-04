@@ -206,7 +206,7 @@ Compose project 名与所有权标签由 request ID 预先确定，创建前写�
 
 运行环境按清单摘要保存；CLI 使用自己的清单找到对应环境，不使用全局“最新 worker”。准备成功才写 ready 状态；运行时仍做能力检查，因为 Docker 或内核环境可能变化。
 
-改动前，raw 首次安装有 hook，更新路径只进行依赖 preflight。本分支在 `distribution/anolisa` 中为 install/update 接入候选包准备生命周期，在移除旧文件之前完成耗时准备。通用安装器只处理已验证组件步骤、超时、取消与事务记录；Python/Harbor/镜像知识放在 ASC helper。相应提高 `min_anolisa_version` 至 `0.3.20`，使缺少该能力的正式 `0.3.19` 及更旧安装器明确拒绝新包。预览附带匹配安装器，并绑定其归档摘要。
+改动前，raw 首次安装有 hook，更新路径只进行依赖 preflight。本分支在 `distribution/anolisa` 中为 install/update 接入候选包准备生命周期，在移除旧文件之前完成耗时准备。通用安装器只处理已验证组件步骤、超时、取消与事务记录；Python/Harbor/镜像知识放在 ASC helper。基础 raw 包和可选 raw 包均要求 ANOLISA 0.3.21，由安装器管理组件发现目录。Skill Score 读取已安装主包的契约快照来核对版本。预览包绑定了支持候选包准备流程的安装器归档摘要。
 
 准备步骤从已验证候选包的 staging 目录执行新版本 helper，不能依赖初装时尚不存在或升级时仍为旧版的安装路径。该步骤与后续激活共同受现有组件安装锁和事务记录约束，避免并发安装互相覆盖。
 
@@ -305,6 +305,6 @@ SkillEval 提交 `145ab88d27ca35405fef4278a705d25045dc3d36` 已在兼容旧 `ANT
 - [公共 CLI 接入](../../v2/apps/asc-cli/src/commands/skill_score.rs)、[共享模型客户端](../../v2/crates/asc-model-client/src/lib.rs)。
 - [现有 Python 评分管线](../../agent-sec-cli/src/agent_sec_cli/skill_score/pipeline.py)、[输入读取](../../agent-sec-cli/src/agent_sec_cli/skill_score/io.py)、[百炼适配](../../agent-sec-cli/src/agent_sec_cli/skill_score/provider/bailian.py)。
 - [worker 依赖声明](../../skill-score-runtime/pyproject.toml)、[Harbor 执行适配](../../skill-score-runtime/src/agent_sec_skill_score_runtime/harbor_runtime.py)、[证据归一化](../../skill-score-runtime/src/agent_sec_skill_score_runtime/observations.py)。
-- [组件清单](../../.anolisa/component.toml)、[安装计划器](../../../../distribution/anolisa/crates/anolisa-core/src/planner.rs)、[raw 更新操作](../../../../distribution/anolisa/crates/anolisa-cli/src/commands/tier1/install/owned_ops.rs)。
+- [组件清单](../../packaging/anolisa/component.toml)、[安装计划器](../../../../distribution/anolisa/crates/anolisa-core/src/planner.rs)、[raw 更新操作](../../../../distribution/anolisa/crates/anolisa-cli/src/commands/tier1/install/owned_ops.rs)。
 - [已有 GHCR 发布流水线](../../../../.github/workflows/docker-nightly.yaml)、[当前评分归档发布及安装验证](../../../../.github/workflows/sec-core-skill-score.yaml)。
 - [现有 Skill Score 用户契约](../../../../docs/user-guide/zh/agent-sec-core/skill-score.md)、[SkillEval 集成 PR](https://code.alibaba-inc.com/chengshuyi.csy/skilleval/codereview/30699594)。
