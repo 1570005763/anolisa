@@ -25,6 +25,7 @@ Source1:        %{name}-%{version}-vendor.tar.gz
 BuildRequires:  cargo = 1.93.1
 BuildRequires:  rust = 1.93.1
 BuildRequires:  gcc
+BuildRequires:  python3 >= 3.11
 BuildRequires:  make
 BuildRequires:  nodejs
 BuildRequires:  npm
@@ -73,6 +74,10 @@ own. Agent Hook migration is delivered separately.
 %dir %{_datadir}/anolisa/components
 %dir %{_datadir}/anolisa/components/sec-core
 %{_datadir}/anolisa/components/sec-core/component.toml
+%ifarch x86_64
+%defattr(-,root,root,0755)
+/usr/lib/anolisa/sec-core-skill-score/
+%endif
 %license LICENSE
 
 %post -n agent-sec-cli
@@ -82,6 +87,12 @@ if [ -d /run/systemd/system ] && { [ "$1" -eq 1 ] || [ -e /usr/lib/systemd/user/
 fi
 
 %preun -n agent-sec-cli
+%ifarch x86_64
+runtime=/usr/lib/anolisa/sec-core-skill-score
+if [ "$1" -eq 0 ] && { [ -e "$runtime/.lifecycle.lock" ] || [ -d "$runtime/requests" ] || [ -d "$runtime/environments" ] || [ -d "$runtime/recovery" ]; }; then
+    /usr/bin/python3 -B "$runtime/uninstall.py" || exit 1
+fi
+%endif
 %systemd_preun agent-sec-core.service
 
 %postun -n agent-sec-cli
@@ -241,6 +252,14 @@ make build-all-v2-offline
 %install
 rm -rf $RPM_BUILD_ROOT
 make install-all-for-rpmbuild-v2 DESTDIR=$RPM_BUILD_ROOT
+%ifarch x86_64
+python3 packaging/skill-score/package-optional.py \
+    "$RPM_BUILD_ROOT/usr/lib/anolisa/sec-core-skill-score" --rpm-stage \
+    --version "%{version}" --source-commit "$(cat packaging/skill-score/rpm-source-commit)"
+# Only the shell entry is executed directly. Preserve manifest-bound Python
+# sources when RPM normalizes executable shebangs during buildroot processing.
+find "$RPM_BUILD_ROOT/usr/lib/anolisa/sec-core-skill-score" -type f -name '*.py' -exec chmod 0644 {} +
+%endif
 
 %changelog
 * Fri Oct 23 2026 Shirong Hao <shirong@linux.alibaba.com> - 1.1.0-1

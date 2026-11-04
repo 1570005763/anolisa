@@ -20,9 +20,12 @@ sudo anolisa --install-mode system install sec-core --backend raw \
 动态执行时，再下载并校验 `skill-score-bundle-<version>-linux-x86_64.tar.gz`，解压到同一目录。它包含小型可选 raw 包、源码归档和运行时清单，其中有 Dockerfile、构建脚本、worker 代码和依赖锁；不包含预构建容器镜像或第三方 Python 环境。准备 Linux x86_64、本地 Docker 与 BuildKit/Compose、可用的网络 namespace、防火墙/conntrack 及 ptrace/strace，然后显式安装：
 
 ```sh
-sudo anolisa --install-mode system install sec-core-skill-score --backend raw \
-  --repo 'file:///absolute/path/to/preview/v1' --version '<preview-version>'
+sudo agent-sec-cli skillsec score install-runtime
 ```
+
+系统 raw 安装会调用 anolisa，使用主包安装记录中的仓库和精确版本。请将配套 anolisa 安装到 /usr/local/bin 或 /usr/bin，并保留已校验的仓库。本地仓库移动后，将同版本制品恢复到原位置。FC 模板等持有已校验临时安装器的调用方，仍可调用底层 raw 安装命令并明确指定仓库和版本。
+
+Linux x86_64 的 V2 RPM 用户先执行 `sudo dnf install agent-sec-core`，再执行上面的同一条命令。现有 `agent-sec-cli` RPM 携带构建配方，显式安装时才在 `/usr/lib/anolisa/sec-core-skill-score` 下准备运行时。RPM 升级后再次执行该命令，最终卸载时会清理归本包所有的生成环境。同机同时存在系统 raw 和 RPM 两份 CLI 时，需要先解决混装。
 
 安装阶段从已校验的源码构建工作镜像和 ASC 网络侧车，获取锁定的 Python 3.12/Harbor 依赖，并验证生成的运行环境。基础镜像固定 digest；Dockerfile 内的包管理器仍需要联网。系统包和部分传递依赖并未全部锁定，因此不同构建可能得到不同 image ID。安装侧生成 `image-build.json`，绑定发布清单摘要、实际基础镜像、工具清单和两个镜像的不可变 config ID，以及 OCI 导出中存在的 manifest ID；就绪检查和执行都核验该回执，不承诺预先知道输出 digest。经典 Docker 导出只绑定已核验的 config ID，不生成虚假的 manifest ID。构建失败、超时或取消时提示受限诊断日志路径；成功后删除日志。
 

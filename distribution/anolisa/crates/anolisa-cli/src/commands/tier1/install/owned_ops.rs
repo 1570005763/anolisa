@@ -511,6 +511,7 @@ impl OwnedOps for RawReplayOps<'_> {
             OwnedOpError("internal: record commit ran before files were placed".to_string())
         })?;
         let artifact = OwnedArtifact {
+            repository: Some(prepared.resolution.base_url.clone()),
             version: prepared.resolution.entry.version.clone(),
             distribution_source: Some(prepared.resolution.artifact_url.clone()),
             raw_package: Some(prepared.resolution.package.clone()),
@@ -1819,6 +1820,7 @@ impl OwnedOps for RawInstallOps<'_> {
             .map(|run| run.enabled_units.clone())
             .unwrap_or_default();
         let artifact = OwnedArtifact {
+            repository: Some(prepared.resolution.base_url.clone()),
             version: prepared.resolution.entry.version.clone(),
             distribution_source: Some(prepared.resolution.artifact_url.clone()),
             raw_package: Some(prepared.resolution.package.clone()),

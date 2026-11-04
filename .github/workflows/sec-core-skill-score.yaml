@@ -161,8 +161,9 @@ jobs:
           tar -xzf "$RUNNER_TEMP/score-release/bundles/skill-score-bundle-$version-linux-x86_64.tar.gz" \
             -C "$RUNNER_TEMP/score-repo"
           sudo env ANOLISA_SKILL_SCORE_SOURCE_DIR="$RUNNER_TEMP/score-release" \
-            /usr/local/bin/anolisa --install-mode system install sec-core-skill-score --backend raw \
-            --repo "file://$RUNNER_TEMP/score-repo/v1" --version "$version"
+            /usr/local/bin/agent-sec-cli skillsec score install-runtime
+          # A second invocation validates the ready installation without its build inputs.
+          sudo env ANOLISA_SKILL_SCORE_OFFLINE=1 /usr/local/bin/agent-sec-cli skillsec score install-runtime
           sudo "$(command -v python3)" src/agent-sec-core/packaging/skill-score/verify-preview-install.py \
             "$RUNNER_TEMP/score-release" --output "$RUNNER_TEMP/score-evidence/install.json"
           digest="$(sha256sum /usr/local/lib/anolisa/sec-core-skill-score/runtime-manifest.json | cut -d' ' -f1)"
@@ -208,8 +209,7 @@ jobs:
           python3 src/agent-sec-core/packaging/skill-score/verify-preview-install.py \
             "$RUNNER_TEMP/score-release" --base-only --output "$RUNNER_TEMP/score-evidence/uninstalled.json"
           sudo env ANOLISA_SKILL_SCORE_SOURCE_DIR="$RUNNER_TEMP/score-release" \
-            /usr/local/bin/anolisa --install-mode system install sec-core-skill-score --backend raw \
-            --repo "file://$RUNNER_TEMP/score-repo/v1" --version "$version"
+            /usr/local/bin/agent-sec-cli skillsec score install-runtime
           sudo "$(command -v python3)" src/agent-sec-core/packaging/skill-score/verify-preview-install.py \
             "$RUNNER_TEMP/score-release" --output "$RUNNER_TEMP/score-evidence/clean-reinstall.json"
           sudo /usr/local/bin/anolisa --install-mode system uninstall sec-core-skill-score \

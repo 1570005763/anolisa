@@ -78,6 +78,9 @@ pub struct InstallArgs {
     /// Install a specific version instead of the latest in the channel
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
+    /// Use the exact raw version and repository recorded for this installed system component.
+    #[arg(long, value_name = "COMPONENT", conflicts_with_all = ["all", "repo", "version", "backend", "package"])]
+    pub match_installed: Option<String>,
     /// Backend override (raw | rpm | npm); defaults to repo.toml default_backend
     #[arg(long, value_name = "BACKEND")]
     pub backend: Option<String>,
@@ -116,7 +119,10 @@ pub fn handle(args: InstallArgs, ctx: &CliContext) -> Result<(), CliError> {
     handle_one(component, args, ctx)
 }
 
-fn handle_one(component: String, args: InstallArgs, ctx: &CliContext) -> Result<(), CliError> {
+fn handle_one(component: String, mut args: InstallArgs, ctx: &CliContext) -> Result<(), CliError> {
+    if let Some(base) = args.match_installed.take() {
+        pin_to_system_component(&mut args, &base, &component, ctx)?;
+    }
     let outcome = application::run(
         application::InstallRequest {
             component: &component,
@@ -126,6 +132,60 @@ fn handle_one(component: String, args: InstallArgs, ctx: &CliContext) -> Result<
         ctx,
     )?;
     render_outcome(ctx, outcome)
+}
+
+fn pin_to_system_component(
+    args: &mut InstallArgs,
+    base: &str,
+    target: &str,
+    ctx: &CliContext,
+) -> Result<(), CliError> {
+    use anolisa_core::domain::{InstallationScope, LifecycleStatus, ProviderBinding};
+    use anolisa_core::state::ObjectKind;
+    use anolisa_core::state_store::StateStore;
+
+    let invalid = |reason: &str| CliError::InvalidArgument {
+        command: COMMAND.to_string(),
+        reason: reason.to_owned(),
+    };
+    if ctx.install_mode != crate::context::InstallMode::System {
+        return Err(invalid("--match-installed requires system mode"));
+    }
+    let layout = crate::commands::common::resolve_layout(ctx);
+    let store = StateStore::load_for_layout(
+        &layout.state_dir.join("installed.toml"),
+        anolisa_platform::privilege::effective_uid(),
+        &layout,
+    )
+    .map_err(|_| invalid("cannot read the authoritative system install record"))?;
+    let installed = store
+        .find(ObjectKind::Component, base)
+        .ok_or_else(|| invalid("base component is not installed"))?;
+    let ProviderBinding::Owned { artifact } = &installed.binding else {
+        return Err(invalid("base component is not raw-managed"));
+    };
+    let repository = artifact.repository.as_ref().filter(|url| !url.is_empty())
+        .ok_or_else(|| invalid("original repository is unknown; supply its trusted --repo and --version explicitly"))?;
+    if installed.scope != InstallationScope::System
+        || installed.status != LifecycleStatus::Installed
+    {
+        return Err(invalid(
+            "base component is not an installed system component",
+        ));
+    }
+    if let Some(other) = store.find(ObjectKind::Component, target)
+        && !(matches!(&other.binding, ProviderBinding::Owned { artifact: matching }
+            if matching.repository.as_ref() == Some(repository) && matching.version == artifact.version)
+            && other.status == LifecycleStatus::Installed)
+    {
+        return Err(invalid(
+            "installed companion has a different owner, version or repository; reconcile it first",
+        ));
+    }
+    args.backend = Some("raw".to_string());
+    args.version = Some(artifact.version.clone());
+    args.repo = Some(repository.clone());
+    Ok(())
 }
 
 fn execution_intent(ctx: &CliContext) -> ExecutionIntent {

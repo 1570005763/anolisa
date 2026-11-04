@@ -299,6 +299,7 @@ fn per_component_args(name: &str, args: &InstallArgs) -> InstallArgs {
     InstallArgs {
         component: Some(name.to_string()),
         all: false,
+        match_installed: None,
         fail_fast: false,
         version: None,
         backend: args.backend.clone(),
@@ -954,6 +955,7 @@ mod tests {
         InstallArgs {
             component: None,
             all: true,
+            match_installed: None,
             fail_fast: false,
             version: None,
             backend: Some("rpm".to_string()),

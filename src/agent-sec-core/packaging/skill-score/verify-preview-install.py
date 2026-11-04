@@ -64,7 +64,7 @@ def main() -> None:
         environment["AGENT_SEC_MODEL_CONFIG"] = str(
             Path(directory) / "absent-model-config.json"
         )
-        for stage in ("plan", "run"):
+        for stage in ("plan", "run", "install-runtime"):
             result = run(
                 [str(cli), "skillsec", "score", stage, "--help"], env=environment
             )
@@ -84,7 +84,7 @@ def main() -> None:
         assert (
             planned.returncode != 0 and "model" in planned.stderr.lower()
         ), planned.stderr
-        assert "install sec-core-skill-score" not in planned.stderr, planned.stderr
+        assert "install-runtime" not in planned.stderr, planned.stderr
         checks["native_plan_reaches_shared_model_configuration"] = True
         checks["invalid_task_exit_2"] = True
     root = args.prefix / "lib/anolisa/sec-core-skill-score"

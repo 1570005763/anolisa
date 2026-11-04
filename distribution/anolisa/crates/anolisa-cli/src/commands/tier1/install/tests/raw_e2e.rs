@@ -2035,11 +2035,22 @@ fn install_pinned_version_places_exact_published_version() {
     );
 
     let mut a = args("agentsight");
-    a.repo = Some(repo_url);
+    a.repo = Some(repo_url.clone());
     a.version = Some("0.1.0".to_string());
     handle_with_fake_rpm(a, &ctx_with_prefix(false, Some(prefix.clone())))
         .expect("pinned install must succeed");
 
+    let mut companion = args("companion");
+    super::super::pin_to_system_component(
+        &mut companion,
+        "agentsight",
+        "companion",
+        &ctx_with_prefix(false, Some(prefix.clone())),
+    )
+    .expect("companion resolves inside the package manager");
+    assert_eq!(companion.version.as_deref(), Some("0.1.0"));
+    assert_eq!(companion.repo.as_deref(), Some(repo_url.as_str()));
+    assert_eq!(companion.backend.as_deref(), Some("raw"));
     let layout = FsLayout::system(Some(prefix));
     assert!(layout.bin_dir.join("agentsight").exists());
     let store = load_v5_store(&layout);
@@ -2047,6 +2058,7 @@ fn install_pinned_version_places_exact_published_version() {
         .find(ObjectKind::Component, "agentsight")
         .expect("installed object");
     let artifact = owned_artifact(installation);
+    assert_eq!(artifact.repository.as_deref(), Some(repo_url.as_str()));
     assert_eq!(
         artifact.version, "0.1.0",
         "the pin must beat the higher published 0.2.0"
@@ -2379,6 +2391,7 @@ fn install_all_dry_run_rejects_conflicts_between_planned_components() {
     let batch_args = InstallArgs {
         component: None,
         all: true,
+        match_installed: None,
         fail_fast: false,
         version: None,
         backend: Some("raw".to_string()),
@@ -2468,6 +2481,7 @@ package = "agentsight"
     let batch_args = InstallArgs {
         component: None,
         all: true,
+        match_installed: None,
         fail_fast: false,
         version: None,
         backend: Some("raw".to_string()),

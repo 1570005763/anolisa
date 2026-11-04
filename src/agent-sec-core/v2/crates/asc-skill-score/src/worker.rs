@@ -36,8 +36,8 @@ impl Runtime {
     pub fn installed(prefix: &Path) -> Result<Self> {
         let root = prefix.join("lib/anolisa/sec-core-skill-score");
         let manifest_path = root.join("runtime-manifest.json");
-        if !manifest_path.is_file() {
-            return Err(Error::Runtime("dynamic assessment unavailable; explicitly install: sudo anolisa --install-mode system install sec-core-skill-score".into()));
+        if !manifest_path.is_file() || !root.join(".lifecycle.lock").try_exists()? {
+            return Err(Error::Runtime("sec-core-skill-score is not prepared; run sudo agent-sec-cli skillsec score install-runtime".into()));
         }
         let lease = Lease::acquire(&root)?;
         let bytes = std::fs::read(&manifest_path)?;
@@ -47,7 +47,7 @@ impl Runtime {
         let manifest: Value = serde_json::from_slice(&bytes)?;
         let digest = format!("{:x}", Sha256::digest(&bytes));
         let environment = root.join("environments").join(&digest);
-        let ready=read_json(&environment.join("ready.json"),1_048_576).map_err(|_|Error::Runtime("scoring runtime is damaged; run sudo anolisa --install-mode system repair sec-core-skill-score".into()))?;
+        let ready=read_json(&environment.join("ready.json"),1_048_576).map_err(|_|Error::Runtime("scoring runtime is not ready; use sudo agent-sec-cli skillsec score install-runtime or repair the installed component".into()))?;
         let base = std::fs::read_to_string(
             prefix.join("share/anolisa/components/sec-core/component.toml"),
         )?;
@@ -822,6 +822,23 @@ mod tests {
                 ),
             ]),
         )?)
+    }
+
+    #[test]
+    fn rpm_recipe_alone_reports_the_explicit_install_command() -> Result<()> {
+        let prefix = tempfile::tempdir()?;
+        let root = prefix.path().join("lib/anolisa/sec-core-skill-score");
+        std::fs::create_dir_all(&root)?;
+        std::fs::write(root.join("runtime-manifest.json"), b"{}")?;
+        let Err(error) = Runtime::installed(prefix.path()) else {
+            panic!("a base-only installation cannot execute a worker");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("sudo agent-sec-cli skillsec score install-runtime")
+        );
+        Ok(())
     }
 
     #[test]
