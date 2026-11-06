@@ -155,6 +155,7 @@ fn assess_observations(
             python: PathBuf::new(),
             entry: PathBuf::new(),
             image_ids: Value::Null,
+            inventory: None,
             cleanup_status: "complete".into(),
             resources: Vec::new(),
         },

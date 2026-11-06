@@ -31,6 +31,7 @@ pub(crate) struct Runtime {
     python: PathBuf,
     entry: PathBuf,
     image_ids: Value,
+    inventory: Option<Value>,
     pub cleanup_status: String,
     pub resources: Vec<Value>,
 }
@@ -124,6 +125,7 @@ impl Runtime {
             lease,
             python,
             entry,
+            inventory: ready.get("environment").cloned(),
             image_ids,
             cleanup_status: "complete".into(),
             resources: Vec::new(),
@@ -131,6 +133,24 @@ impl Runtime {
     }
 
     pub fn invoke(&mut self, call: Invocation<'_>) -> Result<Value> {
+        // Activation measured the immutable work image locally, including for preloaded archives.
+        if call.operation == "environment"
+            && let Some(inventory) = &self.inventory
+            && inventory["docker_image"]
+                .as_str()
+                .is_some_and(|id| self.image_ids["work"] == id)
+        {
+            if call.cancelled.load(Ordering::Relaxed) {
+                return Err(Error::Cancelled);
+            }
+            if Instant::now() >= call.deadline {
+                return Err(Error::Deadline);
+            }
+            let mut result = inventory.clone();
+            crate::redaction::redact_value(&mut result, call.model)?;
+            EvidenceBudget::default().account_output(&serde_json::to_vec(&result)?, call.model)?;
+            return Ok(result);
+        }
         let request = self.prepare_request(&call)?;
         let mut command = self.command(call.model)?;
         command.arg(&request.input).arg(&request.output);
@@ -1077,28 +1097,43 @@ mod tests {
             python: python.clone(),
             entry: directory.path().join("worker-entry.py"),
             image_ids: json!({"work":"unused", "egress":"unused"}),
+            inventory: None,
             cleanup_status: "complete".into(),
             resources: Vec::new(),
         };
         let model = model()?;
-        let error = runtime
-            .invoke(Invocation {
-                operation: "environment",
-                snapshot: directory.path(),
-                probe: None,
-                root: &directory.path().join("environment"),
-                model: &model,
-                deadline: Instant::now() + Duration::from_secs(5),
-                cancelled: &AtomicBool::new(false),
-            })
-            .unwrap_err();
-        assert!(
-            matches!(&error, Error::File { stage: "worker.spawn", source, .. }
-            if source.raw_os_error() == Some(2)),
-            "{error}"
+        let root = directory.path().join("environment");
+        let cancelled = AtomicBool::new(false);
+        let invocation = || Invocation {
+            operation: "environment",
+            snapshot: directory.path(),
+            probe: None,
+            root: &root,
+            model: &model,
+            deadline: Instant::now() + Duration::from_secs(5),
+            cancelled: &cancelled,
+        };
+        runtime.inventory = Some(
+            json!({"docker_image":"unused","executables":{"python":"/bin/python"},
+            "python_packages":{"test":"worker-test-key-value","token":"baked-credential"}}),
         );
-        assert!(error.to_string().contains(&format!("path={python:?}")));
-        assert!(!error.to_string().contains("worker-test-key-value"));
+        let cached = runtime.invoke(invocation())?;
+        assert_eq!(cached["executables"]["python"], "/bin/python");
+        assert!(!cached.to_string().contains("worker-test-key-value"));
+        assert_eq!(cached["python_packages"]["token"], "[REDACTED]");
+        assert!(runtime.resources.is_empty());
+        assert!(!root.exists());
+        for inventory in [None, Some(json!({"docker_image":"previous-image"}))] {
+            runtime.inventory = inventory;
+            let error = runtime.invoke(invocation()).unwrap_err();
+            assert!(
+                matches!(&error, Error::File { stage: "worker.spawn", source, .. }
+                if source.raw_os_error() == Some(2)),
+                "{error}"
+            );
+            assert!(error.to_string().contains(&format!("path={python:?}")));
+            assert!(!error.to_string().contains("worker-test-key-value"));
+        }
         assert_eq!(
             std::fs::read_dir(directory.path().join("requests"))?.count(),
             0
@@ -1461,6 +1496,7 @@ mod tests {
             python: PathBuf::new(),
             entry: PathBuf::new(),
             image_ids: json!({}),
+            inventory: None,
             cleanup_status: "complete".into(),
             resources: vec![
                 json!({"request_id":"first"}),
@@ -1662,6 +1698,7 @@ mod tests {
             python: PathBuf::new(),
             entry: PathBuf::new(),
             image_ids: image_ids.clone(),
+            inventory: None,
             cleanup_status: "complete".into(),
             resources: Vec::new(),
         };
