@@ -252,11 +252,50 @@ pub enum ProposalError {
     Policy(#[from] PolicyError),
 }
 
+/// First task draft with its local admission; a rejection the model can repair gets one retry.
+///
+/// A whole task draft fails on one malformed statement often enough that ending the proposal
+/// there is worse than one repair round with the local reason.
+fn first_task_draft(
+    provider: &dyn ModelProvider,
+    model: &str,
+    task: &TaskInput,
+    deadline: Instant,
+) -> Result<(PolicyDraft, Result<Artifact, PolicyError>), ProposalError> {
+    let draft = generate_policy_draft_after(provider, model, task, deadline, None)?;
+    let prepared = prepare_policy(draft.policy());
+    match prepared {
+        Err(
+            error @ (PolicyError::InvalidPath
+            | PolicyError::WildcardLiteral
+            | PolicyError::Syntax
+            | PolicyError::Validation),
+        ) => {
+            check_deadline(deadline)?;
+            let retry = generate_policy_draft_after(
+                provider,
+                model,
+                task,
+                deadline,
+                Some(&error.to_string()),
+            )?;
+            let prepared = prepare_policy(retry.policy());
+            Ok((retry, prepared))
+        }
+        prepared => Ok((draft, prepared)),
+    }
+}
+
 /// Generates a Cedar candidate directly from a task.
 ///
 /// The model receives the task text only; no file contents are sent and no path metadata is
 /// accepted. The draft keeps unresolved items; Strict validation does not prove that task and
 /// policy are semantically equivalent.
+///
+/// As for command proposals, a draft rejected for its syntax, Strict typing or a path literal is
+/// retried once with the local reason. After that retry a syntax or typing failure is an error,
+/// while a persistent path rejection becomes a clarification; unsupported-policy features are
+/// never retried.
 ///
 /// A valid draft whose permits test `context` is retried once with that reason, because the
 /// launch authorizer reads the same revision without context and would grant those permits
@@ -283,8 +322,8 @@ pub fn propose_task(
         .min(context.started + context.ttl)
         .min(Instant::now() + INTENT_BUDGET);
     check_deadline(deadline)?;
-    let mut draft = generate_policy_draft_after(provider, model, task, deadline, None)?;
-    let mut artifact = match prepare_policy(draft.policy()) {
+    let (mut draft, prepared) = first_task_draft(provider, model, task, deadline)?;
+    let mut artifact = match prepared {
         Ok(artifact) => artifact,
         Err(
             error @ (PolicyError::InvalidPath

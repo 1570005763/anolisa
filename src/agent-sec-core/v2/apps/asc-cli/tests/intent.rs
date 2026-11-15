@@ -39,6 +39,8 @@ impl ModelProvider for Replay {
         self.calls.fetch_add(1, Ordering::Relaxed);
         assert!(!system.contains("PRIVATE_FILE_BYTES"));
         assert!(!input.contains("PRIVATE_FILE_BYTES"));
+        // A retry appends the local rejection after the request; the request itself is unchanged.
+        let input = input.split_once('\n').map_or(input, |(request, _)| request);
         let input: Value = serde_json::from_str(input).unwrap();
         assert!(system.contains(asc_intent::CEDAR_SCHEMA));
         // Only the task text reaches the model; path bindings and protection layers are gone.
