@@ -1,14 +1,16 @@
 //! Task candidates retry once when a permit tests `context`, which the launch authorizer cannot
-//! read, or when a forbid carries annotations, which the runtime protector refuses; the retry
-//! never costs the valid first draft. A point grant on a link is reported, never retried.
+//! read, or when a forbid is one the runtime protector cannot lower; the retry never costs the
+//! valid first draft. A point grant on a link is reported, never retried, and every candidate
+//! names which consumers can carry each requirement `@id`.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use asc_intent::{
-    LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE, ProposalContext, ProposalOutcome, RUNTIME_VIEW_NOTE,
-    TaskInput, annotated_forbids, launch_view_gaps, point_aliases, propose_task,
+    COVERAGE_NOTE, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE, ProposalContext, ProposalOutcome,
+    RUNTIME_VIEW_NOTE, TaskInput, launch_view_gaps, point_aliases, propose_task,
+    requirement_coverage, runtime_view_gaps,
 };
 use asc_model_client::provider::{ModelProvider, ProviderError};
 use serde_json::{Value, json};
@@ -205,25 +207,70 @@ when {{ resource.path == "{}" }};"#,
 }
 
 #[test]
-fn annotated_forbids_are_retried_and_reported_when_they_stay() {
-    let annotated = PLAIN_SPAWN.replace("// [H1] keep the rollback package\n", "@id(\"keep\")\n");
-    // `@id` on a permit stays a description; only the forbid fails the runtime protector.
-    assert!(annotated_forbids(CWD_SPAWN).unwrap().is_empty());
+fn refused_forbids_are_retried_and_reported_when_they_stay() {
+    let network = format!(
+        "{PLAIN_SPAWN}\n@id(\"R3\")\nforbid(principal, action == SecCore::Action::\"network.use\", resource);"
+    );
+    // File forbids, `@id` included, are the runtime protector's input; a network forbid is not.
+    let labelled = PLAIN_SPAWN.replace("// [H1] keep the rollback package\n", "@id(\"R2\")\n");
+    assert!(runtime_view_gaps(&labelled).unwrap().is_empty());
     assert_eq!(
-        annotated_forbids(&annotated).unwrap(),
-        ["forbid #2 carries @id"]
+        runtime_view_gaps(&network).unwrap(),
+        [r#"forbid #3 @id("R3")"#]
     );
 
-    let provider = Scripted::new(vec![Ok(body(&annotated)), Ok(body(PLAIN_SPAWN))]);
+    let provider = Scripted::new(vec![Ok(body(&network)), Ok(body(&labelled))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], PLAIN_SPAWN);
+    assert_eq!(candidate["artifact"]["text"], labelled);
     assert!(notes(&candidate, RUNTIME_VIEW_NOTE).is_empty());
-    assert!(provider.payloads()[1].contains("forbid #2 carries @id"));
+    assert!(provider.payloads()[1].contains(r#"forbid #3 @id("R3")"#));
 
-    let provider = Scripted::new(vec![Ok(body(&annotated)), Ok(body(&annotated))]);
+    let provider = Scripted::new(vec![Ok(body(&network)), Ok(body(&network))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], annotated);
+    assert_eq!(candidate["artifact"]["text"], network);
     let runtime = notes(&candidate, RUNTIME_VIEW_NOTE);
     assert_eq!(runtime.len(), 1);
-    assert!(runtime[0].contains("UNSUPPORTED_ANNOTATION"), "{runtime:?}");
+    assert!(
+        runtime[0].contains("a Scope on this revision fails"),
+        "{runtime:?}"
+    );
+}
+
+#[test]
+fn coverage_groups_statements_by_requirement_and_names_their_consumers() {
+    let text = r#"@id("base")
+permit(principal, action == SecCore::Action::"process.spawn", resource is SecCore::Process)
+when { resource.program == "/usr/bin/bash" };
+@id("R1.1")
+permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
+when { resource.path == "/srv/demo/out" || resource.path like "/srv/demo/out/*" };
+@id("R2")
+forbid(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
+when { resource.path == "/srv/demo/previous.zip"
+    && context.input.operation == SecCore::WriteOperation::"delete" };
+@id("R1.2")
+permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
+when { resource.path == "/srv/demo/tmp" && context.input.operation == SecCore::WriteOperation::"create" };
+permit(principal, action == SecCore::Action::"file.read", resource is SecCore::File)
+when { resource.path like "/*" };"#;
+    assert_eq!(
+        requirement_coverage(text).unwrap(),
+        [
+            "base: sandbox and launch authorizer (#1)",
+            "R1: sandbox and launch authorizer (#2), sandbox only, the launch authorizer drops it (#4)",
+            "R2: runtime protector only, the authorization view drops forbids (#3)",
+            "no @id: sandbox and launch authorizer (#5)",
+        ]
+    );
+
+    let provider = Scripted::new(vec![Ok(body(PLAIN_SPAWN))]);
+    let coverage = notes(&propose(&provider), COVERAGE_NOTE);
+    assert_eq!(coverage.len(), 1);
+    assert!(
+        coverage[0].ends_with(
+            "no @id: sandbox and launch authorizer (#1), \
+             runtime protector only, the authorization view drops forbids (#2)."
+        ),
+        "{coverage:?}"
+    );
 }

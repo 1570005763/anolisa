@@ -12,9 +12,10 @@
 //   OS Harness   lowers the file-protection rules (R2, R4) to kernel protection
 //                attached to the cosh process tree through a Scope + Binding.
 //
-// Block headers and R numbers are comments: Cedar ignores them, they do not
-// route a rule to a consumer, and they are no evidence that a rule was
-// delivered, loaded or enforced.
+// Each statement carries `@id` naming the requirement it implements (`base`,
+// `R1`, `R2.1` ...). The id is a label, not a route: which consumer takes a
+// statement follows from its shape, `agent-sec-cli intent propose` previews that
+// as `// COVERAGE:`, and only a Scope's Binding shows that a rule was applied.
 //
 // The bare `principal` header is deliberate. The enforcement translator accepts
 // only bare headers, while the PDP only compiles explicit ones; the daemon derives
@@ -29,6 +30,7 @@
 // directories (loader caches, locale, /proc) a launch asks for is not
 // predictable, so an exhaustive allowlist would cut ordinary commands into
 // MODIFY. The actual read restriction in this task is R4.
+@id("base")
 permit(
   principal,
   action == SecCore::Action::"file.read",
@@ -40,6 +42,7 @@ when {
 
 // Interpreter entry points. The Hook launches `/bin/bash -c`, so that exact
 // string must be granted as well.
+@id("base.2")
 permit(
   principal,
   action == SecCore::Action::"process.spawn",
@@ -56,6 +59,7 @@ when {
 // 只允许写构建产物目录和报告目录，范围外写入一律拒绝。
 // ============================================================
 
+@id("R1")
 permit(
   principal,
   action == SecCore::Action::"file.write",
@@ -75,6 +79,7 @@ when {
 
 // Delete protection also covers renaming and overwriting the protected target,
 // so the claim is "ordinary writes stay possible, deletion does not".
+@id("R2")
 forbid(
   principal,
   action == SecCore::Action::"file.write",
@@ -101,6 +106,7 @@ when {
 // Read protection is exact-file only: a directory-tree read target is rejected
 // by the enforcement backend, so this rule cannot be widened to
 // "/srv/br-demo/project/*".
+@id("R4")
 forbid(
   principal,
   action == SecCore::Action::"file.read",

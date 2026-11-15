@@ -21,9 +21,9 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{
-    Artifact, INTENT_BUDGET, IntentError, PolicyDraft, PolicyError, TaskInput, annotated_forbids,
+    Artifact, INTENT_BUDGET, IntentError, PolicyDraft, PolicyError, TaskInput,
     intent_extraction::generate_policy_draft_after, launch_view_gaps, point_aliases,
-    prepare_policy,
+    prepare_policy, requirement_coverage, runtime_view_gaps,
 };
 
 /// Maximum candidate TTL; it is not the lifetime of an issued grant.
@@ -38,6 +38,8 @@ pub const LAUNCH_VIEW_NOTE: &str = "LAUNCH VIEW:";
 pub const POINT_ALIAS_NOTE: &str = "POINT ALIAS:";
 /// Prefix of the note listing forbids that the runtime protector refuses to lower.
 pub const RUNTIME_VIEW_NOTE: &str = "RUNTIME VIEW:";
+/// Prefix of the note naming which consumers can carry each task requirement.
+pub const COVERAGE_NOTE: &str = "COVERAGE:";
 
 /// Built from server identity and clock; matching fields in user JSON are never accepted.
 #[derive(Clone, Serialize)]
@@ -299,15 +301,18 @@ fn first_task_draft(
 ///
 /// A valid draft whose permits test `context` is retried once with that reason, because the
 /// launch authorizer reads the same revision without context and would grant those permits
-/// nothing. A forbid carrying annotations is retried the same way, because the runtime protector
-/// refuses it and fails the whole binding. The retry only replaces the first draft when it is
-/// valid and has neither; otherwise the first draft stays the candidate and the findings travel
-/// as `LAUNCH VIEW:` and `RUNTIME VIEW:` notes.
+/// nothing. A forbid the runtime protector cannot lower, such as one on `network.use`, is retried
+/// the same way, because it fails the whole binding. The retry only replaces the first draft when
+/// it is valid and has neither; otherwise the first draft stays the candidate and the findings
+/// travel as `LAUNCH VIEW:` and `RUNTIME VIEW:` notes.
 ///
 /// The exact paths the final permits name are then resolved on this host (metadata only; nothing
 /// is sent). A point grant on a link authorizes nothing, but it is not retried: the task asked
 /// for that name, and the repair is a wider grant only a reviewer may choose. It travels as a
 /// `POINT ALIAS:` note instead.
+///
+/// A `COVERAGE:` note finally names, per requirement `@id`, which consumers can carry its
+/// statements. It is derived from statement shape, not from a deployment.
 ///
 /// # Errors
 /// Returns no candidate when input, provider, Cedar syntax/types, budgets or the deadline fail.
@@ -339,8 +344,8 @@ pub fn propose_task(
         Err(error) => return Err(error.into()),
     };
     let mut gaps = launch_view_gaps(&artifact.text)?;
-    let mut annotated = annotated_forbids(&artifact.text)?;
-    if !gaps.is_empty() || !annotated.is_empty() {
+    let mut refused = runtime_view_gaps(&artifact.text)?;
+    if !gaps.is_empty() || !refused.is_empty() {
         let mut reasons = Vec::new();
         if !gaps.is_empty() {
             reasons.push(format!(
@@ -350,11 +355,12 @@ pub fn propose_task(
                 gaps.join("; ")
             ));
         }
-        if !annotated.is_empty() {
+        if !refused.is_empty() {
             reasons.push(format!(
-                "the runtime protector refuses annotated forbids and fails the whole binding: \
-                 {}; write forbids without annotations and describe them in comments",
-                annotated.join("; ")
+                "the runtime protector lowers only bare forbids on file.read or file.write and \
+                 fails the whole binding otherwise: {}; drop those forbids and grant nothing \
+                 instead, e.g. no network.use permit",
+                refused.join("; ")
             ));
         }
         let rejection = reasons.join(". ");
@@ -363,12 +369,12 @@ pub fn propose_task(
             generate_policy_draft_after(provider, model, task, deadline, Some(&rejection))
             && let Ok(repaired) = prepare_policy(retry.policy())
             && launch_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
-            && annotated_forbids(&repaired.text).is_ok_and(|left| left.is_empty())
+            && runtime_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
         {
             draft = retry;
             artifact = repaired;
             gaps.clear();
-            annotated.clear();
+            refused.clear();
         }
     }
     check_deadline(deadline)?;
@@ -379,7 +385,8 @@ pub fn propose_task(
             .into_string()
             .ok()
     })?;
-    let notes = candidate_notes(&gaps, &annotated, &aliases);
+    let coverage = requirement_coverage(&artifact.text)?;
+    let notes = candidate_notes(&gaps, &refused, &aliases, &coverage);
     let payload = CandidateContent {
         format_version: CANDIDATE_VERSION,
         status: "CANDIDATE",
@@ -408,7 +415,12 @@ pub fn propose_task(
 }
 
 /// Fixed review notes plus one note per finding a consumer of this revision would trip over.
-fn candidate_notes(gaps: &[String], annotated: &[String], aliases: &[String]) -> Vec<String> {
+fn candidate_notes(
+    gaps: &[String],
+    refused: &[String],
+    aliases: &[String],
+    coverage: &[String],
+) -> Vec<String> {
     let mut notes: Vec<String> = vec![
         "CANDIDATE: not approved, not effective; not connected to enforcement.".into(),
         "Cedar Strict validates syntax and types, not task completeness. Review the policy against the original task; unresolved is model-reported, not a completeness proof.".into(),
@@ -424,11 +436,11 @@ fn candidate_notes(gaps: &[String], annotated: &[String], aliases: &[String]) ->
             gaps.join("; ")
         ));
     }
-    if !annotated.is_empty() {
+    if !refused.is_empty() {
         notes.push(format!(
-            "{RUNTIME_VIEW_NOTE} the runtime protector refuses annotated forbids, so a Scope on \
-             this revision fails with UNSUPPORTED_ANNOTATION: {}.",
-            annotated.join("; ")
+            "{RUNTIME_VIEW_NOTE} the runtime protector lowers only bare forbids on file.read or \
+             file.write, so a Scope on this revision fails: {}.",
+            refused.join("; ")
         ));
     }
     if !aliases.is_empty() {
@@ -438,6 +450,13 @@ fn candidate_notes(gaps: &[String], annotated: &[String], aliases: &[String]) ->
              whose request covers them fails: {}. Grant the target as a directory pair or keep \
              the requirement unresolved.",
             aliases.join("; ")
+        ));
+    }
+    if !coverage.is_empty() {
+        notes.push(format!(
+            "{COVERAGE_NOTE} who can carry each requirement, from statement shape only; a Scope \
+             still has to apply it and a requirement without statements is not listed: {}.",
+            coverage.join("; ")
         ));
     }
     notes

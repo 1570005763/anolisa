@@ -301,7 +301,6 @@ fn runtime_only_forbids_reject_the_whole_agentsight_binding() {
             "when {",
             r#"when { principal == SecCore::Subject::"worker" &&"#,
         ),
-        format!(r#"@id("protected") {base}"#),
     ] {
         let combined = format!("{base}\n{runtime_rule}");
         let input = binding(&combined);
@@ -318,6 +317,21 @@ fn runtime_only_forbids_reject_the_whole_agentsight_binding() {
             "{runtime_rule}"
         );
     }
+}
+
+#[test]
+fn an_id_annotation_names_the_rule_without_changing_the_projection() {
+    let base = rule(
+        r#"context.input.operation == SecCore::WriteOperation::"delete" && resource.path == "/config""#,
+    );
+    assert_eq!(translate(&format!("@id(\"R2\")\n{base}")), translate(&base));
+    let described = format!("@id(\"R2\") @note(\"keep\")\n{base}");
+    assert!(matches!(
+        AgentSightTranslator
+            .translate(&binding(&described))
+            .unwrap(),
+        TranslationOutcome::Rejected(_)
+    ));
 }
 
 #[test]

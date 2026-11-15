@@ -206,24 +206,35 @@ echo "$POLICY_ID"        # 后面 Scope 引用这一个 policyId，revision 是 
 Cedar 不解析注释，所以不影响发布。`unresolved` 列的是 schema 表达不了、由执行端或默认拒绝承担的
 要求（例如"禁止整个网络"只能靠不授予 `network.use`），供审阅时阅读。
 
-`task.txt` 先列基础授权（读上限、程序启动），再用 R1–R4 写明安全要求，所以生成物按同样的编号分块：
+`task.txt` 先列基础授权（读上限、程序启动），再用 R1–R4 写明安全要求，所以生成物按同样的编号分块，
+每条语句前用 `@id` 标明它落实哪项要求（一项要求有多条语句时写 `R1.1`、`R1.2`）：
 
-- 基础授权：两条 `permit`，读上限（`/` 与 `/*`）与解释器启动；
-- R1 构建写入范围：一条 `permit`，`releases/`、`out/` 成对；
+- 基础授权（`base`、`base.2`）：读上限（`/` 与 `/*`）与解释器启动两条 `permit`；
+- R1 构建写入范围：`releases/`、`out/` 的写 `permit`（一条或拆成 `R1.1`、`R1.2` 两条）；
 - R2 回滚包删除保护：一条 `forbid`，`previous.zip` 禁删（带 `context.input.operation`）；
-- R3 网络与上报：只有注释，不授予 `network.use`；
+- R3 网络与上报：只有注释，不授予 `network.use`，所以没有 `@id`；
 - R4 敏感文件读取保护：一条 `forbid`，`deploy.env` 精确文件禁读。
 
-块标题与编号都是注释，只说明这条规则落实哪项要求，不决定由哪个执行端承担：哪端取哪条，
-由各自能表达的形状决定（见开头的环境 C 表）。forbid 不带 `@id` 等注解：ActPlane 的转译器会以
-`UNSUPPORTED_ANNOTATION` 拒掉整份策略，所以规则编号只写在注释里。
+`@id` 只是要求编号，不决定由哪个执行端承担：哪端取哪条，由各自能表达的形状决定
+（见开头的环境 C 表）。Sandbox、PDP 与 ActPlane 的转译器都接受 `@id`；除 `@id` 以外的注解仍会被拒绝。
 
 [policies/task.cedar](policies/task.cedar) 是同一结构的留档，意图服务不可用时可以直接
 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。
 
-意图服务会在本地挡掉"能过 Cedar 校验、发布后却跑不通"的输出，并写在导出文件头部：
-`// LAUNCH VIEW: ...`（`permit` 里测了 `context`，授权视图会丢掉它）或 `// POINT ALIAS: ...`
-（精确授权指向本机上的软链）。本 demo 的 `task.txt` 不会触发这两类；**一旦看到其中任一行，不要发布**，
+导出文件头部的 `// COVERAGE: ...` 按 `@id` 汇总每项要求的语句能由谁承接，例如：
+
+```text
+// COVERAGE: ... base: sandbox and launch authorizer (#1 #2); R1: sandbox and launch authorizer (#3 #4);
+//   R2: runtime protector only, the authorization view drops forbids (#5); R4: runtime protector only, ...
+```
+
+它只按语句形状推导，回答"这项要求有没有执行端能表达"，不代表已经生效：是否生效看第三步的
+Binding 状态。没有语句的要求（本例 R3，靠默认拒绝承担）不出现在这里，见 `unresolved`。
+
+意图服务还会在本地挡掉"能过 Cedar 校验、发布后却跑不通"的输出，并写在导出文件头部：
+`// LAUNCH VIEW: ...`（`permit` 里测了 `context`，授权视图会丢掉它）、`// RUNTIME VIEW: ...`
+（ActPlane 转不了的 `forbid`，例如 `network.use`，整个 Binding 会失败）或 `// POINT ALIAS: ...`
+（精确授权指向本机上的软链）。本 demo 的 `task.txt` 不会触发这三类；**一旦看到其中任一行，不要发布**，
 先检查 `task.txt` 是否被改过。
 
 daemon 的授权集只收「每条语句都带显式 principal」且不含 `context` 条件的 policy，所以 PDP 读的是同一

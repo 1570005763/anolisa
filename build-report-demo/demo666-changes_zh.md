@@ -111,7 +111,7 @@ Case 3 的 `rm releases/previous.zip` 在沙箱里直接 `Read-only file system`
 **为什么改**
 原来的生成物能过 Cedar 校验，但发布后跑不通，必须人工修改：
 - permit 里写 `context.input.cwd` → 授权视图丢掉这条 → 启动无授权；
-- forbid 带 `@id` → `scope create` 后 Binding 报 `UNSUPPORTED_ANNOTATION`；
+- forbid 带 `@id` → `scope create` 后 Binding 报 `UNSUPPORTED_ANNOTATION`（之后转译器改为接受 `@id`，其他注解仍拒绝）；
 - `network.use` 上的 forbid → `UNSUPPORTED_ACTION`，整份下发失败；
 - 精确授权 `/bin/bash`、`/usr/bin/python3` 落在软链上 → `permission path lacks an authorized identity`。
 

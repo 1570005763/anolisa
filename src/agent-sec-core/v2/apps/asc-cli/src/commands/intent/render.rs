@@ -3,8 +3,8 @@
 
 use asc_daemon_protocol::intent::{INTENT_RESULT_BYTES, IntentProposeResult};
 use asc_intent::{
-    Artifact, CANDIDATE_VERSION, DRAFT_VERSION, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE, PROMPT_VERSION,
-    RUNTIME_VIEW_NOTE, prepare_policy, validate_policy_response,
+    Artifact, CANDIDATE_VERSION, COVERAGE_NOTE, DRAFT_VERSION, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE,
+    PROMPT_VERSION, RUNTIME_VIEW_NOTE, prepare_policy, validate_policy_response,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -117,15 +117,21 @@ pub(super) fn render(
                 terminal_json(&candidate["draft"]["unresolved"])?
             )?;
             // The export is fed to `policy create` as is, so a revision that would authorize no
-            // launch says so in the file instead of only in the JSON notes.
+            // launch says so in the file instead of only in the JSON notes, and so does who can
+            // carry each requirement.
             for note in candidate["notes"]
                 .as_array()
                 .ok_or(IntentFailure::Response)?
             {
                 let note = note.as_str().ok_or(IntentFailure::Response)?;
-                if [LAUNCH_VIEW_NOTE, RUNTIME_VIEW_NOTE, POINT_ALIAS_NOTE]
-                    .iter()
-                    .any(|prefix| note.starts_with(prefix))
+                if [
+                    LAUNCH_VIEW_NOTE,
+                    RUNTIME_VIEW_NOTE,
+                    POINT_ALIAS_NOTE,
+                    COVERAGE_NOTE,
+                ]
+                .iter()
+                .any(|prefix| note.starts_with(prefix))
                 {
                     writeln!(out, "// {}", escape(note))?;
                 }

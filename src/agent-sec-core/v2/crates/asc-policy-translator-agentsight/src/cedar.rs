@@ -33,7 +33,9 @@ pub(super) fn translate(
             if body.principal != PrincipalConstraint::Any {
                 return Err("UNSUPPORTED_PRINCIPAL_CONSTRAINT");
             }
-            if !body.annotations.is_empty() {
+            // `@id` only names the rule, e.g. the task requirement it implements. Any other
+            // annotation may carry semantics this lowering would silently drop.
+            if body.annotations.keys().any(|name| name.as_str() != "id") {
                 return Err("UNSUPPORTED_ANNOTATION");
             }
             let all_actions = |name: &str| {
