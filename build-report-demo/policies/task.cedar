@@ -1,33 +1,34 @@
 // Unified task policy for the build-report workload.
 //
 // Published once: PAP stores this text as one policyId + revision, and every
-// consumer reads that same revision instead of a second policy.
+// consumer reads that same revision instead of a second policy. The body is
+// organized by security requirement (R1-R4 from task.txt), not by consumer:
 //
-//   Sandbox      projects the [S*] permits: writes outside the allowed ranges are
+//   Sandbox      projects the rules into bwrap mounts: writes outside R1 are
 //                refused by the mount layer (EROFS).
 //   Request PDP  derives a launch view of this revision - permits without runtime
 //                context - and intersects it with the per-command candidate, so an
 //                over-broad candidate becomes MODIFY instead of an approval.
-//   OS Harness   lowers the [H*] forbids to kernel file protection attached to the
-//                cosh process tree through a Scope + Binding.
+//   OS Harness   lowers the file-protection rules (R2, R4) to kernel protection
+//                attached to the cosh process tree through a Scope + Binding.
 //
-// The two sections and the [S*]/[H*] tags state the intended responsibility of each
-// rule. They are comments: Cedar ignores them, and neither a section nor a tag is
-// evidence that a rule was delivered, loaded or enforced.
+// Block headers and R numbers are comments: Cedar ignores them, they do not
+// route a rule to a consumer, and they are no evidence that a rule was
+// delivered, loaded or enforced.
 //
 // The bare `principal` header is deliberate. The enforcement translator accepts
 // only bare headers, while the PDP only compiles explicit ones; the daemon derives
 // that view from this same revision, so neither consumer needs its own file.
 
 // ============================================================
-// Sandbox Policy - resource access boundary
+// 基础授权：读取上限与解释器启动
+// 不是安全要求，只让命令能够启动。
 // ============================================================
 
-// [S1] Read ceiling. It deliberately covers the whole filesystem: the candidate is
-// generated per command and how many system directories (loader caches, locale,
-// /proc) a launch ends up asking for is not predictable, so an exhaustive
-// allowlist would cut ordinary commands into MODIFY. The actual read restriction
-// in this task is [H2].
+// Read ceiling. It deliberately covers the whole filesystem: how many system
+// directories (loader caches, locale, /proc) a launch asks for is not
+// predictable, so an exhaustive allowlist would cut ordinary commands into
+// MODIFY. The actual read restriction in this task is R4.
 permit(
   principal,
   action == SecCore::Action::"file.read",
@@ -37,8 +38,24 @@ when {
   resource.path == "/" || resource.path like "/*"
 };
 
-// [S2] The only writable region: build outputs and the local report directory.
-// Anything else a candidate asks for is trimmed here before the sandbox starts.
+// Interpreter entry points. The Hook launches `/bin/bash -c`, so that exact
+// string must be granted as well.
+permit(
+  principal,
+  action == SecCore::Action::"process.spawn",
+  resource is SecCore::Process
+)
+when {
+  resource.program == "bash" || resource.program == "/bin/bash" ||
+  resource.program == "/usr/bin/bash" ||
+  resource.program == "python3" || resource.program == "/usr/bin/python3"
+};
+
+// ============================================================
+// R1：构建写入范围
+// 只允许写构建产物目录和报告目录，范围外写入一律拒绝。
+// ============================================================
+
 permit(
   principal,
   action == SecCore::Action::"file.write",
@@ -51,33 +68,13 @@ when {
   resource.path like "/srv/br-demo/out/*"
 };
 
-// [S3] Interpreter entry points. The Hook launches `/bin/bash -c`, so that exact
-// string must be permitted as well; ActPlane has no process-start target yet.
-permit(
-  principal,
-  action == SecCore::Action::"process.spawn",
-  resource is SecCore::Process
-)
-when {
-  resource.program == "bash" || resource.program == "/bin/bash" ||
-  resource.program == "/usr/bin/bash" ||
-  resource.program == "python3" || resource.program == "/usr/bin/python3"
-};
-
-// [S4] No rule grants network.use, so both consumers keep the network closed. This
-// is deliberate rather than a `forbid`: the enforcement translator only lowers
-// file actions, and a network forbid would reject the whole revision there.
-
 // ============================================================
-// OS Harness Policy - operation-level protection
+// R2：回滚包删除保护
+// 禁止删除 previous.zip，不额外禁止正常写入。
 // ============================================================
 
-// [H1] The rollback package may be rewritten in place but never deleted. Sandbox
-// projection only knows "writable / not writable" per mount, so this delete-only
-// rule has no OS-right equivalent and stays with the kernel file protection.
-//
-// Note: delete protection also covers renaming and overwriting the protected
-// target, so the claim is "ordinary writes stay possible, deletion does not".
+// Delete protection also covers renaming and overwriting the protected target,
+// so the claim is "ordinary writes stay possible, deletion does not".
 forbid(
   principal,
   action == SecCore::Action::"file.write",
@@ -88,10 +85,22 @@ when {
   context.input.operation == SecCore::WriteOperation::"delete"
 };
 
-// [H2] The simulated credential file stays unreadable even when the read does not
-// go through the shell Hook (the agent's native file tool). Read protection is
-// exact-file only: a directory-tree read target is rejected by the enforcement
-// backend, so this rule cannot be widened to "/srv/br-demo/project/*".
+// ============================================================
+// R3：网络与上报
+// 本次本地验收禁网：不授予 network.use，由默认拒绝承担。
+// ============================================================
+
+// Deliberately no statement: the enforcement translator only lowers file
+// actions, and a network forbid would reject the whole revision there.
+
+// ============================================================
+// R4：敏感文件读取保护
+// 禁止读取任务目录中的模拟凭据文件，包括不经过 shell 的原生文件工具。
+// ============================================================
+
+// Read protection is exact-file only: a directory-tree read target is rejected
+// by the enforcement backend, so this rule cannot be widened to
+// "/srv/br-demo/project/*".
 forbid(
   principal,
   action == SecCore::Action::"file.read",

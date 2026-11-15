@@ -316,11 +316,11 @@ R2 出现两次，但两处都引用 `build-report-task@7 / R2-protect-rollback`
 | 检查对象 | 已核对的现状 | 本文样稿仍需的适配 |
 | --- | --- | --- |
 | [两份 schema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore.cedarschema)、[HTTP 扩展 schema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore-v2.cedarschema) | 两文件仍并存，后者增加 `HttpEndpoint` 和 `network.send` | 统一类型契约与消费者兼容；不是只拼接文件 |
-| [意图生成提示](../src/agent-sec-core/v2/crates/asc-intent/prompts/policy-generation.md) | 仍要求 S/H 两区，限制 `permit` 使用 context，并禁止 `forbid` 携带注解 | 按安全要求组织候选，支持 HTTP 上下文与规则追踪；同步确定性校验，不只修改提示词 |
+| [意图生成提示](../src/agent-sec-core/v2/crates/asc-intent/prompts/policy-generation.md) | 已按安全要求编号分块（编号写在注释里）；仍限制 `permit` 使用 context，并禁止 `forbid` 携带注解 | 支持 HTTP 上下文与可机读的规则追踪；同步确定性校验，不只修改提示词 |
 | [HTTP 凭据转译](../src/agent-sec-core/v2/crates/asc-policy-cedar/src/http.rs) | 识别到凭据注解后要求 schema revision 2，并逐条按凭据规则转译整个集合 | 正确处理混合策略、相关允许与禁止规则及责任交接；不能直接把 R1–R4 全文交给现有转译器 |
 | [文件保护转译](../src/agent-sec-core/v2/crates/asc-policy-translator-agentsight/src/cedar.rs) | 跳过 `permit`，只承接文件保护 `forbid`，且拒绝带注解的 `forbid` | 正确处理本文 R2、R4 的 `@id` 追踪信息，保持安全语义；不能把注释或标签当路由 |
 | [Gateway Plan](../src/agent-sec-core/v2/crates/asc-gateway-plan/src/plan.rs) | 有自己的 Plan 格式和来源信息 | 本文 YAML 不是其协议；跨端映射、依赖和证据关联仍需落实 |
-| [本地任务](task.txt)与[留档策略](policies/task.cedar) | 禁网验收，使用全局读取上限加精确禁读，策略仍为 S/H 分区 | 完整上报需要另行确认任务授权与网络、凭据部署；不能由本文自动开启 |
+| [本地任务](task.txt)与[留档策略](policies/task.cedar) | 禁网验收，使用全局读取上限加精确禁读，按基础授权 + R1–R4 分块，规则不带 `@id` | 完整上报需要另行确认任务授权与网络、凭据部署；不能由本文自动开启 |
 
 本文未修改上述提示、schema、策略或运行代码。Cedar 表达已静态对照类型和既有规则写法，但未将这份目标混合样稿作为当前产品支持的策略发布、转译或联调；YAML 仅为组织示意。
 

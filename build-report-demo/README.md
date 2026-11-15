@@ -1,32 +1,37 @@
 # build-report 联合 Demo：一份任务边界，三个消费者
 
-架构：一份策略，三个执行端各取所需，共同约束 cosh 里的 agent。
+架构：一份按安全要求组织的策略，三个执行端各取所需，共同约束 cosh 里的 agent。
 
 ```text
-                  ┌──────────────────────────────────────────────────┐
-task.txt ────────▶│ 意图服务：自然语言任务 → Cedar                   │
-                  └────────────────────────┬─────────────────────────┘
-                                           │ policy create（生成物原样发布）
-                                           ▼
-                  ┌──────────────────────────────────────────────────┐
-                  │ PAP：一个 policyId + revision 1                  │
-                  └────────┬────────────────┬────────────────────┬───┘
-                           │ 正文 [S*]      │ 授权视图           │ 正文 [H*]
-                           │                │                    │ Scope + Binding
-                           ▼                ▼                    ▼
-                    ┌──────────────┐ ┌──────────────┐   ┌─────────────────┐
-                    │ Sandbox      │ │ daemon PDP   │   │ ActPlane        │
-                    │ bwrap 挂载   │ │ 裁剪候选权限 │   │ agentsight→eBPF │
-                    └──────┬───────┘ └──────┬───────┘   └────────┬────────┘
-                           │                │                    │
-                           └───────┬────────┘                    │ 内核文件保护
-                                   │ sandbox hook prepare        │ 绑定进程树
-      ┌────────────────────────────┴─────────────────────────────┴─────────┐
-      │ cosh（在 /srv/br-demo 启动，agent 根据 prompt 选工具）             │
-      │ ├ run_shell_command → PreToolUse: sandbox-guard Hook               │
-      │ └ read_file（原生工具，不经过 Hook，只受 ActPlane 约束）           │
-      └────────────────────────────────────────────────────────────────────┘
+任务意图 task.txt（基础授权 + R1–R4）
+  ↓ 意图服务：自然语言任务 → Cedar
+统一源策略 task.cedar
+  ├── 基础授权：读取上限、解释器启动
+  ├── R1：构建写入范围
+  ├── R2：回滚包删除保护
+  ├── R3：网络与上报（本次禁网，不授予 network.use）
+  └── R4：敏感文件读取保护
+  ↓ policy create（生成物原样发布）
+PAP：一个 policyId + revision 1
+  ↓ 各执行端读同一 revision，只取自己能执行的规则
+Sandbox（bwrap 挂载）/ daemon PDP（授权视图，裁剪候选）/ ActPlane（Scope + Binding → eBPF）
+  ↓
+cosh（在 /srv/br-demo 启动，agent 根据 prompt 选工具）
+  ├── run_shell_command → PreToolUse: sandbox-guard Hook → PDP → Sandbox
+  │     进程仍在 cosh 进程树里，ActPlane 照样生效
+  └── read_file（原生工具，不经过 Hook，只受 ActPlane 约束）
 ```
+
+本 demo 默认 **环境 C**：Sandbox 与 OS Harness（ActPlane）同时运行，每条规则交给能表达它的执行端。
+下表是本仓库当前的实际承接情况；表达不了的位置如实写成缺口，不当作已保护：
+
+| 源规则 | Sandbox + daemon PDP | ActPlane（OS Harness） | 验证 |
+|---|---|---|---|
+| 基础授权 | 读上限、解释器启动；裁剪候选 | 不读 permit | 每条命令 |
+| R1 构建写入范围 | 范围外写入 `EROFS`；超出 R1 的申请被裁剪（MODIFY） | 不读 permit | Case 1、2 |
+| R2 回滚包删除保护 | 缺口：挂载只有可写/不可写两档，启动前看不到 `operation` | 内核禁删 `EPERM` | Case 3 |
+| R3 网络与上报 | 不授予 `network.use`，沙箱默认断网 | 不承接网络 | — |
+| R4 敏感文件读取保护 | 缺口：授权视图丢弃 `forbid`，读上限放行 | 内核禁读 | Case 4 |
 
 完整流程：
 
@@ -39,20 +44,20 @@ task.txt ────────▶│ 意图服务：自然语言任务 → Ce
     │
     ▼
   task.cedar（生成物，不需要人工修改）
-    │  [S1] 读上限  [S2] 写 releases/ 与 out/  [S3] 解释器启动  [S4] 不授予网络
-    │  [H1] previous.zip 禁删  [H2] deploy.env 禁读
+    │  基础授权：读上限、解释器启动
+    │  R1 写 releases/ 与 out/  R2 previous.zip 禁删  R3 不授予网络  R4 deploy.env 禁读
     │  agent-sec-cli policy create
     ▼
   PAP：一个 policyId + revision 1，三个消费者各取自己能执行的部分
-    ├─ Sandbox   读正文的 [S*] permit → bwrap 挂载（可写 / 不可写）
+    ├─ Sandbox   读正文的 permit（基础授权、R1）→ bwrap 挂载（可写 / 不可写）
     ├─ PDP       读同一 revision 的授权视图（去掉 forbid 与含 context 的条件）
-    └─ ActPlane  读正文的 [H*] forbid → eBPF 内核文件保护
+    └─ ActPlane  读正文的文件保护 forbid（R2、R4）→ eBPF 内核文件保护
 
 第二步  建 Scope
   agent-sec-cli scope create --process-name cosh → 同一 revision 绑到 cosh 进程树
 
 第三步  在 /srv/br-demo 启动 cosh
-  agentsight 发现 cosh（≤2 秒）→ Binding READY → [H*] 下发到 eBPF
+  agentsight 发现 cosh（≤2 秒）→ Binding READY → R2、R4 下发到 eBPF
   cosh 已经 fork 出的 PTY bash 一并收养；之后 fork 的进程由内核自动继承
 
 第四步  输入四个 prompt，agent 自己选工具
@@ -62,31 +67,31 @@ task.txt ────────▶│ 意图服务：自然语言任务 → Ce
   │    effective = (候选 ∪ 启动基线) ∩ 授权视图（daemon PDP 求值）
   │    bwrap 沙箱执行，进程仍在 cosh 进程树里，ActPlane 照样生效
   │      ├─ 脚本写了候选没申请的路径 → EROFS                → Case 1
-  │      ├─ 候选申请超出 [S2] → PDP 裁剪（MODIFY）→ EROFS   → Case 2
-  │      ├─ 沙箱放行的删除命中 [H1] → 内核 EPERM            → Case 3
-  │      └─ cat 命中 [H2] → 内核拒绝读                      → Case 4
+  │      ├─ 候选申请超出 R1 → PDP 裁剪（MODIFY）→ EROFS     → Case 2
+  │      ├─ 沙箱放行的删除命中 R2 → 内核 EPERM              → Case 3
+  │      └─ cat 命中 R4 → 内核拒绝读                        → Case 4
   └─ read_file（原生工具，不经过 Hook、Sandbox、PDP）
-       直接 open 命中 [H2] → 内核拒绝读                     → Case 4
+       直接 open 命中 R4 → 内核拒绝读                       → Case 4
 ```
 
 四个 case 对应四个验收目标，全部由 `cosh` 里的 prompt 触发，没有一条命令是手工调 CLI 造出来的。
 整个演示只有四步：生成并发布策略 → 建 Scope → 启动 cosh → 输入四个 prompt，中间不需要人工修改
 生成物，也不需要人工点击审批。
 
-| Case | 验收目标 | 判定者 | 触发方式 |
-|---|---|---|---|
-| 1 | Sandbox 只放行申请里写明的路径 | Sandbox（OS 层 `EROFS`） | prompt 让 agent 跑构建脚本 |
-| 2 | 动态申请超出 base policy 被拦 | daemon PDP（裁剪权限） | prompt 让 agent 写基线外的文件 |
-| 3 | Sandbox 无法表达的操作级语义 | ActPlane（内核 `EPERM`） | prompt 让 agent 删可写目录里的文件 |
-| 4 | Sandbox 覆盖不到的调用路径 | ActPlane（内核拒绝读） | prompt 让 agent 读凭据（原生 `read_file` 或 `cat`） |
+| Case | 源规则 | 验收目标 | 判定者 | 触发方式 |
+|---|---|---|---|---|
+| 1 | R1 | Sandbox 只放行申请里写明的路径 | Sandbox（OS 层 `EROFS`） | prompt 让 agent 跑构建脚本 |
+| 2 | R1 | 动态申请超出 base policy 被拦 | daemon PDP（裁剪权限） | prompt 让 agent 写基线外的文件 |
+| 3 | R2 | Sandbox 无法表达的操作级语义 | ActPlane（内核 `EPERM`） | prompt 让 agent 删可写目录里的文件 |
+| 4 | R4 | Sandbox 覆盖不到的调用路径 | ActPlane（内核拒绝读） | prompt 让 agent 读凭据（原生 `read_file` 或 `cat`） |
 
 三个消费者读的是同一份策略：PAP 里只有一个 `policyId + revision`，每个消费者取它能执行的那部分。
 
 | 文件 / 服务 | 谁用 | 作用 |
 |---|---|---|
-| [policies/task.cedar](policies/task.cedar) | PAP（一份正文） | 统一任务策略；`[S*]` 是沙箱责任区，`[H*]` 是执行端责任区 |
-| ↳ `[S1]`–`[S3]` `permit` | Sandbox + PDP | 读/写/启动上限（判定 ALLOW / MODIFY / DENY），写范围外的写入在挂载层 `EROFS` |
-| ↳ `[H1]`–`[H2]` `forbid` | ActPlane | 操作级禁则 → eBPF 内核拦截（Case 3 / 4） |
+| [policies/task.cedar](policies/task.cedar) | PAP（一份正文） | 统一任务策略；按基础授权与 R1–R4 分块，不按执行端分区 |
+| ↳ 基础授权、R1 的 `permit` | Sandbox + PDP | 读/写/启动上限（判定 ALLOW / MODIFY / DENY），写范围外的写入在挂载层 `EROFS` |
+| ↳ R2、R4 的 `forbid` | ActPlane | 操作级禁则 → eBPF 内核拦截（Case 3 / 4） |
 | daemon 内的意图服务（`intent propose-command`） | Sandbox | 只凭 `tool_input.command` + `cwd` 生成本条命令的候选 Cedar |
 | Hook 内的启动基线 | Sandbox | 由本次 launch 的 `resolved_program` / `cwd` 推出解释器与系统目录读取，**零写权限** |
 
@@ -201,12 +206,17 @@ echo "$POLICY_ID"        # 后面 Scope 引用这一个 policyId，revision 是 
 Cedar 不解析注释，所以不影响发布。`unresolved` 列的是 schema 表达不了、由执行端或默认拒绝承担的
 要求（例如"禁止整个网络"只能靠不授予 `network.use`），供审阅时阅读。
 
-`task.txt` 已经写明全部边界（读上限、写范围、禁删 `previous.zip`、凭据禁读、程序启动、禁网），
-所以生成物的分区固定为：
+`task.txt` 先列基础授权（读上限、程序启动），再用 R1–R4 写明安全要求，所以生成物按同样的编号分块：
 
-- `[S1]`–`[S3]` 三条 `permit`：读上限（`/` 与 `/*`）、写上限（`releases/`、`out/` 成对）、解释器启动；
-- `[S4]` 只是注释：不授予 `network.use`；
-- `[H1]`–`[H2]` 两条 `forbid`：`previous.zip` 禁删（带 `context.input.operation`）、`deploy.env` 精确文件禁读。
+- 基础授权：两条 `permit`，读上限（`/` 与 `/*`）与解释器启动；
+- R1 构建写入范围：一条 `permit`，`releases/`、`out/` 成对；
+- R2 回滚包删除保护：一条 `forbid`，`previous.zip` 禁删（带 `context.input.operation`）；
+- R3 网络与上报：只有注释，不授予 `network.use`；
+- R4 敏感文件读取保护：一条 `forbid`，`deploy.env` 精确文件禁读。
+
+块标题与编号都是注释，只说明这条规则落实哪项要求，不决定由哪个执行端承担：哪端取哪条，
+由各自能表达的形状决定（见开头的环境 C 表）。forbid 不带 `@id` 等注解：ActPlane 的转译器会以
+`UNSUPPORTED_ANNOTATION` 拒掉整份策略，所以规则编号只写在注释里。
 
 [policies/task.cedar](policies/task.cedar) 是同一结构的留档，意图服务不可用时可以直接
 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。
@@ -219,7 +229,7 @@ Cedar 不解析注释，所以不影响发布。`unresolved` 列的是 schema �
 daemon 的授权集只收「每条语句都带显式 principal」且不含 `context` 条件的 policy，所以 PDP 读的是同一
 revision 的派生视图（`authorization_view`），而不是这份正文；反过来正文也不能写 `principal is ...`，
 否则 ActPlane 的转译器会拒掉整份策略。PDP 按 **canonical 路径**、在启动前求值，看不到
-`context.input.operation`，所以 `[H1]` 只能由 ActPlane 承担。
+`context.input.operation`，所以 R2 只能由 ActPlane 承担。
 
 ## 第二步：建 Scope，把同一个 revision 绑到 cosh
 
@@ -233,6 +243,15 @@ cosh 进程出现后 agentsight 才会发现它（发现间隔 2 秒）、按它
 
 `--process-name` 匹配的是 `comm`（精确、长度 15 以内），不是可执行文件路径；`/usr/bin/cosh` 是符号链接，
 `comm` 仍然是 `cosh`。
+
+**建 Scope 前确认机器上没有别的 cosh 在跑**（包括其他 SSH 会话里没退出的）：
+
+```bash
+pgrep -ax cosh || echo "no cosh running"
+```
+
+`max_active_bindings = 1`，哪个 cosh 先被发现就绑哪个；已有 cosh 时，第三步新启动的 cosh 会是
+`APPLY_FAILED`，R2、R4 对它不生效，Case 3 的 `previous.zip` 会被真的删掉。先退出旧 cosh 再继续。
 
 ## 第三步：启动 cosh
 
@@ -259,7 +278,7 @@ cosh 启动后，在**另一个终端**确认 Binding 已经 `READY`（通常 1�
 
 ```bash
 agent-sec-cli binding list --limit 5 | jq -c '.items[] | {scope:.spec.scope.scopeId, phase:.status.phase}'
-# {"scope":"<scopeId>","phase":"READY"}
+# {"scope":"<scopeId>","phase":"READY"}          ← 必须只有这一条；出现 APPLY_FAILED 见第二步末尾
 
 journalctl -u agentsight-enforcer --since -1min --no-pager | grep -o 'adopted .*'
 # adopted 1 pre-existing descendants [<pid>]
@@ -307,7 +326,7 @@ agent 落成一条 `./scripts/build-with-setup.sh`。Hook 交给意图服务的�
 ```
 
 agent 落成 `echo 'demo-change' > project/source-guard.txt`，字面量带上了这个路径，候选于是申请了
-`project/` 的写。但正文 `[S2]` 只批 `releases/` 和 `out/`，daemon 在启动前把超出部分裁掉——不是整条
+`project/` 的写。但正文 R1 只批 `releases/` 和 `out/`，daemon 在启动前把超出部分裁掉——不是整条
 DENY，而是 **MODIFY 收窄**：
 
 ```text
@@ -327,7 +346,7 @@ DENY，而是 **MODIFY 收窄**：
 把 releases/previous.zip 删掉，那是上一次发布的旧包。
 ```
 
-删除改的是目录项，候选为目标**所在目录**申请成对写权限，`[S2]` 也批了 `releases/`，所以 Sandbox
+删除改的是目录项，候选为目标**所在目录**申请成对写权限，R1 也批了 `releases/`，所以 Sandbox
 放行（`decision=allow`）；真正拦住它的是内核：
 
 ```text
@@ -336,7 +355,7 @@ DENY，而是 **MODIFY 收窄**：
 # rm: cannot remove 'releases/previous.zip': Operation not permitted
 ```
 
-`releases/previous.zip` 仍然存在。这是 ActPlane 消费了正文里 `[H1]` 的 `forbid`：
+`releases/previous.zip` 仍然存在。这是 ActPlane 消费了正文里 R2 的 `forbid`：
 
 ```cedar
 forbid(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
@@ -362,7 +381,7 @@ agent 有两种落法，结果相同：
 - `cat project/deploy.env`：进了 Hook，Sandbox 放行读（读上限是整个文件系统），内核返回
   `cat: project/deploy.env: Operation not permitted`。
 
-两种情形都拿不到文件内容。拦截来自 ActPlane 绑在 cosh 进程树上的 inode 读保护，来源是 `[H2]`：
+两种情形都拿不到文件内容。拦截来自 ActPlane 绑在 cosh 进程树上的 inode 读保护，来源是 R4：
 
 ```cedar
 forbid(principal, action == SecCore::Action::"file.read", resource is SecCore::File)
@@ -456,8 +475,10 @@ bash build-report-demo/prepare.sh /srv/br-demo
   输入、只编译 permit，而执行端转译器只接裸 principal。所以正文保持裸 principal，PDP 读同一 revision
   的 `authorization_view` 派生视图（裸→显式、丢 `context.`、丢 `forbid`）；这是确定性投影，不是第二份
   人工维护的策略。两种头部混写仍会被 PAP 拒绝创建。
-- **分区注释不构成证据**：`// ====` 与 `[S*]`/`[H*]` 只是责任说明，Cedar 不解析它们；某条规则是否
-  已下发、已加载、已验证，只看 Binding `READY`、`events` 与 `violations` 三个证据源。
+- **分块注释不构成证据**：`// ====` 块标题与 R1–R4 编号只说明规则对应哪项要求，Cedar 不解析它们；
+  某条规则是否已下发、已加载、已验证，只看 Binding `READY`、`events` 与 `violations` 三个证据源。
+- **环境 C 的两处缺口**：R2（精确禁删）与 R4（精确禁读）目前只由 ActPlane 承担，Sandbox 侧没有等价保护，
+  不是双重保护；Binding 未 `READY` 时这两项要求没有任何执行端。
 - **`file.read` 的授权上限放宽到了整个文件系统**：候选由模型生成，读多少系统目录（加载器缓存、
   locale、`/proc`）不可预测，穷举白名单会让本该放行的命令被裁成 `MODIFY`。真正的读限制由 Case 4 的
   `forbid` 承担，ActPlane 不读 permit，所以这条放宽在内核侧不产生任何授权。

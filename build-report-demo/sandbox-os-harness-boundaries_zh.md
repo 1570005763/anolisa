@@ -6,7 +6,7 @@
 
 具体的 R1–R4 Cedar 正文、环境 A／B／C 映射、YAML 示意及派生配置来源追踪，集中在[统一 Policy 组织样稿](unified-policy-organization-example_zh.md)。本文保留执行边界与验收口径，不重复维护完整样稿。
 
-**讨论前提：按 schema 已统一、执行适配完成后的目标架构说明。** 仓库仍保留 [seccore.cedarschema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore.cedarschema) 与 [seccore-v2.cedarschema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore-v2.cedarschema)：前者定义文件、进程与整体网络权限，后者增加 HTTP 请求类型和 `network.send`。当前生成提示仍采用 S/H 分区，混合策略转译与跨端规则追踪也需要适配；本文不是这些改造已完成的声明。具体实现差异见组织样稿第 6 节。
+**讨论前提：按 schema 已统一、执行适配完成后的目标架构说明。** 仓库仍保留 [seccore.cedarschema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore.cedarschema) 与 [seccore-v2.cedarschema](../src/agent-sec-core/v2/crates/asc-policy-cedar/schema/seccore-v2.cedarschema)：前者定义文件、进程与整体网络权限，后者增加 HTTP 请求类型和 `network.send`。当前生成提示已按 R 编号组织正文（编号只写在注释里），混合策略转译与跨端规则追踪仍需适配；本文不是这些改造已完成的声明。具体实现差异见组织样稿第 6 节。
 
 ## 1. 一份 Policy，三个执行视图
 
@@ -238,7 +238,7 @@ Gateway 按配置处理响应中可识别的凭据回显
 
 目标组织方式是：**源策略按 R1–R4 安全要求分组，本次执行映射引用源规则，派生视图再按 Sandbox／OS Harness／Gateway 展示。** 规则标识用于追踪要求，不把执行端写成永久归属；一项要求可以映射到多个执行端。
 
-[现有生成提示](../src/agent-sec-core/v2/crates/asc-intent/prompts/policy-generation.md)与留档策略仍使用 `[S*]`、`[H*]` 分区，这是当前生成约定，不是本文推荐的目标组织方式。目标源策略不再通过追加固定 `[G*]` 区来划定互斥归属；S/H/G 名称可以保留在执行视图或责任展示中。改变注释并不会自动改变转译器，规则标识与混合策略适配仍需实现。
+[现有生成提示](../src/agent-sec-core/v2/crates/asc-intent/prompts/policy-generation.md)与留档策略已改为先写基础授权、再按 R1–R4 分块；编号只是注释，forbid 仍不能带 `@id`（文件保护转译器会拒绝），执行端仍按规则形状各取所需，不是本文第 4 节那种显式执行映射。目标源策略不再通过追加固定 `[G*]` 区来划定互斥归属；S/H/G 名称可以保留在执行视图或责任展示中。改变注释并不会自动改变转译器，规则标识与混合策略适配仍需实现。
 
 同一要求出现在两个派生配置中，是有意的**执行重叠**，不是两套独立安全政策。变化集中在源策略或环境映射中，派生配置随之更新；具体的规则标识、YAML 映射与来源追踪见[组织样稿](unified-policy-organization-example_zh.md)第 2、4、5 节。
 
