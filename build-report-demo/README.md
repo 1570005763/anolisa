@@ -311,6 +311,13 @@ Binding 生效后才 fork 的进程（agent 进程、每条命令）由内核 fo
 
 依次输入下面四条，每条等 agent 回答完再输下一条。全程不需要人工点击。
 
+想证明"每条命令都现场调了意图服务"，输入第一条 prompt 前先在**另一个终端**（终端 B）开着这条，
+输出怎么读见下文[看过程](#看过程每条命令现场生成候选超限由-daemon-裁掉)：
+
+```bash
+while sleep 0.3; do pgrep -af 'intent propose-command'; done | uniq
+```
+
 #### Case 1：Sandbox 只放行申请里写明的路径
 
 ```text
@@ -343,7 +350,9 @@ DENY，而是 **MODIFY 收窄**：
 ```text
 # Sandbox: policy adjusted this command's execution.
 # File access (other paths blocked; restrictions override grants):
-#  Read: ...          ← 裁剪后真正生效的范围，project/ 的写不在其中
+#  Read: /etc
+#  Read: /usr/bin  Read: /usr/lib  Read: /usr/sbin  Read: /usr/lib64
+#  Read: /srv/br-demo     ← 裁剪后真正生效的范围：没有任何 Read/write，project/ 的写被削掉
 # /bin/bash: line 1: project/source-guard.txt: Read-only file system
 ```
 
@@ -403,6 +412,94 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 
 ---
 
+## 看过程：每条命令现场生成候选，超限由 daemon 裁掉
+
+cosh 里看到的是结果，过程要到别处看。先说清楚 **daemon 的 journal 里看不到这条链路**：
+`journalctl -u agent-sec-core` 只有扫描类的生命周期日志；意图服务成功时不打日志（失败时只有一行
+`intent proposal failed`，带 `reason`）；授权判定只把 verdict 写进事件日志，不记申请和生效的具体权限；
+Hook 拿到的候选写在临时文件里，`prepare` 结束即删除。所以要从下面三处拼出完整过程。
+
+### 1. 现场：每条 shell 命令都调了意图服务
+
+终端 B 里每条 shell 命令会多出一行，就是 Hook 起的子进程（`sandbox_authorization.py` 的 `_propose`）。
+它在模型返回前一直存活（几秒），0.3 秒轮询抓得到：
+
+```text
+<pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command ./scripts/build-with-setup.sh --cwd /srv/br-demo --format json
+<pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command echo 'demo-change' > project/source-guard.txt --cwd /srv/br-demo --format json
+<pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command rm releases/previous.zip --cwd /srv/br-demo --format json
+```
+
+`--command` 就是 agent 这一轮要执行的命令原文，`--cwd` 是 cosh 的工作目录，意图服务只拿到这两项；
+`<N>` 是 Hook 留给意图服务的时间预算（实测 `38000`）。Case 4 如果 agent 用原生 `read_file`，这里不会
+多出一行：它不经过 Hook。想把这段输出存档，把 `uniq` 换成 `stdbuf -oL uniq` 再重定向到文件，否则
+写文件时 `uniq` 会整块缓冲，停掉之前文件一直是空的。
+
+cosh 里对应的证据是每条 Hook 提示末尾的 `Command permission candidate (not approval).` 和
+`Candidate caveat: ...`。caveat 是模型针对这一条命令写的，所以每条都不一样，每次运行的措辞也会略有出入，例如：
+
+```text
+Case 1  Candidate caveat: 脚本内部行为（其读取、写入、启动子进程及网络访问）无法从命令文本推导，未纳入策略。
+Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm releases/previous.zip 需要写 /srv/br-demo/releases 目录。
+```
+
+### 2. 候选本身：不同命令申请不同权限
+
+要看候选正文，就对同一条命令重放 Hook 那次调用。Hook 用 `--format json` 解析，这里换成 `--format cedar`
+方便阅读，请求内容完全相同：
+
+```bash
+for c in "./scripts/build-with-setup.sh" \
+         "echo 'demo-change' > project/source-guard.txt" \
+         "rm releases/previous.zip"; do
+  echo "== $c"
+  agent-sec-cli intent propose-command --command "$c" --cwd /srv/br-demo --format cedar
+done
+```
+
+一次实测的结果（每行后面的 `// Not covered:` 就是 cosh 里的 caveat）：
+
+| 命令 | 候选申请的权限 | 说明 |
+|---|---|---|
+| `./scripts/build-with-setup.sh` | `file.exec` 脚本本身 | 看不到脚本第 3、4 行写 `out/`、`home/`，所以没有写权限 → Case 1 的 `EROFS` |
+| `echo 'demo-change' > project/source-guard.txt` | `file.write` `/srv/br-demo/project/source-guard.txt` | 重定向目标进了候选 → 超出 R1，Case 2 被裁 |
+| `rm releases/previous.zip` | `file.write` `/srv/br-demo/releases` 与 `releases/*` | 删除按所在目录申请，在 R1 之内 → Case 3 放行，由内核拦 |
+
+重放是重新调一次模型，措辞和范围不保证与现场逐字相同（见[已知边界](#已知边界)）；它证明的是
+"候选按命令生成"，现场那一次以终端 B 和 cosh 提示为准。
+
+### 3. Case 2 的裁剪：候选 ∩ PAP 上限
+
+把三样东西放在一起看：
+
+```bash
+# 上限：PAP 里这一 revision 的 R1，只批 releases/ 与 out/ 的写
+agent-sec-cli policy get --policy-id "$POLICY_ID" --revision 1 \
+  | jq -r .template.content.text | grep -A10 '^@id("R1'
+```
+
+- **申请**（上表第二行）：写 `/srv/br-demo/project/source-guard.txt`；
+- **上限**（R1）：写只到 `releases/`、`out/`，不含 `project/`；
+- **结果**（cosh 提示）：`Sandbox: policy adjusted this command's execution.`，下面的 `File access` 只剩
+  `Read: ...`，没有任何 `Read/write:` 行，也就是申请里的写被削掉了，命令随后报 `Read-only file system`。
+
+判定是 daemon 做的：每条经过 Hook 的命令在 daemon 事件日志里有一条授权回执，Case 2 那条是 `MODIFY`：
+
+```bash
+agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json --include-details 2>/dev/null \
+  | jq -c '.[] | {time: .timestamp[11:19], verdict, decision: .details.decision_id[0:8], exit: .details.result.exit_code}'
+# {"time":"15:21:20","verdict":"ALLOW","decision":"7d989def","exit":1}    ← Case 3（rm 被内核拦，退出码 1）
+# {"time":"15:19:48","verdict":"MODIFY","decision":"569f8711","exit":1}   ← Case 2（PDP 裁剪）
+# {"time":"15:18:17","verdict":"ALLOW","decision":"5f608f95","exit":0}    ← Case 1
+```
+
+最新的在最前，时间是 UTC。`2>/dev/null` 只是去掉 CLI 对 `authorization_receipt` 打的
+`Unknown event_type` 提示，过滤照常生效。原生 `read_file` 不经过 Hook，所以 Case 4 通常没有回执；
+agent 若改用 `cat`，会多一条 `ALLOW`。回执只有 verdict、`decision_id` 与两个摘要（`request_digest`、
+`policy_version`），不含具体权限，所以"裁掉了什么"要按上面三样对照，不能只看回执。
+
+---
+
 ## 审计
 
 两个执行端都会留证据，但落在不同的地方：
@@ -414,13 +511,14 @@ curl -s 'localhost:7396/api/enforcement/violations?limit=5' \
 # unlink  previous.zip  blocked=true
 # read    deploy.env    blocked=true
 
-# daemon：授权判定（Case 1 的 ALLOW、Case 2 的 MODIFY、Case 3/4 的 ALLOW；verdict 随候选浮动）
-agent-sec-cli events --last-hours 1 -o json --include-details \
-  | jq -c '.[] | {verdict: (.verdict // .details.verdict), decision_id: .details.decision_id, exit: .details.result.exit_code}'
+# daemon：授权判定（Case 1 的 ALLOW、Case 2 的 MODIFY、Case 3 的 ALLOW；verdict 随候选浮动）
+agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json --include-details 2>/dev/null \
+  | jq -c '.[] | {verdict, decision_id: .details.decision_id, exit: .details.result.exit_code}'
 ```
 
 `blocked=true` 才代表内核真的拒绝了这次操作；`effect` 是策略编译出来的期望效果，
 两者不能混为一谈（observe 模式下 effect 也可能是 deny，但 blocked 为 false）。
+不加 `--event-type` 时，前 100 条大多是 `pii_scan` 等扫描事件，授权回执会被挤出去。
 
 ---
 
