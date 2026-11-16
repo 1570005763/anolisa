@@ -203,7 +203,7 @@ echo "$POLICY_ID"        # 后面 Scope 引用这一个 policyId，revision 是 
 
 生成物不需要人工修改，直接交给 `policy create`。它是一份裸 `principal` 的 Cedar 正文，
 开头几行是工具补的注释（`// CANDIDATE: not approved; not effective.`、`// unresolved: [...]` 与
-`// COVERAGE: ...`），Cedar 不解析注释，所以不影响发布。`unresolved` 列的是 schema 表达不了、或 task
+`// COVERAGE:` 逐项清单），Cedar 不解析注释，所以不影响发布。`unresolved` 列的是 schema 表达不了、或 task
 没写清而没有生成的要求（例如 task 没写可写范围），供审阅时阅读；本 demo 的 `task.txt` 生成时为 `[]`。
 
 `task.txt` 只有 5 行：一句业务说明、一句可写范围、三条安全要求，每条一句，不写编号含义，
@@ -228,12 +228,19 @@ out/ 里写"），这时它的 `permit` 用该点的编号，不再有 goal 块�
 [policies/task.cedar](policies/task.cedar) 是同一结构的留档，意图服务不可用时可以直接
 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。
 
-导出文件头部的 `// COVERAGE: ...` 按 `@id` 汇总每项要求的语句能由谁承接，例如：
+导出文件头部的 `// COVERAGE:` 按 `@id` 汇总每项要求的语句能由谁承接，一项要求的一个承接端占一行：
 
 ```text
-// COVERAGE: ... base: sandbox and launch authorizer (#1 #2); goal: sandbox and launch authorizer (#3);
-//   R1: runtime protector only, the authorization view drops forbids (#4); R3: runtime protector only, ...
+// COVERAGE: who can carry each requirement, from statement shape only;
+//   a Scope still has to apply it, and a requirement without statements is not listed.
+//   base  #1 #2  sandbox, launch authorizer
+//   goal  #3     sandbox, launch authorizer
+//   R1    #4     runtime protector (authorization view drops forbids)
+//   R3    #5     runtime protector (authorization view drops forbids)
 ```
+
+`#N` 是语句在整份生成物里的序号，按它回到正文就能找到那条规则。`permit` 只由沙箱和授权判定承接，
+`forbid` 只由运行时保护承接；同一项要求既允许又禁止时会各占一行。
 
 它只按语句形状推导，回答"这项要求有没有执行端能表达"，不代表已经生效：是否生效看第三步的
 Binding 状态。没有语句的要求（本例 R2，靠默认拒绝承担）不出现在这里，见 `unresolved`。

@@ -17,7 +17,8 @@
 // Each statement carries `@id` naming the requirement it implements (`base`,
 // `goal`, `R1`, `R1.1` ...). The id is a label, not a route: which consumer takes a
 // statement follows from its shape, `agent-sec-cli intent propose` previews that
-// as `// COVERAGE:`, and only a Scope's Binding shows that a rule was applied.
+// as a `// COVERAGE:` block with one row per requirement and carrier, and only a
+// Scope's Binding shows that a rule was applied.
 //
 // The bare `principal` header is deliberate. The enforcement translator accepts
 // only bare headers, while the PDP only compiles explicit ones; the daemon derives

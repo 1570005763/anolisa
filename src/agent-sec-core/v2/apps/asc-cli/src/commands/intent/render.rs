@@ -133,7 +133,7 @@ pub(super) fn render(
                 .iter()
                 .any(|prefix| note.starts_with(prefix))
                 {
-                    writeln!(out, "// {}", escape(note))?;
+                    write_note(&mut out, "// ", note)?;
                 }
             }
             // Cedar comments may carry ESC/OSC sequences that the parser ignores but a terminal
@@ -161,10 +161,10 @@ pub(super) fn render(
                 .as_array()
                 .ok_or(IntentFailure::Response)?
             {
-                writeln!(
-                    out,
-                    "  {}",
-                    escape(note.as_str().ok_or(IntentFailure::Response)?)
+                write_note(
+                    &mut out,
+                    "  ",
+                    note.as_str().ok_or(IntentFailure::Response)?,
                 )?;
             }
             writeln!(out, "Expires: {} (Unix seconds)\n", expiry(candidate)?)?;
@@ -286,6 +286,16 @@ pub(super) fn display(text: &str, terminal: bool) -> Cow<'_, str> {
 fn direction_control(ch: char) -> bool {
     matches!(ch, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
+
+/// Writes a note line by line, so a multi-line note such as `COVERAGE` keeps its alignment in a
+/// Cedar header and in text output.
+fn write_note(out: &mut impl io::Write, prefix: &str, note: &str) -> io::Result<()> {
+    for line in note.lines() {
+        writeln!(out, "{prefix}{}", escape(line))?;
+    }
+    Ok(())
+}
+
 pub(super) fn escape(text: &str) -> String {
     text.chars()
         .flat_map(|ch| {

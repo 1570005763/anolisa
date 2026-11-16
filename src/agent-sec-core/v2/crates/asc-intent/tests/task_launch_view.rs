@@ -262,21 +262,22 @@ when { resource.path like "/*" };"#;
     assert_eq!(
         requirement_coverage(text).unwrap(),
         [
-            "base: sandbox and launch authorizer (#1)",
-            "R1: sandbox and launch authorizer (#2), sandbox only, the launch authorizer drops it (#4)",
-            "R2: runtime protector only, the authorization view drops forbids (#3)",
-            "no @id: sandbox and launch authorizer (#5)",
+            "base    #1  sandbox, launch authorizer",
+            "R1      #2  sandbox, launch authorizer",
+            "R1      #4  sandbox only (launch authorizer drops it)",
+            "R2      #3  runtime protector (authorization view drops forbids)",
+            "no @id  #5  sandbox, launch authorizer",
         ]
     );
 
     let provider = Scripted::new(vec![Ok(body(PLAIN_SPAWN))]);
     let coverage = notes(&propose(&provider), COVERAGE_NOTE);
     assert_eq!(coverage.len(), 1);
-    assert!(
-        coverage[0].ends_with(
-            "base: sandbox and launch authorizer (#1 #2); no @id: sandbox and launch authorizer \
-             (#3), runtime protector only, the authorization view drops forbids (#4)."
-        ),
-        "{coverage:?}"
+    assert_eq!(
+        coverage[0],
+        "COVERAGE: who can carry each requirement, from statement shape only;\n  a Scope still \
+         has to apply it, and a requirement without statements is not listed.\n  base    #1 #2  \
+         sandbox, launch authorizer\n  no @id  #3     sandbox, launch authorizer\n  no @id  #4     \
+         runtime protector (authorization view drops forbids)"
     );
 }

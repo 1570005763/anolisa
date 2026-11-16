@@ -498,11 +498,17 @@ fn candidate_notes(
         ));
     }
     if !coverage.is_empty() {
-        notes.push(format!(
-            "{COVERAGE_NOTE} who can carry each requirement, from statement shape only; a Scope \
-             still has to apply it and a requirement without statements is not listed: {}.",
-            coverage.join("; ")
-        ));
+        // One row per requirement and carrier, aligned, so an exported header shows at a glance
+        // which execution boundary carries each requirement.
+        let mut note = format!(
+            "{COVERAGE_NOTE} who can carry each requirement, from statement shape only;\n  a Scope \
+             still has to apply it, and a requirement without statements is not listed."
+        );
+        for row in coverage {
+            note.push_str("\n  ");
+            note.push_str(row);
+        }
+        notes.push(note);
     }
     notes
 }

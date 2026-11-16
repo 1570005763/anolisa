@@ -166,9 +166,11 @@ pub fn runtime_view_gaps(text: &str) -> Result<Vec<String>, PolicyError> {
 /// Names which consumers of the published revision can carry each task requirement.
 ///
 /// Statements are grouped by the requirement their `@id` names: `R2` and `R2.1` both belong to
-/// `R2`, and statements without `@id` share one `no @id` group. The result follows
-/// statement shape only; it says who can express a rule, not that a Scope applied it or that a
-/// backend enforces it, and a requirement with no statement does not appear.
+/// `R2`, and statements without `@id` share one `no @id` group. One row per requirement and
+/// carrier lists the statements of that carrier as `#N`, so a reader can match every rule to an
+/// execution boundary without opening the statements. The result follows statement shape only;
+/// it says who can express a rule, not that a Scope applied it or that a backend enforces it, and
+/// a requirement with no statement does not appear.
 ///
 /// # Errors
 /// Rejects text that `prepare_policy` would also reject as unparsable or oversized.
@@ -178,14 +180,14 @@ pub fn requirement_coverage(text: &str) -> Result<Vec<String>, PolicyError> {
         let est = policy.to_json().map_err(|_| PolicyError::Encoding)?;
         let carrier = if policy.effect() == cedar_policy::Effect::Permit {
             if context_fields(&est["conditions"], &mut Vec::new()) {
-                "sandbox only, the launch authorizer drops it"
+                "sandbox only (launch authorizer drops it)"
             } else {
-                "sandbox and launch authorizer"
+                "sandbox, launch authorizer"
             }
         } else if runtime_action(&est).is_some() {
-            "runtime protector only, the authorization view drops forbids"
+            "runtime protector (authorization view drops forbids)"
         } else {
-            "no consumer, the runtime protector refuses it"
+            "no consumer (runtime protector refuses it)"
         };
         let key = match policy.annotation("id") {
             Some(id) => id.split('.').next().unwrap_or(id).to_owned(),
@@ -194,30 +196,41 @@ pub fn requirement_coverage(text: &str) -> Result<Vec<String>, PolicyError> {
         statements.push((key, carrier, index + 1));
     }
     // Requirements and carriers keep the order in which they first appear.
-    let mut lines = Vec::new();
     let mut keys: Vec<&str> = Vec::new();
     for (key, ..) in &statements {
-        if keys.contains(&key.as_str()) {
-            continue;
+        if !keys.contains(&key.as_str()) {
+            keys.push(key);
         }
-        keys.push(key);
+    }
+    let mut rows: Vec<(&str, String, &str)> = Vec::new();
+    for key in keys {
         let mut carriers: Vec<&str> = Vec::new();
-        let mut parts = Vec::new();
         for (_, carrier, _) in statements.iter().filter(|(other, ..)| other == key) {
-            if carriers.contains(carrier) {
-                continue;
+            if !carriers.contains(carrier) {
+                carriers.push(carrier);
             }
-            carriers.push(carrier);
+        }
+        for carrier in carriers {
             let positions: Vec<String> = statements
                 .iter()
-                .filter(|(other, kind, _)| other == key && kind == carrier)
+                .filter(|(other, kind, _)| other == key && *kind == carrier)
                 .map(|(.., position)| format!("#{position}"))
                 .collect();
-            parts.push(format!("{carrier} ({})", positions.join(" ")));
+            rows.push((key, positions.join(" "), carrier));
         }
-        lines.push(format!("{key}: {}", parts.join(", ")));
     }
-    Ok(lines)
+    let key_width = rows.iter().map(|(key, ..)| key.len()).max().unwrap_or(0);
+    let position_width = rows
+        .iter()
+        .map(|(_, positions, _)| positions.len())
+        .max()
+        .unwrap_or(0);
+    Ok(rows
+        .into_iter()
+        .map(|(key, positions, carrier)| {
+            format!("{key:<key_width$}  {positions:<position_width$}  {carrier}")
+        })
+        .collect())
 }
 
 /// Returns the file action of a forbid the runtime protector can lower.

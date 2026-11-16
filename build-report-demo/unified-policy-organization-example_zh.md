@@ -242,6 +242,30 @@ prerequisites:
 
 映射通过规则标识引用 Cedar，没有重新定义 `previous.zip` 路径或 GitHub URL。授权条件只维护在源策略中，映射不能改写这些条件。
 
+### 在策略上如何读出每项要求的执行边界
+
+`enforceBy` 是部署侧的映射，不写进策略正文：正文只说允许什么、禁止什么，写进执行端名称既会随部署变化，也等于让生成模型替部署做决定。为了让边界在同一份文本上可读，`agent-sec-cli intent --format cedar` 在导出的文件头写一段按语句形状推导的 `COVERAGE`，一项要求的一个承接端占一行：
+
+```text
+// COVERAGE: who can carry each requirement, from statement shape only;
+//   a Scope still has to apply it, and a requirement without statements is not listed.
+//   base  #1 #2  sandbox, launch authorizer
+//   goal  #3     sandbox, launch authorizer
+//   R1    #4     runtime protector (authorization view drops forbids)
+//   R3    #5     runtime protector (authorization view drops forbids)
+```
+
+| 正文里的形状 | 行里的承接端 | 与本文 YAML 的对应 |
+| --- | --- | --- |
+| `permit`，条件只用 `resource` | `sandbox, launch authorizer` | `enforceBy` 含 sandbox；授权判定也读这一条 |
+| `permit`，条件里带 `context` | `sandbox only` | 授权视图会丢掉这条，只剩沙箱执行时有效 |
+| `forbid` 作用于 `file.read` / `file.write`、`principal` 留空 | `runtime protector` | `enforceBy` 含 os-harness；授权视图丢弃 `forbid` |
+| 其他 `forbid` | `no consumer` | 没有执行端能承接，发布后整个 Binding 会失败 |
+
+`#N` 是语句在整份生成物中的序号（基础授权占 `#1`、`#2`），按它回到正文就能找到具体那条规则。同一项要求的多条语句落到不同承接端时各占一行；没有语句的要求（例如禁网只靠不授予）不出现，记在 `unresolved`。
+
+这一段只回答"有没有执行端能表达"：它不读部署环境，也不代表已下发。某次运行实际由谁承担，仍以 Scope 的 Binding 状态为准，与 YAML 的 `enforceBy`、`required: all` 同一层次。
+
 源规则标识需要在同一策略内唯一；保留同一业务要求的标识有助于跨版本追踪，但具体语义必须结合 revision 判断。一项要求若拆成多条语句，还应保留要求到语句的对应关系，不能只按数组位置或可变注释识别。
 
 实际编排需要将前置条件转成可执行配置并取得证据。源策略版本、映射版本、目标作用域及具体后端版本应能够关联；映射未完成、依赖未就绪时，不能释放依赖这些保护的操作。
@@ -251,7 +275,7 @@ prerequisites:
 | YAML 字段 | 落在哪里 | 说明 |
 | --- | --- | --- |
 | `rules` 的键（规则标识） | 源策略每条语句的 `@id`，由意图生成写出 | 一项要求多条语句时写 `R1.1`、`R1.2`，按 `.` 前缀归组；三个消费者都接受 `@id`，它不改变语义 |
-| `enforceBy` | 不存储，由各执行端按语句形状推导；`intent propose` 导出时以 `// COVERAGE:` 预览 | 生成时不知道部署环境，模型自报的承接端也不可信；写进源策略还会破坏跨环境复用 |
+| `enforceBy` | 不存储，由各执行端按语句形状推导；`intent propose` 导出时以 `// COVERAGE:` 逐项列出（见上一节） | 生成时不知道部署环境，模型自报的承接端也不可信；写进源策略还会破坏跨环境复用 |
 | `source`、`scopeRef`、`required: all` | `scope create` 引用 `policyId` + `revision`；每个执行端的 Binding 状态 | 预览只说明"能表达"，是否已应用以 Binding `READY` / `APPLY_FAILED` 为准 |
 | `environment`、`mappingRevision`、`prerequisites` | 未实现 | 当前只有环境 C 一种组合；没有语句的要求（如禁网只靠不授予）不进 COVERAGE，列在 `unresolved` |
 
