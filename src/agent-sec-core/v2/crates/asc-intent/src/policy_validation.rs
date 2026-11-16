@@ -168,9 +168,11 @@ pub fn runtime_view_gaps(text: &str) -> Result<Vec<String>, PolicyError> {
 /// Statements are grouped by the requirement their `@id` names: `R2` and `R2.1` both belong to
 /// `R2`, and statements without `@id` share one `no @id` group. One row per requirement and
 /// carrier lists the statements of that carrier as `#N`, so a reader can match every rule to an
-/// execution boundary without opening the statements. The result follows statement shape only;
-/// it says who can express a rule, not that a Scope applied it or that a backend enforces it, and
-/// a requirement with no statement does not appear.
+/// execution boundary without opening the statements. Carriers are the consumers the deployment
+/// knows: `sandbox, PDP` for a permit both read, `sandbox only` for one the launch view drops,
+/// `os-harness` for a forbid the runtime protector lowers, and `none` for one it refuses. The
+/// result follows statement shape only; it says who can express a rule, not that a Scope applied
+/// it or that a backend enforces it, and a requirement with no statement does not appear.
 ///
 /// # Errors
 /// Rejects text that `prepare_policy` would also reject as unparsable or oversized.
@@ -180,14 +182,14 @@ pub fn requirement_coverage(text: &str) -> Result<Vec<String>, PolicyError> {
         let est = policy.to_json().map_err(|_| PolicyError::Encoding)?;
         let carrier = if policy.effect() == cedar_policy::Effect::Permit {
             if context_fields(&est["conditions"], &mut Vec::new()) {
-                "sandbox only (launch authorizer drops it)"
+                "sandbox only"
             } else {
-                "sandbox, launch authorizer"
+                "sandbox, PDP"
             }
         } else if runtime_action(&est).is_some() {
-            "runtime protector (authorization view drops forbids)"
+            "os-harness"
         } else {
-            "no consumer (runtime protector refuses it)"
+            "none"
         };
         let key = match policy.annotation("id") {
             Some(id) => id.split('.').next().unwrap_or(id).to_owned(),

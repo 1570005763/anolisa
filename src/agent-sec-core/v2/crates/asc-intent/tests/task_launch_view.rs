@@ -262,11 +262,11 @@ when { resource.path like "/*" };"#;
     assert_eq!(
         requirement_coverage(text).unwrap(),
         [
-            "base    #1  sandbox, launch authorizer",
-            "R1      #2  sandbox, launch authorizer",
-            "R1      #4  sandbox only (launch authorizer drops it)",
-            "R2      #3  runtime protector (authorization view drops forbids)",
-            "no @id  #5  sandbox, launch authorizer",
+            "base    #1  sandbox, PDP",
+            "R1      #2  sandbox, PDP",
+            "R1      #4  sandbox only",
+            "R2      #3  os-harness",
+            "no @id  #5  sandbox, PDP",
         ]
     );
 
@@ -275,9 +275,10 @@ when { resource.path like "/*" };"#;
     assert_eq!(coverage.len(), 1);
     assert_eq!(
         coverage[0],
-        "COVERAGE: who can carry each requirement, from statement shape only;\n  a Scope still \
-         has to apply it, and a requirement without statements is not listed.\n  base    #1 #2  \
-         sandbox, launch authorizer\n  no @id  #3     sandbox, launch authorizer\n  no @id  #4     \
-         runtime protector (authorization view drops forbids)"
+        "COVERAGE: who can carry each requirement, from statement shape only:\n  permit -> \
+         sandbox + PDP (a permit testing context -> sandbox only);\n  forbid on file.read or \
+         file.write -> os-harness (any other forbid -> none).\n  A Scope still has to apply it; a \
+         requirement without statements is not listed.\n  base    #1 #2  sandbox, PDP\n  no @id  \
+         #3     sandbox, PDP\n  no @id  #4     os-harness"
     );
 }

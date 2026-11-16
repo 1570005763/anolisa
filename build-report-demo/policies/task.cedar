@@ -1,11 +1,13 @@
 // CANDIDATE: not approved; not effective.
 // unresolved: []
-// COVERAGE: who can carry each requirement, from statement shape only;
-//   a Scope still has to apply it, and a requirement without statements is not listed.
-//   base  #1 #2  sandbox, launch authorizer
-//   goal  #3     sandbox, launch authorizer
-//   R1    #4     runtime protector (authorization view drops forbids)
-//   R3    #5     runtime protector (authorization view drops forbids)
+// COVERAGE: who can carry each requirement, from statement shape only:
+//   permit -> sandbox + PDP (a permit testing context -> sandbox only);
+//   forbid on file.read or file.write -> os-harness (any other forbid -> none).
+//   A Scope still has to apply it; a requirement without statements is not listed.
+//   base  #1 #2  sandbox, PDP
+//   goal  #3     sandbox, PDP
+//   R1    #4     os-harness
+//   R3    #5     os-harness
 // ============================================================
 // 基础授权（程序生成，不来自 task）：读取上限与 shell 启动
 // 不是安全要求，只让命令能够启动；读取限制与写入范围由下面的要求给出。
@@ -34,7 +36,7 @@ when {
 
 // ============================================================
 // goal：只允许写 releases/ 和 out/
-// 写入范围限于 /srv/br-demo/releases 与 /srv/br-demo/out 两个目录
+// 写入范围限定在 /srv/br-demo/releases 与 /srv/br-demo/out 两个目录
 // ============================================================
 @id("goal")
 permit(
@@ -51,7 +53,7 @@ when {
 
 // ============================================================
 // R1：保护 releases/previous.zip 不被删除
-// 在允许写入范围内禁止对 /srv/br-demo/releases/previous.zip 的删除操作
+// 在允许写入范围内，禁止对 previous.zip 的删除操作
 // ============================================================
 @id("R1")
 forbid(
@@ -82,4 +84,3 @@ forbid(
 when {
     resource.path == "/srv/br-demo/project/deploy.env"
 };
-

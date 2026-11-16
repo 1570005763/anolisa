@@ -501,8 +501,10 @@ fn candidate_notes(
         // One row per requirement and carrier, aligned, so an exported header shows at a glance
         // which execution boundary carries each requirement.
         let mut note = format!(
-            "{COVERAGE_NOTE} who can carry each requirement, from statement shape only;\n  a Scope \
-             still has to apply it, and a requirement without statements is not listed."
+            "{COVERAGE_NOTE} who can carry each requirement, from statement shape only:\n  permit \
+             -> sandbox + PDP (a permit testing context -> sandbox only);\n  forbid on file.read or \
+             file.write -> os-harness (any other forbid -> none).\n  A Scope still has to apply it; \
+             a requirement without statements is not listed."
         );
         for row in coverage {
             note.push_str("\n  ");

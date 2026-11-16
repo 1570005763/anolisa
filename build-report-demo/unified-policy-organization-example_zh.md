@@ -247,20 +247,22 @@ prerequisites:
 `enforceBy` 是部署侧的映射，不写进策略正文：正文只说允许什么、禁止什么，写进执行端名称既会随部署变化，也等于让生成模型替部署做决定。为了让边界在同一份文本上可读，`agent-sec-cli intent --format cedar` 在导出的文件头写一段按语句形状推导的 `COVERAGE`，一项要求的一个承接端占一行：
 
 ```text
-// COVERAGE: who can carry each requirement, from statement shape only;
-//   a Scope still has to apply it, and a requirement without statements is not listed.
-//   base  #1 #2  sandbox, launch authorizer
-//   goal  #3     sandbox, launch authorizer
-//   R1    #4     runtime protector (authorization view drops forbids)
-//   R3    #5     runtime protector (authorization view drops forbids)
+// COVERAGE: who can carry each requirement, from statement shape only:
+//   permit -> sandbox + PDP (a permit testing context -> sandbox only);
+//   forbid on file.read or file.write -> os-harness (any other forbid -> none).
+//   A Scope still has to apply it; a requirement without statements is not listed.
+//   base  #1 #2  sandbox, PDP
+//   goal  #3     sandbox, PDP
+//   R1    #4     os-harness
+//   R3    #5     os-harness
 ```
 
 | 正文里的形状 | 行里的承接端 | 与本文 YAML 的对应 |
 | --- | --- | --- |
-| `permit`，条件只用 `resource` | `sandbox, launch authorizer` | `enforceBy` 含 sandbox；授权判定也读这一条 |
+| `permit`，条件只用 `resource` | `sandbox, PDP` | `enforceBy` 含 sandbox；daemon PDP 也读这一条 |
 | `permit`，条件里带 `context` | `sandbox only` | 授权视图会丢掉这条，只剩沙箱执行时有效 |
-| `forbid` 作用于 `file.read` / `file.write`、`principal` 留空 | `runtime protector` | `enforceBy` 含 os-harness；授权视图丢弃 `forbid` |
-| 其他 `forbid` | `no consumer` | 没有执行端能承接，发布后整个 Binding 会失败 |
+| `forbid` 作用于 `file.read` / `file.write`、`principal` 留空 | `os-harness` | `enforceBy` 含 os-harness；授权视图丢弃 `forbid` |
+| 其他 `forbid` | `none` | 没有执行端能承接，发布后整个 Binding 会失败 |
 
 `#N` 是语句在整份生成物中的序号（基础授权占 `#1`、`#2`），按它回到正文就能找到具体那条规则。同一项要求的多条语句落到不同承接端时各占一行；没有语句的要求（例如禁网只靠不授予）不出现，记在 `unresolved`。
 

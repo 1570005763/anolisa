@@ -232,16 +232,19 @@ out/ 里写"），这时它的 `permit` 用该点的编号，不再有 goal 块�
 导出文件头部的 `// COVERAGE:` 按 `@id` 汇总每项要求的语句能由谁承接，一项要求的一个承接端占一行：
 
 ```text
-// COVERAGE: who can carry each requirement, from statement shape only;
-//   a Scope still has to apply it, and a requirement without statements is not listed.
-//   base  #1 #2  sandbox, launch authorizer
-//   goal  #3     sandbox, launch authorizer
-//   R1    #4     runtime protector (authorization view drops forbids)
-//   R3    #5     runtime protector (authorization view drops forbids)
+// COVERAGE: who can carry each requirement, from statement shape only:
+//   permit -> sandbox + PDP (a permit testing context -> sandbox only);
+//   forbid on file.read or file.write -> os-harness (any other forbid -> none).
+//   A Scope still has to apply it; a requirement without statements is not listed.
+//   base  #1 #2  sandbox, PDP
+//   goal  #3     sandbox, PDP
+//   R1    #4     os-harness
+//   R3    #5     os-harness
 ```
 
-`#N` 是语句在整份生成物里的序号，按它回到正文就能找到那条规则。`permit` 只由沙箱和授权判定承接，
-`forbid` 只由运行时保护承接；同一项要求既允许又禁止时会各占一行。
+`#N` 是语句在整份生成物里的序号，按它回到正文就能找到那条规则。`permit` 由 Sandbox 与 daemon PDP
+承接（带 `context` 的那条 PDP 会丢掉，只剩 Sandbox）；`forbid` 由 OS Harness（ActPlane）承接，
+转译不了的 `forbid`（如 `network.use`）写 `none`。同一项要求既允许又禁止时会各占一行。
 
 它只按语句形状推导，回答"这项要求有没有执行端能表达"，不代表已经生效：是否生效看第三步的
 Binding 状态。没有语句的要求（本例 R2，靠默认拒绝承担）不出现在这里，见 `unresolved`。
