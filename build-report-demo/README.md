@@ -651,14 +651,30 @@ agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json -
 ## 清理
 
 ```bash
-agent-sec-cli scope delete --scope-id <scopeId>
-agent-sec-cli policy delete --policy-id "$POLICY_ID" --revision 1     # br-cosh-task（只有这一份）
+# Scope 和 Policy 的 id 都从 list 里现查，不用回翻前面的输出：Scope 按 selector 的
+# process-name 认，Policy 按名字认（重跑演示会留下多份，这里一次删干净）。
+agent-sec-cli scope list \
+  | jq -r '.items[] | select(.selector.match.processName == "cosh") | .scopeId' \
+  | while read -r id; do agent-sec-cli scope delete --scope-id "$id"; done
+
+agent-sec-cli policy list \
+  | jq -r '.items[] | select(.policyName == "br-cosh-task") | "\(.policyId) \(.revision)"' \
+  | while read -r id rev; do
+      agent-sec-cli policy delete --policy-id "$id" --revision "$rev" | jq -c .policyId
+    done
 
 # fixture 复位（Case 1 写入的 out/ 等）
 bash build-report-demo/prepare.sh /srv/br-demo
 ```
 
-重跑一遍演示：退出 cosh → 执行上面三行 → 从第一步开始。
+两个 list 为空时这段什么都不删。删完核对一遍，两条都应是 `0`：
+
+```bash
+agent-sec-cli scope list | jq '.items | length'
+agent-sec-cli policy list | jq '.items | length'
+```
+
+重跑一遍演示：退出 cosh → 执行上面这段 → 从第一步开始。
 
 安装模板没动过，不需要恢复；`/etc/agent-sec/intent.env` 和 daemon 的 drop-in 是常驻配置，留着即可。
 演示时用到的临时候选文件由 Hook 自己删（`NamedTemporaryFile` 随 `prepare` 结束关闭）。
