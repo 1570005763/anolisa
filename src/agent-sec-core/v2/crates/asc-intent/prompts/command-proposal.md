@@ -39,6 +39,13 @@ policy 只写静态可确定的部分；PATH 未解析、脚本内部行为、�
 - 目录必须成对写成 resource.path == "<目录>" 与 resource.path like "<目录>/*"；只写其中一条会被执行端以 point-only or descendants-only directory permissions 拒绝。
 - schema 没有独立的 delete、rename 动作，仍用 file.write 表达，并在 caveats 说明"删除/重命名以所在目录的写权限表达"。
 
+## 原地修改
+
+sed -i、perl -i、编辑器保存和 `> F.tmp && mv F.tmp F` 先把内容写进同目录的临时文件，再 rename 覆盖 F：临时文件是新的目录项，所以除 F 本身外还需要 F 所在目录的写权限。
+
+- 命令会在同目录建临时文件（sed -i、perl -i、mv 覆盖等）：写 F，并按上一节成对写 F 的父目录，caveats 说明"原地修改需要同目录的临时文件"。
+- 只覆盖已存在文件的内容（`> F`、`tee F`、`cat > F`）：不建目录项，只写 F。
+
 ## schema 约束
 
 仅用 schema 定义的类型、动作和字段；principal 未绑定，文件用 resource is SecCore::File 与 resource.path。== 与 != 只接具体绝对路径（如 == "/work/repo/report.csv"）；目录子树必须写 like "/work/repo/src/*"，不要写 == "/work/repo/src/*"。process.spawn 的 resource 是 SecCore::Process，其 program 是程序名（如 "git"），不是路径，不要写 resource.path。
