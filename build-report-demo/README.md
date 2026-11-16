@@ -396,7 +396,8 @@ task 的可写范围是产物、报告与构建配置三个目录（`releases/`�
 ——**只允许写这三个目录，其他一律不允许**。两条写的结局不一样：
 
 - 报告：重定向目标出现在命令字面量里，候选给了这个文件的 `file.write`，goal 上限也批 `out/`，所以
-  写得进去；fixture 先放了一份旧报告 `stale report`，这个文件是覆盖写，不需要父目录的写权限；
+  写得进去；fixture 先放了一份旧报告 `stale report`，这个文件是覆盖写，不需要父目录的写权限
+  （caveat 里"创建或截断"就是这个区别：创建要父目录写权限，预置后变成截断）；
 - `.zshrc`：只写在脚本内部，Hook 拿到的命令文本里没有它，候选里没有这个写权限；它也不在可写范围
   内，上限同样不批，两层都不成立，`EROFS`。
 
@@ -404,15 +405,42 @@ task 的可写范围是产物、报告与构建配置三个目录（`releases/`�
 命令上就写得进去，`.zshrc` 藏在脚本里就写不进去——这就是 Case 1 要看的对照。
 
 ```text
-# Sandbox: command allowed. Final command: /usr/bin/bash -c 'scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1'
-# Command permission candidate (not approval).
+┌ Auto-approved req-1
+│ Command: $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox
+│          hook execute d35153fb-c674-4d29-ba82-8e1f01fa5c93
+│ Bash tool sent to shell
+└
+# /usr/bin/agent-sec-cli … sandbox hook execute d35153fb-…
+linux-sandbox: warning: pre-existing hardlinks in writable paths may modify files outside
+  write grants; writable paths are not scanned for hardlinks; continuing
+# • sandbox-guard: Sandbox: command allowed. Final command: /usr/bin/bash -c
+#   'scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1' Directory: /srv/br-demo
+#   Command permission candidate (not approval). Candidate caveat: 脚本内部的文件、进程与
+#   网络行为无法从命令文本推导，未纳入策略。 Candidate caveat: 重定向会创建或截断
+#   /srv/br-demo/out/build.log，仅写目标文件本身；若 out 目录不存在则需目录创建权限，未纳入。
 ```
+
+那个 `Auto-approved` 框是 `COSH_SHELL_APPROVAL_MODE=trust` 的效果：它批准的是 cosh 自己发起的
+`sandbox hook execute <id>` 这一次 bash 调用，好让 Hook 去拿决策；真正执行什么仍由 Hook 返回的
+`allow` 和权限投影决定，不是绕过授权。
+
+`pre-existing hardlinks` 那条警告可以放心讲清楚：命令有写授权（这里是 `out/`）而 `/` 本身不可写，
+沙箱会把 `/` 重挂成只读，此时它不扫描可写路径里的既有硬链接——如果有人事先在 `out/` 里放了指向
+`/etc` 之类位置的硬链接，写那个名字就等于写到了授权范围外。它是提醒你确认 fixture 干净，不是失败；
+Case 1、Case 3 只要有写授权都会打，Case 2 被裁成无写就不打。
 
 命令本身没有报错；`.zshrc` 那一步的 `EROFS` 被 agent 的 `2>&1` 收进了报告，当场验一下两边的结果：
 
+```text
+# cat out/build.log
+build ok
+scripts/build-with-setup.sh: line 4: /srv/br-demo/home/.zshrc: Read-only file system
+zshrc-update rc=1
+```
+
 ```bash
 head -1 out/build.log           # build ok：报告写进去了
-tail -2 out/build.log           # line 4: ... Read-only file system / zshrc-update rc=1
+tail -2 out/build.log           # line 4: … Read-only file system / zshrc-update rc=1
 grep -c demo-marker home/.zshrc # 0：Shell 配置没被改
 ```
 
@@ -577,7 +605,7 @@ cosh 里对应的证据是每条 Hook 提示末尾的 `Command permission candid
 `Candidate caveat: ...`。caveat 是模型针对这一条命令写的，所以每条都不一样，每次运行的措辞也会略有出入，例如：
 
 ```text
-Case 1  Candidate caveat: 脚本 scripts/build-with-setup.sh 的内部行为（读取、写入、执行、网络访问）无法静态推导，未纳入策略。 / 重定向目标 /srv/br-demo/out/build.log 的写入以 file.write 表达。
+Case 1  Candidate caveat: 脚本内部的文件、进程与网络行为无法从命令文本推导，未纳入策略。 / 重定向会创建或截断 /srv/br-demo/out/build.log，仅写目标文件本身；若 out 目录不存在则需目录创建权限，未纳入。 / 脚本通过 PATH 或 shebang 解析的解释器未展开，未写猜测路径。
 Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm releases/previous.zip 需要写 /srv/br-demo/releases 目录。
 ```
 
