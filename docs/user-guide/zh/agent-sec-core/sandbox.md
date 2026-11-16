@@ -323,15 +323,15 @@ Hook 在 sandbox 包装之前，将包含 `sudo` 的原始命令及规范化 cwd
 
 Hook 按 JSON 的 `outcome` 分支，不能仅凭退出码放行：
 
-- `candidate`：展示 `caveats`，将 Cedar 与运行预设合并，复用转换、初始调用校验及
+- `candidate`：将 Cedar 与运行预设合并，复用转换、初始调用校验及
   路径绑定。任一来源的 forbid 均保留。
 - 空候选不申请业务权限，仅由明确的运行预设提供许可；PDP 仍可拒绝或收窄。
 - `needs_clarification`：说明缺失信息，并在授权前停止。
 - 接口不可用、异常响应、转换失败及超时均阻断，不回退固定权限或无隔离执行。
   脚本内部行为未知只作为 caveat，不自动扩大权限。
 
-Hook 响应完整保留 caveats；当前 Cosh 原生审批面板可能截短较长的 caveat 行，
-本接入不保证在该面板内可以读到完整文本。
+caveats 仍保留在候选结果和非 `ask` 的 Hook 响应中。对于 `ask`，Hook 保留 PDP
+审批文案，不再追加候选提示或 caveats。
 
 候选只是申请，不写入 PAP。PDP 根据当前策略集决定 `effective_permissions`，结果受申请权限约束。
 仍受上述 Cedar 映射限制约束：不存在的文件字面量会导致权限准备失败，不会隐式转为

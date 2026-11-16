@@ -567,6 +567,8 @@ class Harness:
                         if item["method"] == "intent.propose_command"
                     ]
                     caveats = proposals[-1]["response"].get("caveats", [])
+                    assert "Command permission candidate (not approval)." not in screen
+                    assert "Candidate caveat:" not in screen
                     save(
                         home / "approval-observation.json",
                         {
@@ -788,18 +790,12 @@ class Harness:
                 assert "UNKNOWN_WRITE_DENIED" in json.dumps(results), row
                 assert caveats, row
                 assert all(
-                    item["prefix_present_in_pty_transcript"]
+                    not item["prefix_present_in_pty_transcript"]
                     for item in row["approval"]["caveats"]
                 ), row
                 row["outside_script_target"] = "native-control"
         assert self.protected.read_text() == "unchanged", row
         row["status"] = "PASS"
-        if case in TTY_CASES and any(
-            not item["present_in_pty_transcript"] for item in row["approval"]["caveats"]
-        ):
-            row["display_limit"] = (
-                "The native approval transcript contains the caveat prefix but clips its full text."
-            )
         save(home / "result.json", row)
         print("PASS", case, flush=True)
         return row

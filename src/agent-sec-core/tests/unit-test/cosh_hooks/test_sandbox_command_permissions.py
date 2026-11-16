@@ -98,10 +98,13 @@ def test_candidate_uses_same_command_cwd_and_private_cleaned_file(
     monkeypatch.setattr(bridge.subprocess, "run", run)
     result = bridge.prepare_authorized(dynamic, command)
     assert result["decision"] == decision
-    assert (
-        "Empty candidate: no business permissions requested" in result["systemMessage"]
-    )
-    assert CANDIDATE["caveats"][0] in result["reason"]
+    if decision == "ask":
+        assert result == authorized(decision)
+    else:
+        for key in ("reason", "systemMessage"):
+            assert "Command permission candidate (not approval)." in result[key]
+            assert "Empty candidate: no business permissions requested" in result[key]
+            assert CANDIDATE["caveats"][0] in result[key]
     assert len(calls) == 2
     assert all(not path.exists() for path in paths)
 

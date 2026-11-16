@@ -357,7 +357,8 @@ root 所有权及父目录安全属性必须有效；配置或依赖失败不降
 `AGENT_SEC_COSH_SANDBOX_RUNTIME_PERMISSIONS` 指定的 Cedar 预设通过
 `PermissionInput::with_runtime` 合并，保留 forbid，复用转换、调用校验和路径绑定。
 运行预设替代固定模板，其 cwd/tmp 许可和 Git 保护不自动继承。空候选仅申请运行预设；
-澄清、异常和超时阻断，无隐式放权。caveats 显示到原生通知/审批说明。候选按调用临时存放
+澄清、异常和超时阻断，无隐式放权。非 `ask` 的 Hook 响应保留 caveats；`ask` 审批文案
+不追加候选提示或 caveats。候选按调用临时存放
 并在 prepare 后清理；不写 PAP，finish 无需候选文件或固定模板。
 当前 PAP 集合的参与条件及独立授权配置移除见 Sandbox 指南；任务限制须实际参与
 请求策略集并以 forbid 或受约束的 permit 表达，不能依赖旧的分层交集语义。
