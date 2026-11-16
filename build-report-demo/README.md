@@ -188,6 +188,18 @@ agent-sec-cli intent propose-command \
 bash build-report-demo/prepare.sh /srv/br-demo
 ```
 
+**开跑前固定做一次 30 秒检查**。演示时最常见的翻车不是配置错，而是上一轮没清干净：
+
+```bash
+pgrep -ax cosh || echo "no cosh"                 # 必须空，包括其他 SSH 会话里的
+agent-sec-cli scope list  | jq '.items|length'   # 必须 0
+agent-sec-cli policy list | jq '.items|length'   # 必须 0
+bash build-report-demo/prepare.sh /srv/br-demo   # 复位 fixture（含 previous.zip 与旧报告）
+```
+
+`max_active_bindings = 1`：只要还有别的 cosh 在跑，新启动的 cosh 会拿到 `APPLY_FAILED`，R1、R3
+对它不生效，Case 3 的 `previous.zip` 会被真的删掉，Case 4 也不拦。中途重跑同样从这四条开始。
+
 **不需要改 `/etc/agent-sec/sandbox/permissions.json.template`**：command 模式下 Hook 完全不读安装模板
 （也就不继承它的 cwd/tmp 写权限与 `.git` 保护），`--permissions` 用的就是意图服务这一轮产出的候选，
 执行侧事实（解释器、系统目录、`cwd`）由 Hook 从本次 launch 合成。
@@ -667,7 +679,8 @@ agent-sec-cli policy list \
 bash build-report-demo/prepare.sh /srv/br-demo
 ```
 
-两个 list 为空时这段什么都不删。删完核对一遍，两条都应是 `0`：
+两个 list 为空时这段什么都不删。删完核对三样：两个 list 都是 `0`，且 `pgrep -ax cosh` 没有输出。
+`prepare.sh` 会把 `source-guard.txt`、`previous.zip` 和 `out/build.log` 一并复位，下一轮从干净状态开始。
 
 ```bash
 agent-sec-cli scope list | jq '.items | length'
@@ -718,6 +731,9 @@ agent-sec-cli policy list | jq '.items | length'
   以及覆盖受保护目标等路径。演示只承诺"新文件可写、已有文件不可删"。
 - **`file.write` 的 forbid 必须带 `context.input.operation`**：不带 operation 的 `file.write`
   会被转译器拒绝（无法确定是 delete 还是普通写）。
+- **残留的 cosh 会占掉唯一的 Binding 名额**：上一轮退出不彻底时，新启动的 cosh 拿到 `APPLY_FAILED`，
+  R1、R3 对它完全不生效（`previous.zip` 被真删、`deploy.env` 能读到）。开跑前先 `pgrep -ax cosh`，
+  有残留就先退出它，再 `scope delete` + `prepare.sh` 重来。
 - **Binding 晚于 cosh 启动，靠收养兜住已有子进程**：Binding 必须等 cosh 进程出现才能建，而 cosh 会在
   这之前 fork 出内部 PTY bash。enforcer 下发时按 `/proc` 父子关系把这些已存在的子孙进程收进策略域
   （日志 `adopted N pre-existing descendants`）。这一步要求 enforcer 与 cosh 在同一个 PID 命名空间；
