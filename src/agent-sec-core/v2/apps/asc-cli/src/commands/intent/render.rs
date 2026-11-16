@@ -4,7 +4,7 @@
 use asc_daemon_protocol::intent::{INTENT_RESULT_BYTES, IntentProposeResult};
 use asc_intent::{
     Artifact, CANDIDATE_VERSION, COVERAGE_NOTE, DRAFT_VERSION, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE,
-    PROMPT_VERSION, RUNTIME_VIEW_NOTE, prepare_policy, validate_policy_response,
+    PROMPT_VERSION, RUNTIME_VIEW_NOTE, prepare_task_policy, validate_policy_response,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -63,7 +63,7 @@ pub(super) fn validate(value: &Value, task: &str, ttl: u32) -> Result<(), Intent
         serde_json::from_value(value["artifact"].clone()).map_err(|_| bad())?;
     // A digest is not a signature; only rebuilding the artifact reveals model output that was
     // swapped after its hash was recomputed.
-    let expected = prepare_policy(string(&value["draft"], "policy")?).map_err(|_| bad())?;
+    let expected = prepare_task_policy(string(&value["draft"], "policy")?).map_err(|_| bad())?;
     if artifact.language != expected.language
         || artifact.text != expected.text
         || artifact.schema_sha256 != expected.schema_sha256
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn tampered_artifact_hash_and_versions_are_rejected() {
         let policy = "permit(principal, action == SecCore::Action::\"file.read\", resource is SecCore::File) when { resource.path == \"/work/report.csv\" };";
-        let artifact = prepare_policy(policy).unwrap();
+        let artifact = prepare_task_policy(policy).unwrap();
         let mut candidate = json!({"format_version":CANDIDATE_VERSION, "status":"CANDIDATE", "authorization_required":true,
             "draft":{"format_version":DRAFT_VERSION, "status":"DRAFT", "prompt_version":PROMPT_VERSION,
                 "source":{"source_id":"source", "kind":"task_text", "sha256":digest(b"task"), "byte_length":4},

@@ -4,7 +4,7 @@
 use asc_intent::{
     CANDIDATE_VERSION, CEDAR_SCHEMA, CandidatePolicy, DRAFT_VERSION, INTENT_BUDGET, IntentSpec,
     MAX_POLICY_BYTES, PROMPT_VERSION, PolicyError, ProposalContext, ProposalError, ProposalOutcome,
-    TaskInput, compile_spec, prepare_policy, propose_task, validate_policy_response,
+    TASK_BASE, TaskInput, compile_spec, prepare_policy, propose_task, validate_policy_response,
 };
 use asc_model_client::provider::{FakeProvider, ModelProvider, ProviderError};
 use cedar_policy::{
@@ -38,6 +38,10 @@ fn candidate(policy: &str) -> Box<CandidatePolicy> {
             panic!("{}", serde_json::to_string(&other).unwrap());
         }
     }
+}
+/// The model text of a candidate, after the launch base the program puts ahead of it.
+fn model_text(candidate: &CandidatePolicy) -> &str {
+    candidate.policy_text().strip_prefix(TASK_BASE).unwrap()
 }
 fn uid(kind: &str, id: &str) -> EntityUid {
     EntityUid::from_type_name_and_id(EntityTypeName::from_str(kind).unwrap(), EntityId::new(id))
@@ -260,9 +264,11 @@ fn deny_etc_matrix(policy: &str) {
 #[test]
 fn direct_cedar_generation_and_model_boundaries() {
     let proposed = candidate(DENY_ETC);
-    assert_eq!(proposed.policy_text(), DENY_ETC);
-    deny_etc_matrix(proposed.policy_text());
-    generic_candidate(&serde_json::to_value(&proposed).unwrap());
+    // The program puts the launch base ahead of the model text; the draft keeps the model text.
+    assert_eq!(proposed.policy_text(), format!("{TASK_BASE}{DENY_ETC}"));
+    let value = serde_json::to_value(&proposed).unwrap();
+    assert_eq!(value["draft"]["policy"], DENY_ETC);
+    generic_candidate(&value);
     model_policy_is_authoritative();
     literal_and_root_paths();
     condition_and_exclusive_boundaries();
@@ -279,26 +285,29 @@ fn model_policy_is_authoritative() {
     let proposed = candidate("permit(principal, action, resource); // model trailing comment");
     assert_eq!(
         proposed.policy_text(),
-        "permit(principal, action, resource); // model trailing comment"
+        format!("{TASK_BASE}permit(principal, action, resource); // model trailing comment")
     );
-    let judge = Judge::new(proposed.policy_text());
+    let judge = Judge::new(model_text(&proposed));
     for path in ["/", "/etc", "/work/config/keep.txt"] {
         for op in ["write", "create", "delete", "rename", "setattr"] {
             judge.write(path, op, Decision::Allow);
         }
         judge.read(path, Decision::Allow);
     }
-    // An empty policy stays empty; Cedar itself supplies the default deny.
+    // An empty draft adds nothing to the base; Cedar itself supplies the default deny.
     let empty = candidate("");
-    assert_eq!(empty.policy_text(), "");
-    let original = Judge::new(empty.policy_text());
+    assert_eq!(empty.policy_text(), TASK_BASE);
+    let based = Judge::new(empty.policy_text());
+    based.read("/work/report.csv", Decision::Allow);
+    based.write("/work/report.csv", "write", Decision::Deny);
+    let original = Judge::new(model_text(&empty));
     for path in ["/", "/etc", "/work", "/work/report.csv"] {
         original.read(path, Decision::Deny);
         for op in ["write", "create", "delete", "rename", "setattr"] {
             original.write(path, op, Decision::Deny);
         }
     }
-    let combined = Judge::combined(empty.policy_text());
+    let combined = Judge::combined(model_text(&empty));
     combined.read("/work/report.csv", Decision::Allow);
     combined.write("/etc/hosts", "delete", Decision::Allow);
     generic_candidate(&serde_json::to_value(&empty).unwrap());
@@ -320,7 +329,7 @@ fn literal_and_root_paths() {
             json!(path)
         );
         let proposed = candidate(&policy);
-        let judge = Judge::new(proposed.policy_text());
+        let judge = Judge::new(model_text(&proposed));
         judge.read(path, Decision::Allow);
         judge.read(&format!("{path}/child"), Decision::Deny);
         judge.read(&format!("{path}-neighbor/file"), Decision::Deny);
@@ -330,7 +339,7 @@ fn literal_and_root_paths() {
     let root = r#"permit(principal, action == SecCore::Action::"file.read", resource is SecCore::File)
 when { resource.path == "/" || resource.path like "/*" };"#;
     let proposed = candidate(root);
-    let judge = Judge::new(proposed.policy_text());
+    let judge = Judge::new(model_text(&proposed));
     judge.read("/", Decision::Allow);
     judge.read("/etc/hosts", Decision::Allow);
     judge.write("/etc/hosts", "create", Decision::Deny);
@@ -355,7 +364,7 @@ unless { resource.path == "/usr/bin/git" && context.input.cwd == "/work"
  && context.input.args == [{index:0,value:"a"},{index:1,value:"a"},{index:2,value:""},{index:3,value:"quote\"\\*"}] };
 "#;
     let proposed = candidate(policy);
-    let judge = Judge::new(proposed.policy_text());
+    let judge = Judge::new(model_text(&proposed));
     judge.read("/work/data", Decision::Deny);
     judge.check(
         "file.read",
@@ -376,7 +385,7 @@ unless { resource.path == "/usr/bin/git" && context.input.cwd == "/work"
         wrong["input"][field] = json!(0);
         judge.check("file.write", "/work/report", wrong, Decision::Deny);
     }
-    let combined = Judge::combined(proposed.policy_text());
+    let combined = Judge::combined(model_text(&proposed));
     let args = ["a", "a", "", "quote\"\\*"];
     for judge in [&judge, &combined] {
         judge.check(
@@ -420,7 +429,7 @@ when { resource.path == "/work/report" && context.input.operation == SecCore::Wr
 forbid(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
 when { context.input.operation == SecCore::WriteOperation::"write" && resource.path != "/work/report" };"#;
     let proposed = candidate(exclusive);
-    let judge = Judge::combined(proposed.policy_text());
+    let judge = Judge::combined(model_text(&proposed));
     judge.write("/work/report", "write", Decision::Allow);
     judge.write("/other", "write", Decision::Deny);
     for op in ["create", "delete", "rename", "setattr"] {
@@ -560,11 +569,11 @@ fn unresolved_is_not_a_completeness_proof() {
         panic!("expected candidate");
     };
     assert_eq!(candidate.unresolved(), gaps);
-    let judge = Judge::new(candidate.policy_text());
+    let judge = Judge::new(model_text(&candidate));
     judge.read("/read", Decision::Allow);
     judge.read("/audited", Decision::Deny);
     judge.check("network.use", "", json!({}), Decision::Deny);
-    let combined = Judge::combined(candidate.policy_text());
+    let combined = Judge::combined(model_text(&candidate));
     combined.check(
         "file.exec",
         "/usr/bin/git",
@@ -575,15 +584,15 @@ fn unresolved_is_not_a_completeness_proof() {
     let empty = propose(&json!({"policy":"","unresolved":["Only list names"]})).unwrap();
     assert_eq!(
         serde_json::to_value(empty).unwrap()["candidate"]["artifact"]["text"],
-        ""
+        TASK_BASE
     );
 }
 
 fn exact_delete_matrix() {
     let response = include_str!("../../../fixtures/intent/protect-delete/policy.cedar");
     let proposed = candidate(response);
-    let original = Judge::new(proposed.policy_text());
-    let combined = Judge::combined(proposed.policy_text());
+    let original = Judge::new(model_text(&proposed));
+    let combined = Judge::combined(model_text(&proposed));
     for judge in [&original, &combined] {
         judge.write("/work/config/important.txt", "delete", Decision::Deny);
         for path in [

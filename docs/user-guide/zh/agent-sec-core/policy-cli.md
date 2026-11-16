@@ -147,7 +147,9 @@ agent-sec-cli intent propose \
 安全提示及有效期。`--format cedar` 输出待审 Cedar，注释中附未解决要求；
 仅当 stdout 是终端时转义 Cedar 中的控制字符，重定向或管道输出保留模型原文；
 `--format json` 输出完整结果。
-模型 policy 为空时，`artifact.text` 为空。任何模式都不会读取键盘输入，也不发起审批。
+`artifact.text` 由程序生成的固定基础授权（读整个文件系统、启动 bash）加模型 policy 组成；
+模型 policy 为空时只有基础授权。模型只写 task 的要求，且只在 task 写明的可写位置授予写入。
+任何模式都不会读取键盘输入，也不发起审批。
 默认通信预算为 45 秒；模型调用最多 30 秒，调大 `--timeout-ms` 不会延长模型预算。
 `--ttl` 为 `1..=1800` 秒，默认 `1800`，从 daemon 收到请求时计时，不自动续期。
 

@@ -185,8 +185,11 @@ Default `--format text` displays the original task, model Cedar draft, `unresolv
 validated Cedar, safety notes and expiry. `--format cedar`
 prints the candidate Cedar with unresolved requirements in comments; `--format json` prints
 the complete result. Cedar control characters are escaped only while stdout is a terminal;
-redirected or piped output keeps the model text unchanged. If the model policy is empty,
-`artifact.text` is empty. No format prompts for input or requests approval.
+redirected or piped output keeps the model text unchanged. `artifact.text` is a fixed
+launch base written by the program (read the whole filesystem, launch bash) followed by the
+model policy; if the model policy is empty, it is the base alone. The model writes the
+task's requirements only, and grants file writes only where the task names a writable
+location. No format prompts for input or requests approval.
 Communication defaults to 45 seconds; the model has at most 30 seconds, unaffected
 by increasing `--timeout-ms`. `--ttl` accepts `1..=1800` seconds, default `1800`,
 starting when the daemon receives the request, without automatic renewal.

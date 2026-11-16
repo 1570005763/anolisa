@@ -177,9 +177,10 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
 ### 7.1 四步演示
 
 **改了哪里**
-- `task.txt`：写全边界——读上限为整个文件系统、写范围 `releases/` 与 `out/`、`previous.zip` 禁删、
-  `deploy.env` 精确禁读、程序启动按 program 字符串匹配、禁网；明确不要精确授权解释器入口。
-- `policies/task.cedar`：与当前生成物同结构的留档（意图服务不可用时可直接 `--file` 发布）。
+- `task.txt`：5 行——一句业务说明、一句可写范围（`releases/` 与 `out/`）、三条安全要求（`previous.zip` 禁删、
+  禁网、`deploy.env` 禁读），每条一句。读上限与 bash 启动由程序生成的基础授权给出，不写进 task；
+  写入范围只照抄 task 写明的位置，成 `goal` 块，因此多次生成结果一致。
+- `policies/task.cedar`：与当前生成物同结构的留档（基础授权、goal、R1–R3；意图服务不可用时可直接 `--file` 发布）。
 - `prepare.sh`：新增 Case 1 脚本 `scripts/build-with-setup.sh`、演示用 `home/.zshrc`、模拟凭据 `project/deploy.env`。
 - `run-demo.sh`：ActPlane 改为绑定统一策略，不再用第二份 `actplane.cedar`。
 - `README.md`：开头一张架构图（task.txt → 意图服务 → PAP → Sandbox / PDP / ActPlane → cosh）加一张完整流程图，后者覆盖完整链路（task.txt → 意图服务 → task.cedar → PAP 三个消费者 → Scope → cosh/Binding/收养 → 四个 prompt 各自落到哪个 case）；四步流程、四个 prompt 与预期输出、cosh 的 4 个环境变量、确认 `READY` 与收养日志、审计、清理、已知边界。
@@ -188,7 +189,7 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
 落实"一份策略、一个 revision、四步演示"，并让 fixture 覆盖四个 case 所需的对象。
 
 **不改会怎样**
-没有 Case 1/4 的受保护对象；任务文本不全导致生成物缺 `[H2]` 或带软链点授权；README 与实际流程不一致，演示时要临场改策略。
+没有 Case 1/4 的受保护对象；写入范围由模型推导时每次生成结果不同；README 与实际流程不一致，演示时要临场改策略。
 
 ### 7.2 组件 RPM 重建脚本
 

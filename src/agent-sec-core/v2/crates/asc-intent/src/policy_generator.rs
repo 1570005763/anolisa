@@ -2,7 +2,8 @@
 //! installation into an execution backend.
 //!
 //! 1. task text + shared schema -> model Cedar draft and model-reported unresolved items.
-//! 2. official parser + canonical absolute-path check + Strict validation -> Cedar artifact.
+//! 2. [`TASK_BASE`] + draft -> official parser + canonical absolute-path check + Strict
+//!    validation -> Cedar artifact.
 //! 3. artifact + raw draft + TTL and hash -> unapproved candidate.
 //!
 //! A draft rejected as an unsupported feature or a non-canonical path becomes
@@ -40,6 +41,50 @@ pub const POINT_ALIAS_NOTE: &str = "POINT ALIAS:";
 pub const RUNTIME_VIEW_NOTE: &str = "RUNTIME VIEW:";
 /// Prefix of the note naming which consumers can carry each task requirement.
 pub const COVERAGE_NOTE: &str = "COVERAGE:";
+
+/// Launch base every task artifact carries ahead of the model text.
+///
+/// It is a platform fact, not a task requirement: the Hook launches every command as `bash -c`
+/// and how many system directories a launch reads is not predictable, so the read ceiling is the
+/// whole filesystem and the actual read limits come from the requirements. The model only sees
+/// the task text and cannot know either, so the program writes it and the model never does.
+pub const TASK_BASE: &str = r#"// ============================================================
+// 基础授权（程序生成，不来自 task）：读取上限与 shell 启动
+// 不是安全要求，只让命令能够启动；读取限制与写入范围由下面的要求给出。
+// ============================================================
+
+@id("base")
+permit(
+  principal,
+  action == SecCore::Action::"file.read",
+  resource is SecCore::File
+)
+when {
+  resource.path == "/" || resource.path like "/*"
+};
+
+@id("base.2")
+permit(
+  principal,
+  action == SecCore::Action::"process.spawn",
+  resource is SecCore::Process
+)
+when {
+  resource.program == "bash" || resource.program == "/bin/bash" ||
+  resource.program == "/usr/bin/bash"
+};
+
+"#;
+
+/// Admits a task draft: [`TASK_BASE`] followed by the model text, validated as one revision.
+///
+/// The raw draft keeps the model text alone; the artifact is what gets published.
+///
+/// # Errors
+/// Rejects what [`prepare_policy`] rejects in the model text.
+pub fn prepare_task_policy(model_text: &str) -> Result<Artifact, PolicyError> {
+    prepare_policy(&format!("{TASK_BASE}{model_text}"))
+}
 
 /// Built from server identity and clock; matching fields in user JSON are never accepted.
 #[derive(Clone, Serialize)]
@@ -265,7 +310,7 @@ fn first_task_draft(
     deadline: Instant,
 ) -> Result<(PolicyDraft, Result<Artifact, PolicyError>), ProposalError> {
     let draft = generate_policy_draft_after(provider, model, task, deadline, None)?;
-    let prepared = prepare_policy(draft.policy());
+    let prepared = prepare_task_policy(draft.policy());
     match prepared {
         Err(
             error @ (PolicyError::InvalidPath
@@ -281,7 +326,7 @@ fn first_task_draft(
                 deadline,
                 Some(&error.to_string()),
             )?;
-            let prepared = prepare_policy(retry.policy());
+            let prepared = prepare_task_policy(retry.policy());
             Ok((retry, prepared))
         }
         prepared => Ok((draft, prepared)),
@@ -292,7 +337,7 @@ fn first_task_draft(
 ///
 /// The model receives the task text only; no file contents are sent and no path metadata is
 /// accepted. The draft keeps unresolved items; Strict validation does not prove that task and
-/// policy are semantically equivalent.
+/// policy are semantically equivalent. The artifact is [`TASK_BASE`] followed by the draft.
 ///
 /// As for command proposals, a draft rejected for its syntax, Strict typing or a path literal is
 /// retried once with the local reason. After that retry a syntax or typing failure is an error,
@@ -367,7 +412,7 @@ pub fn propose_task(
         // A failed or still-gapped retry must not cost the valid first draft.
         if let Ok(retry) =
             generate_policy_draft_after(provider, model, task, deadline, Some(&rejection))
-            && let Ok(repaired) = prepare_policy(retry.policy())
+            && let Ok(repaired) = prepare_task_policy(retry.policy())
             && launch_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
             && runtime_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
         {

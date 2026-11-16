@@ -309,7 +309,11 @@ async fn formats_clarifications_and_real_peer_identity() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(unmapped["candidate"]["artifact"]["text"], "");
+    // An empty draft publishes the launch base alone.
+    assert_eq!(
+        unmapped["candidate"]["artifact"]["text"],
+        asc_intent::TASK_BASE
+    );
     for format in ["text", "cedar"] {
         let output = cli(
             &socket,
@@ -322,7 +326,7 @@ async fn formats_clarifications_and_real_peer_identity() {
         assert_eq!(output.status.code(), Some(0));
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.contains("unresolved") && text.contains("not modeled"));
-        assert!(!text.contains("permit("));
+        assert_eq!(text.matches("permit(").count(), 2, "{text}");
     }
     if rustix::process::geteuid().as_raw() == 0 {
         check_unprivileged_peer(&directory, &socket, &server);

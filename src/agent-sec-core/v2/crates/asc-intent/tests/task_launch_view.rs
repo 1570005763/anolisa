@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use asc_intent::{
     COVERAGE_NOTE, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE, ProposalContext, ProposalOutcome,
-    RUNTIME_VIEW_NOTE, TaskInput, launch_view_gaps, point_aliases, propose_task,
+    RUNTIME_VIEW_NOTE, TASK_BASE, TaskInput, launch_view_gaps, point_aliases, propose_task,
     requirement_coverage, runtime_view_gaps,
 };
 use asc_model_client::provider::{ModelProvider, ProviderError};
@@ -30,6 +30,11 @@ when { resource.program == "/usr/bin/bash" };
 forbid(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
 when { resource.path == "/srv/demo/previous.zip"
     && context.input.operation == SecCore::WriteOperation::"delete" };"#;
+
+/// The artifact the program publishes for a model draft.
+fn based(policy: &str) -> String {
+    format!("{TASK_BASE}{policy}")
+}
 
 fn body(policy: &str) -> String {
     json!({"policy": policy, "unresolved": []}).to_string()
@@ -121,7 +126,7 @@ when { resource.path == "/srv/demo/out" && context.input.operation == SecCore::W
 fn a_repaired_retry_replaces_the_first_draft() {
     let provider = Scripted::new(vec![Ok(body(CWD_SPAWN)), Ok(body(PLAIN_SPAWN))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], PLAIN_SPAWN);
+    assert_eq!(candidate["artifact"]["text"], based(PLAIN_SPAWN));
     assert_eq!(candidate["draft"]["policy"], PLAIN_SPAWN);
     assert!(launch_notes(&candidate).is_empty());
     let payloads = provider.payloads();
@@ -140,7 +145,7 @@ fn a_failed_retry_keeps_the_first_draft_and_reports_the_gap() {
     ] {
         let provider = Scripted::new(vec![Ok(body(CWD_SPAWN)), retry]);
         let candidate = propose(&provider);
-        assert_eq!(candidate["artifact"]["text"], CWD_SPAWN);
+        assert_eq!(candidate["artifact"]["text"], based(CWD_SPAWN));
         let notes = launch_notes(&candidate);
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("context.input.cwd"), "{notes:?}");
@@ -151,7 +156,7 @@ fn a_failed_retry_keeps_the_first_draft_and_reports_the_gap() {
 fn a_clean_draft_is_not_retried() {
     let provider = Scripted::new(vec![Ok(body(PLAIN_SPAWN))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], PLAIN_SPAWN);
+    assert_eq!(candidate["artifact"]["text"], based(PLAIN_SPAWN));
     assert_eq!(provider.payloads().len(), 1);
 }
 
@@ -188,15 +193,15 @@ fn a_point_alias_is_reported_without_a_retry() {
     let _ = std::fs::remove_file(&link);
     std::os::unix::fs::symlink(&target, &link).unwrap();
     let policy = format!(
-        r#"// [S1] interpreter
-permit(principal, action == SecCore::Action::"file.read", resource is SecCore::File)
+        r#"// [S1] report link
+permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
 when {{ resource.path == "{}" }};"#,
         link.display()
     );
     let provider = Scripted::new(vec![Ok(body(&policy))]);
     let candidate = propose(&provider);
     std::fs::remove_dir_all(&root).unwrap();
-    assert_eq!(candidate["artifact"]["text"], policy);
+    assert_eq!(candidate["artifact"]["text"], based(&policy));
     assert_eq!(provider.payloads().len(), 1);
     let aliases = notes(&candidate, POINT_ALIAS_NOTE);
     assert_eq!(aliases.len(), 1);
@@ -221,13 +226,14 @@ fn refused_forbids_are_retried_and_reported_when_they_stay() {
 
     let provider = Scripted::new(vec![Ok(body(&network)), Ok(body(&labelled))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], labelled);
+    assert_eq!(candidate["artifact"]["text"], based(&labelled));
     assert!(notes(&candidate, RUNTIME_VIEW_NOTE).is_empty());
-    assert!(provider.payloads()[1].contains(r#"forbid #3 @id("R3")"#));
+    // The retry reason numbers statements in the artifact, after the two base statements.
+    assert!(provider.payloads()[1].contains(r#"forbid #5 @id("R3")"#));
 
     let provider = Scripted::new(vec![Ok(body(&network)), Ok(body(&network))]);
     let candidate = propose(&provider);
-    assert_eq!(candidate["artifact"]["text"], network);
+    assert_eq!(candidate["artifact"]["text"], based(&network));
     let runtime = notes(&candidate, RUNTIME_VIEW_NOTE);
     assert_eq!(runtime.len(), 1);
     assert!(
@@ -268,8 +274,8 @@ when { resource.path like "/*" };"#;
     assert_eq!(coverage.len(), 1);
     assert!(
         coverage[0].ends_with(
-            "no @id: sandbox and launch authorizer (#1), \
-             runtime protector only, the authorization view drops forbids (#2)."
+            "base: sandbox and launch authorizer (#1 #2); no @id: sandbox and launch authorizer \
+             (#3), runtime protector only, the authorization view drops forbids (#4)."
         ),
         "{coverage:?}"
     );

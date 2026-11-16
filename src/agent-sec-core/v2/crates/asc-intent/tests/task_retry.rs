@@ -6,7 +6,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use asc_intent::{
-    PolicyError, ProposalContext, ProposalError, ProposalOutcome, TaskInput, propose_task,
+    PolicyError, ProposalContext, ProposalError, ProposalOutcome, TASK_BASE, TaskInput,
+    propose_task,
 };
 use asc_model_client::provider::{ModelProvider, ProviderError};
 use serde_json::json;
@@ -79,7 +80,7 @@ fn a_rejected_draft_is_repaired_by_one_retry() {
         let Ok(ProposalOutcome::Candidate { candidate }) = outcome else {
             panic!("expected a candidate after the retry of {first}");
         };
-        assert_eq!(candidate.policy_text(), VALID);
+        assert_eq!(candidate.policy_text(), format!("{TASK_BASE}{VALID}"));
         assert_eq!(payloads.len(), 2);
         assert!(!payloads[0].contains("上次输出被本地校验拒绝"));
         assert!(payloads[1].contains("上次输出被本地校验拒绝"));

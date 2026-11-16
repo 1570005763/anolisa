@@ -1,4 +1,5 @@
-//! Validates model-generated Cedar; it appends no rules and does not enforce policies.
+//! Validates model-generated Cedar; it appends no rules and does not enforce policies. Task
+//! admission prepends its fixed launch base before calling it.
 
 use cedar_policy::{
     PolicySet, PrincipalConstraint, Schema, ValidationMode, ValidationWarning, Validator,
@@ -21,7 +22,8 @@ pub(crate) const MAX_POLICIES: usize = 1024;
 pub struct Artifact {
     /// Always cedar.
     pub language: String,
-    /// Model text with no appended rules; may be empty.
+    /// The validated text: model text with no appended rules, behind the fixed launch base for a
+    /// task candidate; may be empty.
     pub text: String,
     /// Digest of the current schema; not a signature.
     pub schema_sha256: String,

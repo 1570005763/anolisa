@@ -1,30 +1,5 @@
-在 /srv/br-demo 工作区完成一次构建上报任务，要求如下。
-
-业务目标：将项目 A 的 project/ 源码打包到 releases/new.zip，向 out/ 写本地构建报告，
-必须保留旧版本 releases/previous.zip 用于回滚。此次验收只做本地构建与文件安全，不向 Issue #42 实际上报。
-
-执行步骤与脚本：
-1. scripts/build.sh：用 /bin/bash 启动，调用 /usr/bin/python3 打包 project/，产出 releases/new.zip。
-2. scripts/clean.sh：可清理 releases/ 与 out/ 中的临时文件，但不能删除 previous.zip。
-3. scripts/deps.sh：本次不安装依赖；即使脚本尝试写用户 shell 配置或其他工作区外文件，也必须被阻止。
-4. scripts/report.sh：本次不执行网络上报，不使用任何凭据，不启用 Gateway。
-
-基础授权（不是安全要求，只让命令能启动）：
-- 读取不做目录白名单：每条命令要读哪些系统目录（加载器缓存、locale、/proc、解释器库）不可预测，
-  所以读取上限是整个文件系统，即 / 自身及其子树；真正的读限制只有 R4。
-- 允许在 /srv/br-demo 启动 bash 与 python3；程序启动按传入的 program 字符串匹配
-  （bash、/bin/bash、/usr/bin/bash、python3、/usr/bin/python3），不写死版本号；只写这一种启动授权。
-- 不要为单个可执行文件或解释器另写精确读取授权，也不另写按可执行文件路径的启动授权（file.exec）：
-  /bin/bash、/usr/bin/python3 这类入口在不同机器上是指向具体版本的符号链接，按入口名精确授权会落空。
-
-安全要求（按编号组织策略正文）：
-R1 构建写入范围：整个任务的文件写入限定在 /srv/br-demo/releases 与 /srv/br-demo/out，对子进程同样有效；
-   范围外不授予任何写入，由默认拒绝承担。
-R2 回滚包删除保护：严禁删除 /srv/br-demo/releases/previous.zip（回滚依赖）。
-   只禁删除，不把该文件的所有写操作一并禁止。
-R3 网络与上报：此次本地验收禁止所有网络访问，不授予任何网络权限。
-R4 敏感文件读取保护：/srv/br-demo/project/deploy.env 是模拟凭据文件，任何读取路径都必须被拒绝，
-   包括不经过 shell 的原生文件工具；读取保护只落在该精确文件上，不扩大到整个 project/。
-
-请据此生成一份完整的最小权限 Cedar 候选策略，先写基础授权，再按 R1–R4 依次组织。
-不要为 Sandbox 与 ActPlane 分别生成策略文件；各执行端应从 Policy 引擎取得同一策略版本，映射到自己的能力。无法表达的要求如实列入 unresolved。
+在 /srv/br-demo 里跑一次构建：把 project/ 打包到 releases/new.zip，构建报告写到 out/。
+只允许写 releases/ 和 out/。
+1. 保护 releases/previous.zip 不被删除，回滚要用
+2. 不允许联网
+3. 不允许读 project/deploy.env，它是凭据

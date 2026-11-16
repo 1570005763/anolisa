@@ -20,7 +20,8 @@ pub use intent_extraction::{
 pub use policy_generator::{
     CANDIDATE_VERSION, COVERAGE_NOTE, CandidatePolicy, CommandPolicyOutcome, LAUNCH_VIEW_NOTE,
     MAX_CANDIDATE_BYTES, MAX_PROPOSAL_TTL, POINT_ALIAS_NOTE, ProposalContext, ProposalError,
-    ProposalOutcome, RUNTIME_VIEW_NOTE, propose_command, propose_task,
+    ProposalOutcome, RUNTIME_VIEW_NOTE, TASK_BASE, prepare_task_policy, propose_command,
+    propose_task,
 };
 pub use policy_summary::{ActionCategory, PathScope, Permission, PolicySummary, summarize};
 pub use policy_validation::{
