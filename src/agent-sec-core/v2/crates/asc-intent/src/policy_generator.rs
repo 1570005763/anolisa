@@ -21,10 +21,11 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+use crate::policy_validation::prepare_task_text;
 use crate::{
-    Artifact, INTENT_BUDGET, IntentError, PolicyDraft, PolicyError, TaskInput,
-    intent_extraction::generate_policy_draft_after, launch_view_gaps, point_aliases,
-    prepare_policy, requirement_coverage, runtime_view_gaps,
+    Artifact, HumanGate, INTENT_BUDGET, IntentError, PolicyDraft, PolicyError, TaskInput,
+    confirmation_gaps, human_gates, intent_extraction::generate_policy_draft_after,
+    launch_view_gaps, point_aliases, prepare_policy, requirement_coverage, runtime_view_gaps,
 };
 
 /// Maximum candidate TTL; it is not the lifetime of an issued grant.
@@ -39,6 +40,8 @@ pub const LAUNCH_VIEW_NOTE: &str = "LAUNCH VIEW:";
 pub const POINT_ALIAS_NOTE: &str = "POINT ALIAS:";
 /// Prefix of the note listing forbids that the runtime protector refuses to lower.
 pub const RUNTIME_VIEW_NOTE: &str = "RUNTIME VIEW:";
+/// Prefix of the note listing permits that stop for a human before they take effect.
+pub const HUMAN_GATE_NOTE: &str = "HUMAN GATE:";
 /// Prefix of the note naming which consumers can carry each task requirement.
 pub const COVERAGE_NOTE: &str = "COVERAGE:";
 
@@ -78,12 +81,13 @@ when {
 
 /// Admits a task draft: [`TASK_BASE`] followed by the model text, validated as one revision.
 ///
-/// The raw draft keeps the model text alone; the artifact is what gets published.
+/// The raw draft keeps the model text alone; the artifact is what gets published. A task may ask
+/// a human to confirm a permission, so this is the one admission that reads an escalation advice.
 ///
 /// # Errors
 /// Rejects what [`prepare_policy`] rejects in the model text.
 pub fn prepare_task_policy(model_text: &str) -> Result<Artifact, PolicyError> {
-    prepare_policy(&format!("{TASK_BASE}{model_text}"))
+    prepare_task_text(&format!("{TASK_BASE}{model_text}"))
 }
 
 /// Built from server identity and clock; matching fields in user JSON are never accepted.
@@ -259,7 +263,8 @@ pub fn propose_command(
                 error @ (PolicyError::InvalidPath
                 | PolicyError::WildcardLiteral
                 | PolicyError::Syntax
-                | PolicyError::Validation),
+                | PolicyError::Validation
+                | PolicyError::Advice),
             ) if attempt < COMMAND_ATTEMPTS => {
                 check_deadline(deadline)?;
                 rejection = Some(error.to_string());
@@ -316,7 +321,8 @@ fn first_task_draft(
             error @ (PolicyError::InvalidPath
             | PolicyError::WildcardLiteral
             | PolicyError::Syntax
-            | PolicyError::Validation),
+            | PolicyError::Validation
+            | PolicyError::Advice),
         ) => {
             check_deadline(deadline)?;
             let retry = generate_policy_draft_after(
@@ -347,14 +353,21 @@ fn first_task_draft(
 /// A valid draft whose permits test `context` is retried once with that reason, because the
 /// launch authorizer reads the same revision without context and would grant those permits
 /// nothing. A forbid the runtime protector cannot lower, such as one on `network.use`, is retried
-/// the same way, because it fails the whole binding. The retry only replaces the first draft when
-/// it is valid and has neither; otherwise the first draft stays the candidate and the findings
-/// travel as `LAUNCH VIEW:` and `RUNTIME VIEW:` notes.
+/// the same way, because it fails the whole binding. A confirmation that no other permit covers is
+/// retried too (see below). The retry only replaces the first draft when it is valid and has none
+/// of these; otherwise the first draft stays the candidate and the findings travel as
+/// `LAUNCH VIEW:`, `RUNTIME VIEW:` and `HUMAN GATE:` notes.
 ///
 /// The exact paths the final permits name are then resolved on this host (metadata only; nothing
 /// is sent). A point grant on a link authorizes nothing, but it is not retried: the task asked
 /// for that name, and the repair is a wider grant only a reviewer may choose. It travels as a
 /// `POINT ALIAS:` note instead.
+///
+/// A permit may also carry an escalation advice, which makes an already granted permission ask a
+/// human before each execution. That is only friction when the same action already grants the
+/// paths, so a confirmation outside every other permit's grant is reported as a widening: after a
+/// retry that still shows one, the revision is marked as not to be published. Admitted gates travel
+/// as a `HUMAN GATE:` note with the paths and the message a prompt will show.
 ///
 /// A `COVERAGE:` note finally names, per requirement `@id`, which consumers can carry its
 /// statements. It is derived from statement shape, not from a deployment.
@@ -378,7 +391,8 @@ pub fn propose_task(
         Err(
             error @ (PolicyError::InvalidPath
             | PolicyError::WildcardLiteral
-            | PolicyError::UnsupportedPolicy),
+            | PolicyError::UnsupportedPolicy
+            | PolicyError::Advice),
         ) => {
             check_deadline(deadline)?;
             return Ok(ProposalOutcome::NeedsClarification {
@@ -390,37 +404,16 @@ pub fn propose_task(
     };
     let mut gaps = launch_view_gaps(&artifact.text)?;
     let mut refused = runtime_view_gaps(&artifact.text)?;
-    if !gaps.is_empty() || !refused.is_empty() {
-        let mut reasons = Vec::new();
-        if !gaps.is_empty() {
-            reasons.push(format!(
-                "the launch authorizer reads no context, so these permits would grant nothing: \
-                 {}; express permits with resource attributes only and keep \
-                 context.input.operation for forbids",
-                gaps.join("; ")
-            ));
-        }
-        if !refused.is_empty() {
-            reasons.push(format!(
-                "the runtime protector lowers only bare forbids on file.read or file.write and \
-                 fails the whole binding otherwise: {}; drop those forbids and grant nothing \
-                 instead, e.g. no network.use permit",
-                refused.join("; ")
-            ));
-        }
-        let rejection = reasons.join(". ");
-        // A failed or still-gapped retry must not cost the valid first draft.
-        if let Ok(retry) =
-            generate_policy_draft_after(provider, model, task, deadline, Some(&rejection))
-            && let Ok(repaired) = prepare_task_policy(retry.policy())
-            && launch_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
-            && runtime_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
-        {
-            draft = retry;
-            artifact = repaired;
-            gaps.clear();
-            refused.clear();
-        }
+    let mut widening = confirmation_gaps(&artifact.text)?;
+    if (!gaps.is_empty() || !refused.is_empty() || !widening.is_empty())
+        && let Some((retry, repaired)) =
+            repair(provider, model, task, deadline, &gaps, &refused, &widening)
+    {
+        draft = retry;
+        artifact = repaired;
+        gaps.clear();
+        refused.clear();
+        widening.clear();
     }
     check_deadline(deadline)?;
     let aliases = point_aliases(&artifact.text, &|path| {
@@ -430,8 +423,9 @@ pub fn propose_task(
             .into_string()
             .ok()
     })?;
+    let gates = human_gates(&artifact.text)?;
     let coverage = requirement_coverage(&artifact.text)?;
-    let notes = candidate_notes(&gaps, &refused, &aliases, &coverage);
+    let notes = candidate_notes(&gaps, &refused, &widening, &aliases, &gates, &coverage);
     let payload = CandidateContent {
         format_version: CANDIDATE_VERSION,
         status: "CANDIDATE",
@@ -459,11 +453,62 @@ pub fn propose_task(
     })
 }
 
+/// One repair round for a valid draft that a consumer of this revision would trip over.
+///
+/// The model gets the local reasons, not the task again. A failed call, a rejected repair or a
+/// repair that still carries findings returns `None`: a valid first draft is worth more than none,
+/// and the findings then travel as notes instead of silently dropping the revision.
+fn repair(
+    provider: &dyn ModelProvider,
+    model: &str,
+    task: &TaskInput,
+    deadline: Instant,
+    gaps: &[String],
+    refused: &[String],
+    widening: &[String],
+) -> Option<(PolicyDraft, Artifact)> {
+    let mut reasons = Vec::new();
+    if !gaps.is_empty() {
+        reasons.push(format!(
+            "the launch authorizer reads no context, so these permits would grant nothing: {}; \
+             express permits with resource attributes only and keep context.input.operation for \
+             forbids",
+            gaps.join("; ")
+        ));
+    }
+    if !refused.is_empty() {
+        reasons.push(format!(
+            "the runtime protector lowers only bare forbids on file.read or file.write and fails \
+             the whole binding otherwise: {}; drop those forbids and grant nothing instead, e.g. \
+             no network.use permit",
+            refused.join("; ")
+        ));
+    }
+    if !widening.is_empty() {
+        reasons.push(format!(
+            "a permit may ask for confirmation only on paths another permit of the same action \
+             already grants, and these confirmations would widen authorization instead: {}; grant \
+             that location in the writable scope first, or drop the confirmation",
+            widening.join("; ")
+        ));
+    }
+    let rejection = reasons.join(". ");
+    let retry =
+        generate_policy_draft_after(provider, model, task, deadline, Some(&rejection)).ok()?;
+    let repaired = prepare_task_policy(retry.policy()).ok()?;
+    (launch_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
+        && runtime_view_gaps(&repaired.text).is_ok_and(|left| left.is_empty())
+        && confirmation_gaps(&repaired.text).is_ok_and(|left| left.is_empty()))
+    .then_some((retry, repaired))
+}
+
 /// Fixed review notes plus one note per finding a consumer of this revision would trip over.
 fn candidate_notes(
     gaps: &[String],
     refused: &[String],
+    widening: &[String],
     aliases: &[String],
+    gates: &[HumanGate],
     coverage: &[String],
 ) -> Vec<String> {
     let mut notes: Vec<String> = vec![
@@ -496,6 +541,33 @@ fn candidate_notes(
              the requirement unresolved.",
             aliases.join("; ")
         ));
+    }
+    if !widening.is_empty() {
+        // A confirmation that no other permit covers hands out what the task never asked for, so
+        // the export has to say so where a reviewer of the file will read it.
+        notes.push(format!(
+            "{HUMAN_GATE_NOTE} a permit may ask for confirmation only on a permission the policy \
+             already grants, and these confirmations would widen authorization instead: {}; grant \
+             that location in the writable scope first, or drop the confirmation. Do not publish \
+             this revision.",
+            widening.join("; ")
+        ));
+    } else if !gates.is_empty() {
+        // The paths and the wording are what the approval prompt shows, so the reviewer reads the
+        // gate here rather than discovering it in the middle of a run.
+        let mut note = format!(
+            "{HUMAN_GATE_NOTE} these permits stop for confirmation before taking effect, each on \
+             paths another permit already grants, so the gate is friction and not a wider grant:"
+        );
+        for gate in gates {
+            note.push_str("\n  ");
+            note.push_str(&gate.label());
+            note.push(' ');
+            note.push_str(&gate.paths.join(" "));
+            note.push_str(" -- ");
+            note.push_str(&gate.message);
+        }
+        notes.push(note);
     }
     if !coverage.is_empty() {
         // One row per requirement and carrier, aligned, so an exported header shows at a glance

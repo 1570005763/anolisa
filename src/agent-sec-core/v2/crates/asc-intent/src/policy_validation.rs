@@ -15,6 +15,8 @@ pub const CEDAR_SCHEMA: &str = include_str!("../../asc-policy-cedar/schema/secco
 /// Policy text budget.
 pub const MAX_POLICY_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_POLICIES: usize = 1024;
+/// Requirement key a statement without an `@id` shares with every other unlabelled statement.
+const NO_REQUIREMENT: &str = "no @id";
 
 /// Validated Cedar text; validation is neither approval nor a completeness proof.
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +56,12 @@ pub enum PolicyError {
     /// candidate.
     #[error("policy contains unsupported templates, identity references or annotations")]
     UnsupportedPolicy,
+    /// A confirmation annotation is outside the one contract a task permit may carry.
+    #[error(
+        "advice must be a single escalation with a message, on a permit whose paths the policy \
+         already grants"
+    )]
+    Advice,
 }
 
 /// Parses the model policy, checks path expressions and runs Strict validation once.
@@ -62,13 +70,35 @@ pub enum PolicyError {
 /// verified precisely are checked; task completeness is not inferred, OS objects are not bound
 /// and advice or approvals are not discharged.
 ///
+/// A command proposal grants one launch and has its own approval flow, so a confirmation is not
+/// admitted here; only a task draft carries that one annotation.
+///
 /// # Errors
 /// Rejects invalid Cedar, non-canonical paths, unsupported policy features and oversized artifacts.
 pub fn prepare_policy(model_text: &str) -> Result<Artifact, PolicyError> {
+    prepare(model_text, false)
+}
+
+/// Admits a task draft: the one place a `permit` may ask a human before it takes effect.
+pub(crate) fn prepare_task_text(model_text: &str) -> Result<Artifact, PolicyError> {
+    prepare(model_text, true)
+}
+
+/// Shared admission; `confirmations` decides whether an escalation advice is within contract.
+fn prepare(model_text: &str, confirmations: bool) -> Result<Artifact, PolicyError> {
     let policies = parse(model_text)?;
     for policy in policies.policies() {
-        if policy.annotations().any(|(name, _)| name != "id") {
-            return Err(PolicyError::UnsupportedPolicy);
+        for (name, value) in policy.annotations() {
+            match name {
+                "id" => {}
+                // The one annotation with an execution contract: it turns a permission the policy
+                // already grants into one that asks first. It never adds a permission, and the
+                // runtime protector rejects it on a forbid.
+                "advice" if confirmations && policy.effect() == cedar_policy::Effect::Permit => {
+                    escalation_message(value)?;
+                }
+                _ => return Err(PolicyError::UnsupportedPolicy),
+            }
         }
         match policy.principal_constraint() {
             PrincipalConstraint::Any => {}
@@ -191,10 +221,7 @@ pub fn requirement_coverage(text: &str) -> Result<Vec<String>, PolicyError> {
         } else {
             "none"
         };
-        let key = match policy.annotation("id") {
-            Some(id) => id.split('.').next().unwrap_or(id).to_owned(),
-            None => "no @id".to_owned(),
-        };
+        let key = requirement_key(policy);
         statements.push((key, carrier, index + 1));
     }
     // Requirements and carriers keep the order in which they first appear.
@@ -255,6 +282,217 @@ fn runtime_action(est: &Value) -> Option<&str> {
         || (resource["op"] == "is" && resource["entity_type"] == "SecCore::File");
     (est["principal"]["op"] == "All" && file && matches!(action, "file.read" | "file.write"))
         .then_some(action)
+}
+
+/// Lists the permits that stop for confirmation before they take effect.
+///
+/// A task permit may carry `@advice` with an escalation verdict, which turns an already granted
+/// permission into one a human confirms before each execution. This lists every such permit with
+/// the paths the prompt shows and the message it prints, so a reviewer sees the gates in the
+/// revision instead of only at run time.
+///
+/// # Errors
+/// Rejects text that `prepare_policy` would also reject as unparsable or oversized.
+pub fn human_gates(text: &str) -> Result<Vec<HumanGate>, PolicyError> {
+    let mut gates = Vec::new();
+    for (index, policy) in parse(text)?.policies().enumerate() {
+        let Some(value) = policy.annotation("advice") else {
+            continue;
+        };
+        let est = policy.to_json().map_err(|_| PolicyError::Encoding)?;
+        let (_, points, trees) = statement_paths(&est);
+        // A directory pair names the same location twice and the prompt lists it once.
+        let mut paths = points;
+        paths.extend(trees);
+        dedupe(&mut paths);
+        gates.push(HumanGate {
+            requirement: requirement_key(policy),
+            message: escalation_message(value)?,
+            paths,
+            position: index + 1,
+        });
+    }
+    Ok(gates)
+}
+
+/// Lists confirmations that would widen authorization instead of only adding friction.
+///
+/// A confirmation is permission the policy already grants, made conditional on a human. A permit
+/// whose paths no other permit of the same action grants is not a confirmation but a grant with
+/// one click in front of it, so it is reported: the task has to name that location in its
+/// writable scope first, and only then may a requirement ask about it.
+///
+/// A confirmation that tests `context` is reported too: the launch authorizer drops such a permit,
+/// so the request is answered without the escalation and nothing is ever asked.
+///
+/// # Errors
+/// Rejects text that `prepare_policy` would also reject as unparsable or oversized.
+pub fn confirmation_gaps(text: &str) -> Result<Vec<String>, PolicyError> {
+    let policies = parse(text)?;
+    // What other statements already grant, per action; a confirmation may only repeat this.
+    let mut granted: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    for policy in policies.policies() {
+        if policy.effect() != cedar_policy::Effect::Permit || policy.annotation("advice").is_some()
+        {
+            continue;
+        }
+        let est = policy.to_json().map_err(|_| PolicyError::Encoding)?;
+        granted.push(statement_paths(&est));
+    }
+    let mut gaps = Vec::new();
+    for (index, policy) in policies.policies().enumerate() {
+        if policy.annotation("advice").is_none() {
+            continue;
+        }
+        let est = policy.to_json().map_err(|_| PolicyError::Encoding)?;
+        let at = label(index, policy);
+        if context_fields(&est["conditions"], &mut Vec::new()) {
+            gaps.push(format!(
+                "permit {at} asks before acting but tests context, which the launch authorizer \
+                 drops, so no confirmation is ever shown"
+            ));
+            continue;
+        }
+        let (action, points, trees) = statement_paths(&est);
+        if action.is_empty() {
+            gaps.push(format!(
+                "permit {at} asks before acting without naming exactly one action"
+            ));
+            continue;
+        }
+        if points.is_empty() && trees.is_empty() {
+            gaps.push(format!(
+                "permit {at} asks before acting without naming a path"
+            ));
+            continue;
+        }
+        for point in points {
+            if !granted.iter().filter(|(other, ..)| other == &action).any(
+                |(_, granted_points, granted_trees)| {
+                    granted_points.contains(&point)
+                        || granted_trees.iter().any(|tree| under(tree, &point))
+                },
+            ) {
+                gaps.push(format!(
+                    "permit {at} asks before acting on {point}, which no other permit grants \
+                     ({action}), so the confirmation would widen authorization"
+                ));
+            }
+        }
+        for tree in trees {
+            if !granted
+                .iter()
+                .filter(|(other, ..)| other == &action)
+                .any(|(_, _, granted_trees)| granted_trees.iter().any(|other| under(other, &tree)))
+            {
+                gaps.push(format!(
+                    "permit {at} asks before acting on {tree}, which no other permit grants \
+                     ({action}), so the confirmation would widen authorization"
+                ));
+            }
+        }
+    }
+    // A directory pair that nothing grants fails both checks, but it is one location.
+    let mut unique = Vec::new();
+    for gap in gaps {
+        if !unique.contains(&gap) {
+            unique.push(gap);
+        }
+    }
+    Ok(unique)
+}
+
+/// One permit that asks a human before it takes effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HumanGate {
+    /// Requirement the `@id` names, or the statement number when it has none.
+    pub requirement: String,
+    /// Explanation the approval prompt shows.
+    pub message: String,
+    /// Paths the confirmation covers, exactly as the prompt will list them.
+    pub paths: Vec<String>,
+    /// Position of the statement in the revision, counting from one.
+    pub position: usize,
+}
+
+impl HumanGate {
+    /// Names the permit the way the gap messages and the statements do.
+    pub(crate) fn label(&self) -> String {
+        if self.requirement == NO_REQUIREMENT {
+            format!("#{}", self.position)
+        } else {
+            format!("#{} @id({:?})", self.position, self.requirement)
+        }
+    }
+}
+
+/// Reads the one advice payload a task permit may carry: an escalation with a reason to show.
+fn escalation_message(value: &str) -> Result<String, PolicyError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        verdict: String,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        message: Option<String>,
+    }
+    let payload: Payload = serde_json::from_str(value).map_err(|_| PolicyError::Advice)?;
+    // `warn` has no decision surface on this path and `transform` would rewrite the command a
+    // task may not choose; only escalation reads a decision back to a human.
+    if payload.verdict != "escalate" {
+        return Err(PolicyError::Advice);
+    }
+    if payload
+        .reason
+        .is_some_and(|reason| reason.trim().is_empty())
+    {
+        return Err(PolicyError::Advice);
+    }
+    payload
+        .message
+        .filter(|message| !message.trim().is_empty())
+        .ok_or(PolicyError::Advice)
+}
+
+/// Returns the action, point grants and granted subtrees a permit names.
+fn statement_paths(est: &Value) -> (String, Vec<String>, Vec<String>) {
+    let action = if est["action"]["op"] == "==" {
+        est["action"]["entity"]["id"].as_str().unwrap_or_default()
+    } else {
+        ""
+    }
+    .to_owned();
+    let (mut points, mut trees) = (Vec::new(), Vec::new());
+    path_literals(&est["conditions"], &mut points, &mut trees);
+    dedupe(&mut points);
+    dedupe(&mut trees);
+    (action, points, trees)
+}
+
+/// Removes repeated entries, which a `==` half and a `like` half of one directory pair produce.
+fn dedupe(paths: &mut Vec<String>) {
+    let mut index = 0;
+    while index < paths.len() {
+        if paths[..index].contains(&paths[index]) {
+            paths.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Returns the requirement an `@id` names; sub-rules such as `R2.1` share their parent.
+fn requirement_key(policy: &cedar_policy::Policy) -> String {
+    match policy.annotation("id") {
+        Some(id) => id.split('.').next().unwrap_or(id).to_owned(),
+        None => NO_REQUIREMENT.to_owned(),
+    }
+}
+
+/// Returns whether a granted subtree covers a path.
+fn under(tree: &str, path: &str) -> bool {
+    tree == "/" || tree == path || path.starts_with(&format!("{tree}/"))
 }
 
 fn label(index: usize, policy: &cedar_policy::Policy) -> String {

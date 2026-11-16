@@ -471,11 +471,16 @@ fn invalid_and_unsupported() {
         "permit(principal == SecCore::Subject::\"A\", action, resource);",
         "permit(principal, action, resource == SecCore::File::\"/a\");",
         "permit(principal, action, resource) when { principal == SecCore::Subject::\"A\" };",
+        // `@advice` is admitted only as the escalation contract; anything else stays unsupported.
         "@advice(\"audit\") permit(principal, action, resource);",
+        "@advice(\"{\\\"verdict\\\":\\\"warn\\\",\\\"message\\\":\\\"x\\\"}\") permit(principal, action, resource);",
         "@trusted(\"yes\") permit(principal, action, resource);",
     ] {
         assert!(
-            matches!(prepare_policy(policy), Err(PolicyError::UnsupportedPolicy)),
+            matches!(
+                prepare_policy(policy),
+                Err(PolicyError::UnsupportedPolicy | PolicyError::Advice)
+            ),
             "{policy}"
         );
     }
@@ -672,7 +677,9 @@ fn prompt_and_wrapper_boundaries() {
     ] {
         assert!(!constraints.contains(duplicated_term));
     }
-    assert!(prompt.len() <= 6000);
+    // A per-call instruction budget: every rule costs latency and tokens on every proposal, so the
+    // prompt may only grow for a rule with an execution contract behind it, such as the human gate.
+    assert!(prompt.len() <= 7168, "prompt is {} bytes", prompt.len());
     for line in prompt.lines() {
         assert!(line.len() <= 100, "prompt line exceeds 100 bytes: {line}");
     }

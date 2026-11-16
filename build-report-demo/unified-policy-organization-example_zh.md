@@ -355,7 +355,7 @@ R2 出现两次，但两处都引用 `build-report-task@7 / R2-protect-rollback`
 | [HTTP 凭据转译](../src/agent-sec-core/v2/crates/asc-policy-cedar/src/http.rs) | 识别到凭据注解后要求 schema revision 2，并逐条按凭据规则转译整个集合 | 正确处理混合策略、相关允许与禁止规则及责任交接；不能直接把 R1–R4 全文交给现有转译器 |
 | [文件保护转译](../src/agent-sec-core/v2/crates/asc-policy-translator-agentsight/src/cedar.rs) | 跳过 `permit`，只承接文件保护 `forbid`；接受 `@id`，拒绝其他注解 | 不能把注释或标签当路由 |
 | [Gateway Plan](../src/agent-sec-core/v2/crates/asc-gateway-plan/src/plan.rs) | 有自己的 Plan 格式和来源信息 | 本文 YAML 不是其协议；跨端映射、依赖和证据关联仍需落实 |
-| [本地任务](task.txt)与[留档策略](policies/task.cedar) | 禁网验收；基础授权（全局读取上限、bash 启动）由程序生成，正文按 task 写明的写入范围 `goal` 与所列 R1–R3（禁删、禁网、禁读）分块，每条语句带 `@id`（`base`、`goal`、`R1`、`R3`）；编号来自本地任务，与本文样稿的 R1–R4 不对应 | 完整上报需要另行确认任务授权与网络、凭据部署；不能由本文自动开启 |
+| [本地任务](task.txt)与[留档策略](policies/task.cedar) | 禁网验收；基础授权（全局读取上限、bash 启动）由程序生成，正文按 task 写明的写入范围 `goal` 与所列 R1–R4（禁删、禁网、禁读、改配置先确认）分块，每条语句带 `@id`（`base`、`goal`、`R1`、`R3`、`R4`）；编号来自本地任务，与本文样稿的 R1–R4 不对应 | 完整上报需要另行确认任务授权与网络、凭据部署；不能由本文自动开启 |
 
 本文未修改上述提示、schema、策略或运行代码。Cedar 表达已静态对照类型和既有规则写法，但未将这份目标混合样稿作为当前产品支持的策略发布、转译或联调；YAML 仅为组织示意。
 

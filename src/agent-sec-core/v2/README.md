@@ -209,8 +209,17 @@ model semantics or prove task completeness. The prompt requires unresolved ident
 necessary conditions, approvals and obligations to be reported rather than silently
 removed. `unresolved` is model-reported, not a complete gap or conflict detector.
 
+The one annotation a task permit may carry besides an `@id` is an escalation advice,
+which makes a permission the policy already grants ask a human before each execution.
+It is admitted only as a single `escalate` verdict with a nonempty message, never on a
+forbid, and only where another permit of the same action already grants the same paths:
+a confirmation that introduces a path would widen authorization behind one click, so it
+is retried once with that reason and otherwise reported as a `HUMAN GATE:` note that
+forbids publishing. Admitted gates travel the same way, with the paths and the message
+the approval prompt will show.
+
 Requests use `asc.intent.request.v1`, drafts `asc.intent.draft.v1` with
-`cedar-policy@6`, and candidates `asc.intent.candidate.v1`. Candidates contain the
+`cedar-policy@7`, and candidates `asc.intent.candidate.v1`. Candidates contain the
 original `draft`, final `artifact`, TTL, hashes and `notes`. The artifact is a fixed
 launch base (read the whole filesystem, launch bash) followed by `draft.policy`: the
 program writes the base and the model writes the task's requirements only.

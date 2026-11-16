@@ -3,8 +3,9 @@
 
 use asc_daemon_protocol::intent::{INTENT_RESULT_BYTES, IntentProposeResult};
 use asc_intent::{
-    Artifact, CANDIDATE_VERSION, COVERAGE_NOTE, DRAFT_VERSION, LAUNCH_VIEW_NOTE, POINT_ALIAS_NOTE,
-    PROMPT_VERSION, RUNTIME_VIEW_NOTE, prepare_task_policy, validate_policy_response,
+    Artifact, CANDIDATE_VERSION, COVERAGE_NOTE, DRAFT_VERSION, HUMAN_GATE_NOTE, LAUNCH_VIEW_NOTE,
+    POINT_ALIAS_NOTE, PROMPT_VERSION, RUNTIME_VIEW_NOTE, prepare_task_policy,
+    validate_policy_response,
 };
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -128,6 +129,7 @@ pub(super) fn render(
                     LAUNCH_VIEW_NOTE,
                     RUNTIME_VIEW_NOTE,
                     POINT_ALIAS_NOTE,
+                    HUMAN_GATE_NOTE,
                     COVERAGE_NOTE,
                 ]
                 .iter()

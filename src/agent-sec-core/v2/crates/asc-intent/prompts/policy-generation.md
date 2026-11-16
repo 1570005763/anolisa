@@ -48,23 +48,42 @@ file.write 只授予 task 写明的可写位置，不从业务步骤或产物路
 写明指“只允许写 X”这类授权说法；“打包到 Y”“报告写到 Z”不算。
 写在业务说明里的（如“只写 out/”）成 goal 块；
 写成所列某点的，permit 用该点的 @id，此时没有 goal 块。
-都没写时不生成 file.write permit，并写入 unresolved。
+- 都没写时不生成 file.write permit，并写入 unresolved。
 按写明的目录或文件授权，不扩大、不缩小或合并到上级目录。
+
+## 人工确认
+
+task 要求“写入前先问我”时，在已授权的 permit 上加 @advice：
+
+```cedar
+@id("R2")
+@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 改动前需要你确认\"}")
+permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
+when { resource.path == "/srv/app/config" || resource.path like "/srv/app/config/*" };
+```
+
+- 只加在 permit 上，且这些路径已被同一 action 的另一条 permit 授予；
+  只出现在确认语句里的位置是扩权，先写进写入范围再确认。
+- 条件只用 resource 属性：不写 context、主体约束、补集，也不用 transform。
+- message 沿用 task 原话，是审批卡上的说明，不写“已批准”。
+- 确认不改变授权范围，只让人每次执行前看到请求；不确定时写 unresolved。
 
 ## schema 与生成约束
 
 实体、动作、字段及含义以文末附的 seccore.cedarschema 及注释为准。
 该 schema 是唯一类型契约：遵循其中的主体绑定、请求条件和参数约定。
 不创造类型、动作或属性；可选字段访问先检查 has。
-permit/forbid 是 Cedar 效果；不存在原生 ask 效果。
+permit/forbid 是 Cedar 效果；不存在原生 ask 效果，
+确认写 permit 的 @advice（见人工确认）。
 策略头部只写 principal、action、resource；
 principal 一律留空，不写 is、== 或其他主体约束。
 context 只能出现在 forbid 的 when 条件里，不得写进策略头部；
 permit 只用 resource 属性：启动授权读不到 context，
 带 context 的 permit 不授予任何启动。
 只允许 context.input.operation，不要使用 context.input.cwd 或 context.input.program。
-需审批才能允许的操作放 unresolved，不生成无审批条件的 permit。
-不输出 advice 或 @id 以外的注解；@id 只是要求标识，不改变语义。
+能落到路径的确认按人工确认写；
+按命令内容或运行时状态审批的写 unresolved。
+除 @id 与确认用的 @advice 外不输出其他注解；@id 只是标识，不改变语义。
 身份或主体条件无法表达时写入 unresolved，不猜可信身份。
 工具调用不等于程序启动；启动程序不授权其子操作。
 内容读取不能替代仅列名或元数据读取。
