@@ -23,6 +23,16 @@
 // The bare `principal` header is deliberate. The enforcement translator accepts
 // only bare headers, while the PDP only compiles explicit ones; the daemon derives
 // that view from this same revision, so neither consumer needs its own file.
+//
+// The block below is the one `agent-sec-cli intent propose --format cedar` prints
+// for this draft; `#N` is the number of the statement in this file:
+//
+// COVERAGE: who can carry each requirement, from statement shape only;
+//   a Scope still has to apply it, and a requirement without statements is not listed.
+//   base  #1 #2  sandbox, launch authorizer
+//   goal  #3     sandbox, launch authorizer
+//   R1    #4     runtime protector (authorization view drops forbids)
+//   R3    #5     runtime protector (authorization view drops forbids)
 
 // ============================================================
 // 基础授权（程序生成，不来自 task）：读取上限与 shell 启动
