@@ -434,7 +434,7 @@ constrain execution.
 
 The Hook checks JSON `outcome`, independently of the exit code:
 
-- `candidate`: show `caveats`, combine Cedar with the runtime preset, then reuse
+- `candidate`: combine Cedar with the runtime preset, then reuse
   conversion, initial invocation validation and path binding. Forbids from either
   source remain effective.
 - An empty candidate requests no business permissions. Only the explicit runtime
@@ -444,9 +444,8 @@ The Hook checks JSON `outcome`, independently of the exit code:
   block execution without a fixed-permission or unsandboxed fallback. Unknown
   script internals remain caveats and never automatically increase permissions.
 
-Caveats remain complete in the Hook response. The current Cosh native approval
-panel can truncate long caveat lines; this integration does not guarantee that
-their full text is readable in that panel.
+Caveats remain in candidate results and non-`ask` Hook responses. For `ask`, the
+Hook preserves the PDP approval text without appending candidate notices or caveats.
 
 Candidates are requests, never PAP writes. PDP determines `effective_permissions`
 from the active policy set, bounded by the requested permissions. The Cedar mapping

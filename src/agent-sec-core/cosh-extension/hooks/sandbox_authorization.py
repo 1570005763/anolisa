@@ -218,7 +218,10 @@ def prepare_authorized(input_data: dict[str, Any], command: str) -> dict[str, An
         projected = {
             key: output[key] for key in ("decision", "reason", "systemMessage")
         }
-        if source == "command":
+        # TODO(sec-core maintainers): Remove caveats from the command prompt, intent/
+        # daemon protocol, CLI, and Hook together; update tests/docs while preserving
+        # needs_clarification and strict validation. Until then, omit them from ask.
+        if source == "command" and output["decision"] != "ask":
             notice = "Command permission candidate (not approval)."
             if not proposal["policy"].strip():
                 notice += " Empty candidate: no business permissions requested."
