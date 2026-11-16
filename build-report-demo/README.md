@@ -272,7 +272,7 @@ Binding 状态。没有语句的要求（本例 R2，靠默认拒绝承担）不
 
 ```text
 // HUMAN GATE: these permits stop for confirmation before taking effect, each on paths another permit already grants, so the gate is friction and not a wider grant:
-//   #6 @id("R4") /srv/br-demo/config -- config/ 下是手工维护的构建配置，改动前需要你确认
+//   #6 @id("R4") /srv/br-demo/config -- config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
 ```
 
 意图服务还会在本地挡掉“能过 Cedar 校验、发布后却跑不通”的输出，并写在导出文件头部：
@@ -485,8 +485,13 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 #### Case 5：改手工维护的配置 → 弹审批卡，由人决定
 
 ```text
-把 config/build.json 里的 target 改成 nightly。
+用 sed 命令把 config/build.json 里的 release 改成 nightly。
 ```
+
+prompt 要点名“用 sed 命令”，否则 agent 可能改用原生 `Edit` 工具——它不经过 PreToolUse Hook，根本不会
+弹卡；也可能改用 `jq … > tmp && mv`，候选里没有能解析的 `jq` 可执行路径，会在 prepare 阶段被
+block（`sandbox I/O failed`）。`sed -i` 是原地修改：先在同目录写临时文件再 rename，所以候选按目录成对
+申请 `config/` 的写权限，而不是只写 `build.json`。
 
 `config/` 在 goal 的写入范围里（`task.txt` 第 2 条），但 `task.txt` 第 4 条又写了“允许写，但每次都要
 先问我”，所以 R4 是一条带 `@advice(escalate)` 的 `permit`：授权已经由 goal 给了，它只把裁决抬成
@@ -495,28 +500,30 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 
 ```cedar
 @id("R4")
-@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是手工维护的构建配置，改动前需要你确认\"}")
+@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是我手工维护的构建配置：允许写，但每次都要先问我\"}")
 permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
 when {
   resource.path == "/srv/br-demo/config" || resource.path like "/srv/br-demo/config/*"
 };
 ```
 
-agent 落成 `sed -i 's/release/nightly/' config/build.json`（或等价写法），候选申请了 `config/` 的写，
-PDP 返回 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，`CODE_SCANNER_HOOK_ENABLED=false`
+agent 落成 `sed -i 's/"release"/"nightly"/g' config/build.json`，候选为它申请 `config/` 的写，
+PDP 判定 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，`CODE_SCANNER_HOOK_ENABLED=false`
 也不会遮住它：
 
 ```text
 允许本次命令使用以下权限吗？
 
-    agent-sec-cli … sandbox hook execute <decision_id>
+    /usr/bin/bash -c 'sed -i '\''s/"release"/"nightly"/g'\'' config/build.json'
 
 写目录 /srv/br-demo/config
-  原因：config/ 下是手工维护的构建配置，改动前需要你确认
+  原因：config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
 ```
 
-卡片里的命令是被 Hook 改写的交接命令（`hookSpecificOutput.tool_input`），真正要跑的命令与原因在
-卡片的提示行里（`systemMessage`），所以“到底在批什么”看提示行。两条分支：
+卡片里还有两行不是给人看的：`sandbox hook execute <decision_id>` 是点「允许」后真正交给 shell 的
+交接命令（`hookSpecificOutput.tool_input`），`Command permission candidate (not approval).` 与其后的
+`Candidate caveat` 说明这条候选申请了什么；默认光标停在 `[ Allow once ]`，回车即允许。原因那句
+话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar` 写的是同一句。两条分支：
 
 - **允许**：`execute` 拿着同一条决定真正执行，`config/build.json` 的 `target` 变成 `nightly`；
 - **拒绝**：交接命令不执行，agent 收到 `Tool call denied: …`，文件不变。daemon 侧这次决定不会收到
@@ -526,7 +533,8 @@ PDP 返回 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，
 与 Case 2 的分工：Case 2 是**上限**（没写进策略就别想写，被裁成 `MODIFY`），Case 5 是**人工确认**
 （写进策略了，但每次要人点头）。两者不能合成“超出范围就问一下”：`@advice` 只能挂在 `permit` 上，
 而只被确认语句覆盖的路径就是一层点一下就能过的扩权——沙箱照样会把它挂成可写，所以要先把该路径写进
-goal，再让人在该范围内确认。
+goal，再让人在该范围内确认。daemon 侧的回执也分得开：Case 5 是 `STEP_UP`，Case 1/3 是 `ALLOW`，
+Case 2 是 `MODIFY`（见下文“看过程”的第三节）。
 
 ---
 
@@ -629,7 +637,7 @@ curl -s 'localhost:7396/api/enforcement/violations?limit=5' \
 # unlink  previous.zip  blocked=true
 # read    deploy.env    blocked=true
 
-# daemon：授权判定（Case 1 的 ALLOW、Case 2 的 MODIFY、Case 3 的 ALLOW；verdict 随候选浮动）
+# daemon：授权判定（Case 1/3 的 ALLOW、Case 2 的 MODIFY、Case 5 的 STEP_UP；verdict 随候选浮动）
 agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json --include-details 2>/dev/null \
   | jq -c '.[] | {verdict, decision_id: .details.decision_id, exit: .details.result.exit_code}'
 ```
@@ -685,8 +693,9 @@ bash build-report-demo/prepare.sh /srv/br-demo
   “申请被拒绝时问一下”在当前实现里表达不出来。只接受 `escalate`，`warn` 与 `transform` 被拒。
 - **审批等待会超时**：默认 6 小时（可用 `COSH_CORE_APPROVAL_TIMEOUT_SECS` 改），超时按拒绝处理，
   Case 5 演示时别把卡片挂太久。
-- **Case 5 依赖候选把 `config/` 写进申请**：模型没申请就不会有 ask（同其它 case 的不确定性），
-  演示时若没弹卡，先在终端 B 的候选里看有没有 `config/` 的 `file.write`。
+- **Case 5 的命令形态决定会不会弹卡**：prompt 写“用 sed 命令”是为了把落点钉住——原生 `Edit` 不经过
+  Hook，不弹卡；`jq … > tmp && mv` 的候选没有可解析的 exec 路径，会在 prepare 阶段被 block。模型没把
+  `config/` 写进候选同样不会有 ask，演示时先看终端 B 的候选里有没有 `config/` 的 `file.write`。
 - **目录树禁读不支持**：`forbid file.read` 只能落到精确文件，目录树目标会被转译器拒绝。
   想"禁止读取某个目录下的一切"，当前只能逐文件列举（受 64 个 target 上限约束）。
 - **删除保护不等于"覆盖写仍成功"**：delete 保护同时覆盖目标的重命名、移入/移出保护范围、

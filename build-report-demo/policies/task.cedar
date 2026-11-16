@@ -2,7 +2,7 @@
 // unresolved: []
 // HUMAN GATE: these permits stop for confirmation before taking effect, each on paths another
 //   permit already grants, so the gate is friction and not a wider grant:
-//   #6 @id("R4") /srv/br-demo/config -- config/ 下是手工维护的构建配置，改动前需要你确认
+//   #6 @id("R4") /srv/br-demo/config -- config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
 // COVERAGE: who can carry each requirement, from statement shape only:
 //   permit -> sandbox + PDP (a permit testing context -> sandbox only);
 //   forbid on file.read or file.write -> os-harness (any other forbid -> none).
@@ -97,7 +97,7 @@ when {
 // 不新增可写路径；没有 goal 那一条，这条件本身就是一次无上限的扩权
 // ============================================================
 @id("R4")
-@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是手工维护的构建配置，改动前需要你确认\"}")
+@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是我手工维护的构建配置：允许写，但每次都要先问我\"}")
 permit(
     principal,
     action == SecCore::Action::"file.write",

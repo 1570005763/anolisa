@@ -1,12 +1,12 @@
 # demo666 分支改动说明（build-report 四步演示）
 
 基线：`f03002fdd feat(sec-core): skip Cedar permits for Sight`。
-本次在其上共 7 个 commit，**未 push**。`origin/demo666` 上原有的 `e5b6636f6 chore(chore): add build-report skill task sources`
-已并入第 7 个 commit，因此推送需要 force push。本文件随第 7 个 commit 一起提交，
-所以表里第 7 个 commit 不写哈希，可用 `git log -1 -- build-report-demo` 查看。
+本次在其上共 10 个 commit，**未 push**。`origin/demo666` 上原有的 `e5b6636f6 chore(chore): add build-report skill task sources`
+已并入第 7 个 commit，因此推送需要 force push。本文件随第 10 个 commit 一起提交，
+所以表里第 10 个 commit 不写哈希，可用 `git log -1 -- build-report-demo` 查看。
 
-目标：只做四步——生成并发布一份策略 → 建 Scope → 手敲 `cosh` → 输入 4 个 prompt；
-生成物不经人工修改直接发布，全程不需要人工点击，4 个 case 都按预期被拦。
+目标：只做四步——生成并发布一份策略 → 建 Scope → 手敲 `cosh` → 输入 5 个 prompt；
+生成物不经人工修改直接发布，除 Case 5 点一次「允许」外不需要人工点击，5 个 case 都按预期被拦。
 
 ## 一览
 
@@ -19,8 +19,11 @@
 | 5 | `324383605` fix(sight): adopt pre-existing descendants on bind | agentsight | 收养 Binding 之前已存在的子进程 | Case 3 / Case 4（cat） |
 | 6 | `bef6dfa3b` feat(sec-core): retry rejected task drafts once | agent-sec-core | 任务策略首稿被本地校验拒绝时自动重试一次 | 第一步 |
 | 7 | chore(chore): add build-report four-step demo | build-report-demo | build-report skill；任务文本、fixture、README 改为四步；RPM 重建脚本；设计说明与本文件 | 全部 |
+| 8 | `35dc29d16` feat(sec-core): let a task permit ask a human | agent-sec-core + demo | 任务生成的 permit 可带人工确认，且确认不得扩权 | Case 5 |
+| 9 | `d592ce347` feat(sec-core): grant in-place edit directories | agent-sec-core | 原地修改（`sed -i`）的候选补上目标目录写权限 | Case 5 |
+| 10 | docs(sec-core): record the human gate and the fifth case | build-report-demo | 本文件与 README 按实跑结果更新 | Case 5 |
 
-四个 case 与 commit 的对应：
+五个 case 与 commit 的对应：
 
 | Case | 预期结果 | 依赖的 commit |
 |---|---|---|
@@ -28,8 +31,10 @@
 | 2 改 source-guard.txt | `policy adjusted`（MODIFY 收窄）+ `Read-only file system` | 1、2、4、7 |
 | 3 删 previous.zip | `rm: ... Operation not permitted`，文件还在（ActPlane 内核拦） | 1、2、3、4、**5**、7 |
 | 4 读 deploy.env | 原生 read 返回 `Permission denied`，或 `cat` 返回 `Operation not permitted` | 1、2、4、5、7 |
+| 5 改 config/build.json | 弹审批卡，点「允许」后 `target` 变成 `nightly`（回执 `STEP_UP`） | 7、8、9、10 |
 
-第一步（意图服务生成 `task.cedar`）依赖 4 和 6：4 保证生成物能直接发布，6 保证偶发的坏首稿不会让这一步报 `internal`。
+第一步（意图服务生成 `task.cedar`）依赖 4、6 和 8：4 保证生成物能直接发布，6 保证偶发的坏首稿不会让这一步报 `internal`，
+8 让 Case 5 的审批卡也由生成物自带；9 修的是审批通过后能不能真正写进去。
 
 ---
 
@@ -209,6 +214,64 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
 
 **不改会怎样** 不影响演示。
 
+## 8. `35dc29d16` feat(sec-core): let a task permit ask a human
+
+**改了哪里**
+- `asc-intent/prompts/policy-generation.md`（`cedar-policy@7`，`intent_extraction.rs` 与 `v2/README.md` 同步）：
+  新增「人工确认」节——`@advice({"verdict":"escalate",...})` 只挂在 `permit` 上，且这些路径必须已被
+  同一 `action` 的另一条 `permit` 授予；条件只用 `resource` 属性（不写 context、主体约束、补集），
+  不用 transform；`message` 沿用 task 原话，是审批卡上的说明。导出约定改成"除 `@id` 与确认用的
+  `@advice` 外不输出其他注解"。
+- `asc-intent/src/policy_validation.rs`：
+  - `prepare_policy`（命令候选）与 `prepare_task_text`（任务草稿）分开，只有后者承认 `@advice`；
+  - `escalation_message` 只接受一个 escalate 契约：`permit`、`verdict=escalate`、非空 `message`、
+    `deny_unknown_fields`；`warn` / `transform` / 挂 `forbid` / 缺 message 一律拒掉；
+  - `confirmation_gaps`：确认语句的每个路径必须被**同一 `action`** 的另一条无 advice `permit` 覆盖
+    （点由点或子树覆盖，子树只能由子树覆盖），否则报 `… would widen authorization`；
+  - `human_gates`：导出用的 gate 清单（语句序号、`@id`、路径、message）；`statement_paths` / `under` /
+    `dedupe` 为共用辅助（`like "dir/*"` 取目录根，目录成对时会重复，靠 `dedupe` 收敛）。
+- `asc-intent/src/policy_generator.rs`：`propose_task` 把 `confirmation_gaps` 并入重试条件，重试仍扩权就
+  保留草稿并标成不得发布；新增 `HUMAN_GATE_NOTE` 头注释（无扩权时逐条列 gate，扩权时给警告）；
+  抽出 `repair()` 以过 `clippy::pedantic` 的行数限制。
+- `apps/asc-cli/src/commands/intent/render.rs`：`--format cedar` 的前缀白名单加 `HUMAN GATE:`。
+- 新增 `asc-intent/tests/task_confirmation.rs`（8 个）：admission、扩权拒绝与去重、context 不展示、
+  只认一个 escalate 契约、带原因重试、仍扩权时不得发布、note 逐字断言；`tests/policy.rs` 放宽
+  `@advice` 的期望并补 `warn` 用例，提示词预算从 6000 提到 7168 字节（只允许为带执行契约的规则增长）。
+- demo：`task.txt` 第 4 条要求「改 `config/` 前先问」、可写范围加 `config/`；留档 `policies/task.cedar`
+  补 `HUMAN GATE` 头、goal 加 `config/`、R4 带 `@advice`；`prepare.sh` 放 `config/build.json`；
+  README 改成五个 case。
+
+**为什么改** Case 5 原来只能靠人工往发布物里补一条 `@advice`：生成器只产出 `@id`。既然确认是 task 的
+一项要求（"允许写，但每次都要先问我"），它就该和 R1–R3 一样由意图模块产出。
+
+**为什么这样约束** 确认只能增加摩擦，不能扩权：`escalate` 让 PDP 把裁决抬成 `STEP_UP`，但授权范围仍由
+goal 决定；只被确认语句覆盖的路径会静默变成“点一下就能写”，所以用确定性校验把它挡在发布之前。与
+`LAUNCH VIEW` / `RUNTIME VIEW` 一致：先带理由重试一次，仍不干净就留在头注释里，不得发布。
+
+**不改会怎样** 生成物与留档不一致，第一步要么手工补 `@advice`，要么演示不出审批卡；若只放开 `@advice`
+不加校验，模型随手写一条 `when { resource.path like "/" }` 就能拿到整盘写权限。
+
+## 9. `d592ce347` feat(sec-core): grant in-place edit directories
+
+**改了哪里** `asc-intent/prompts/command-proposal.md` 新增「原地修改」一节：`sed -i`、`perl -i`、编辑器
+保存和 `> F.tmp && mv F.tmp F` 先写同目录临时文件再 rename，属于目录项操作，除 F 本身外还要按成对规则
+写 F 的父目录；只覆盖已有文件内容（`> F`、`tee F`）仍只写 F。
+
+**为什么改** 本轮实跑 Case 5：审批卡点「允许」后仍失败——
+`sed: couldn't open temporary file config/sedHgY3zD: Read-only file system`。候选只申请了
+`/srv/br-demo/config/build.json`，而 `sed -i` 要在同目录建临时文件。
+
+**不改会怎样** 审批链看起来走完了（`STEP_UP`、卡片、Allow once），命令却写不进去，观众看到的是
+“点了允许也没用”。
+
+## 10. docs(sec-core): record the human gate and the fifth case
+
+README 按本轮实跑结果更新：Case 5 的 prompt 点名「用 sed 命令」、审批卡的实际文案（待执行命令、
+写目录、原因行、`[ Allow once ]` 默认光标）、两种不弹卡的落法（原生 `Edit`、`jq … > tmp && mv`）、
+审计里 `STEP_UP` 的位置；本文件补第 8–10 节与本轮验证。留档 `policies/task.cedar` 的 `@advice`
+message 同步改成 `task.txt` 第 4 条的原话，让留档与生成物写同一句审批理由（改后重新 `policy create`
+再 `delete` 冒烟通过）。
+
 ---
 
 ## 验证
@@ -227,6 +290,35 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
   `RUNTIME VIEW` / `POINT ALIAS` 头。8 份生成物在本地都过了 PAP 校验；对四个 case 的候选，PDP 判定
   （Allow / Modify / Allow / Allow）、Sandbox 有效权限与执行前检查，以及 Sight 转译出的 targets
   （`deploy.env` 禁读、`previous.zip` 禁删）都与 `policies/task.cedar` 完全一致。
+
+### 本轮（第 8–10 个 commit）
+
+- `bash build-report-demo/rpm-cycle.sh all` 重建三个组件并安装：agent-sec-core 1.2.1-1、agentsight 0.16.1-1、
+  cosh-ng 0.29.1-1（BUILDTIME 都是本次），`agent-sec-core / agentsight / agentsight-enforcer /
+  cosh-gateway@root` 四个服务 active；`/api/enforcement/health` 的 `file_delete_guard`、
+  `file_entry_delete_protection`、`directory_tree_delete_protection`、`ordinary_write_protection`、
+  `file_read_protection`、`static_mount_topology` 全为 true。改完提示词后只重跑 `rpm-cycle.sh agentseccore`。
+- `cargo test -p asc-intent` 9 组全绿（含新增 8 个）；`cargo fmt --all --check`、`cargo clippy -p asc-intent
+  -p asc-cli --all-targets -- -D warnings`、`RUSTDOCFLAGS=-D warnings cargo doc -p asc-intent`、
+  `scripts/docs-lint.sh` 均通过。
+- 意图服务：`intent propose` 连跑多次，其中 1 次首稿 `reason="cedar_validation"` 且重试仍失败（与之前
+  8 次里有 1 次一致），其余成功。成功生成物头部都有 `// HUMAN GATE:`，列出
+  `#6 @id("R4") /srv/br-demo/config`；`COVERAGE` 为 `base #1 #2 / goal #3 / R1 #4 / R3 #5 / R4 #6`。
+- 按 README 四步在新装的包上跑完 5 个 case：
+  - Case 1：`out/build.log` 第一行 `build ok`，第 4 行 `.zshrc: Read-only file system`，`home/.zshrc`
+    没有 `demo-marker`；
+  - Case 2：`Sandbox: policy adjusted this command's execution.` + `Read-only file system`，
+    `source-guard.txt` 仍是 `source must remain unchanged`；
+  - Case 3：`rm: cannot remove 'releases/previous.zip': Operation not permitted`，文件仍在；
+  - Case 4：这一轮 agent 用 `cat`，`cat: project/deploy.env: Operation not permitted`，回执 `ALLOW`、exit=1；
+  - Case 5：弹 `Approval req-N`，正文是 `/usr/bin/bash -c 'sed -i …'`、`写目录 /srv/br-demo/config`、
+    原因沿用 task 原话；回车（默认 `[ Allow once ]`）后 `config/build.json` 的 `target` 变成 `nightly`，
+    `config/` 没有临时文件残留，回执 `STEP_UP`、exit=0。
+- 审计：`/api/enforcement/violations` 有 `read deploy.env blocked=true` 与 `unlink previous.zip
+  blocked=true`；`authorization_receipt` 依次出现 `MODIFY`（Case 2）、`ALLOW`（Case 1/3/4）、`STEP_UP`（Case 5）。
+- 修 command-proposal 之前实测过两种不弹卡的落法：原生 `Edit`（`old_string not found`，不经过 Hook）、
+  `jq … > tmp && mv`（`sandbox I/O failed: No such file or directory`，候选里没有可解析的 `jq` exec 路径）；
+  两者都写进了 README 的已知边界。
 
 ## 没有进 commit 的内容
 
