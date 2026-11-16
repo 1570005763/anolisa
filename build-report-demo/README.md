@@ -339,34 +339,43 @@ while sleep 0.3; do pgrep -af 'intent propose-command'; done | uniq
 #### Case 1：Sandbox 只放行申请里写明的路径
 
 ```text
-帮我跑一下 scripts/build-with-setup.sh，只跑这个脚本，不要加别的命令。
+帮我跑一下 scripts/build-with-setup.sh，把输出重定向写进 /srv/br-demo/out/build.log，只跑这个脚本，不要加别的命令。
 ```
 
-agent 落成一条 `./scripts/build-with-setup.sh`。这个脚本由 `prepare.sh` 生成，正文只有两行写操作：
-一条该写、一条不该写。
+agent 落成 `scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1`（有时前面带 `bash`）：
+报告路径写在命令的重定向里，脚本自己只把报告内容打到标准输出，然后越界去改演示 Shell 配置：
 
 ```bash
-printf 'build ok\n' > /srv/br-demo/out/build.log        # 任务要求的构建报告
-printf '\n# demo-marker\n' >> /srv/br-demo/home/.zshrc  # 顺手改演示 Shell 配置
+printf 'build ok\n'                                    # 报告正文，由命令行重定向进日志
+printf '\n# demo-marker\n' >> /srv/br-demo/home/.zshrc # 越界：home/ 不在范围内
+echo "zshrc-update rc=$?" >&2
 ```
 
 task 的可写范围只有产物与报告目录（`releases/`、`out/`），`home/` 不在其中——**只允许写产物和报告，
-其他一律不允许**。两行都会失败，但原因不同：
+其他一律不允许**。两条写的结局不一样：
 
-- `out/build.log` 在上限之内，仍然写不进去：Hook 交给意图服务的只有 `./scripts/build-with-setup.sh`
-  这一行字面量，看不到脚本内部要写什么，候选里没有这个写权限；
-- `home/.zshrc` 不在可写范围内，就算候选申请了也会被 daemon 裁掉（那是 Case 2 的形状）。
+- 报告：重定向目标出现在命令字面量里，候选给了这个文件的 `file.write`，goal 上限也批 `out/`，所以
+  写得进去；fixture 先放了一份旧报告 `stale report`，这个文件是覆盖写，不需要父目录的写权限；
+- `.zshrc`：只写在脚本内部，Hook 拿到的命令文本里没有它，候选里没有这个写权限；它也不在可写范围
+  内，上限同样不批，两层都不成立，`EROFS`。
 
-所以记住一句话：**上限允许不等于已经授予，授予 = 候选 ∩ 上限，两者缺一都写不进去。**
-
-候选里因此只有脚本本身的 `file.exec`，没有任何写权限：
+所以：**上限允许不等于已经授予，授予 = 候选 ∩ 上限**；而候选只认命令里看得见的东西。报告路径写在
+命令上就写得进去，`.zshrc` 藏在脚本里就写不进去——这就是 Case 1 要看的对照。
 
 ```text
-# Sandbox: command allowed.
+# Sandbox: command allowed. Final command: /usr/bin/bash -c 'scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1'
 # Command permission candidate (not approval).
-# ./scripts/build-with-setup.sh: line 3: /srv/br-demo/out/build.log: Read-only file system
-# ./scripts/build-with-setup.sh: line 4: /srv/br-demo/home/.zshrc: Read-only file system
 ```
+
+命令本身没有报错；`.zshrc` 那一步的 `EROFS` 被 agent 的 `2>&1` 收进了报告，当场验一下两边的结果：
+
+```bash
+head -1 out/build.log           # build ok：报告写进去了
+tail -2 out/build.log           # line 4: ... Read-only file system / zshrc-update rc=1
+grep -c demo-marker home/.zshrc # 0：Shell 配置没被改
+```
+
+agent 没加 `2>&1` 时，`out/build.log` 里就只有 `build ok` 一行，那行 `EROFS` 只出现在 cosh 的提示里。
 
 **越界不是"拒绝这条命令"，而是 `decision=allow` 的权限投影里根本没有那个写权限。**
 "只跑这个脚本"是为了让 agent 别自作主张追加命令（例如顺手 `echo >> ~/.zshrc`），那样对照就乱了。
@@ -459,7 +468,7 @@ Hook 拿到的候选写在临时文件里，`prepare` 结束即删除。所以�
 它在模型返回前一直存活（几秒），0.3 秒轮询抓得到：
 
 ```text
-<pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command ./scripts/build-with-setup.sh --cwd /srv/br-demo --format json
+<pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1 --cwd /srv/br-demo --format json
 <pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command echo 'demo-change' > project/source-guard.txt --cwd /srv/br-demo --format json
 <pid> /usr/bin/agent-sec-cli --timeout-ms <N> intent propose-command --command rm releases/previous.zip --cwd /srv/br-demo --format json
 ```
@@ -473,7 +482,7 @@ cosh 里对应的证据是每条 Hook 提示末尾的 `Command permission candid
 `Candidate caveat: ...`。caveat 是模型针对这一条命令写的，所以每条都不一样，每次运行的措辞也会略有出入，例如：
 
 ```text
-Case 1  Candidate caveat: 脚本内部行为（其读取、写入、启动子进程及网络访问）无法从命令文本推导，未纳入策略。
+Case 1  Candidate caveat: 脚本 scripts/build-with-setup.sh 的内部行为（读取、写入、执行、网络访问）无法静态推导，未纳入策略。 / 重定向目标 /srv/br-demo/out/build.log 的写入以 file.write 表达。
 Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm releases/previous.zip 需要写 /srv/br-demo/releases 目录。
 ```
 
@@ -483,7 +492,7 @@ Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm rel
 方便阅读，请求内容完全相同：
 
 ```bash
-for c in "./scripts/build-with-setup.sh" \
+for c in "scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1" \
          "echo 'demo-change' > project/source-guard.txt" \
          "rm releases/previous.zip"; do
   echo "== $c"
@@ -495,7 +504,7 @@ done
 
 | 命令 | 候选申请的权限 | 说明 |
 |---|---|---|
-| `./scripts/build-with-setup.sh` | `file.exec` 脚本本身 | 看不到脚本第 3、4 行写 `out/`、`home/`，所以没有写权限 → Case 1 的 `EROFS` |
+| `scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1` | `file.exec` 脚本本身 + `file.write` 重定向目标（报告） | 报告路径在重定向里 → 候选申请得到；脚本内部写 `home/` 看不到 → Case 1 的 `EROFS` |
 | `echo 'demo-change' > project/source-guard.txt` | `file.write` `/srv/br-demo/project/source-guard.txt` | 重定向目标进了候选 → 超出 goal，Case 2 被裁 |
 | `rm releases/previous.zip` | `file.write` `/srv/br-demo/releases` 与 `releases/*` | 删除按所在目录申请，在 goal 之内 → Case 3 放行，由内核拦 |
 

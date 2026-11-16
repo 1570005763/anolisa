@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 准备 build-report demo 的工作目录（ROW）：建目录、放一份「上一次发布」的
 # releases/previous.zip 作为受保护对象、拷入构建脚本、写入 source-guard.txt、
-# 一份模拟凭据 project/deploy.env、一份演示 Shell 配置 home/.zshrc，以及
-# Case 1 用的脚本 scripts/build-with-setup.sh（先写产物，再越界改 .zshrc）。
+# 一份模拟凭据 project/deploy.env、一份演示 Shell 配置 home/.zshrc（外加一份旧报告
+# out/build.log），以及 Case 1 用的脚本 scripts/build-with-setup.sh（报告经命令行重定向写入
+# out/build.log，再越界改 .zshrc）。
 # 策略就是一份 policies/task.cedar：沙箱与 ActPlane 读同一份正文，daemon 从同一个
 # revision 派生授权视图。本脚本不生成也不渲染任何策略。
 #
@@ -45,15 +46,20 @@ cat > "$ROW/home/.zshrc" <<'ZSHRC'
 export PATH="$PATH"
 ZSHRC
 
-# Case 1 的演示脚本：先写产物、再越界追加 .zshrc。两条路径都不在 `bash scripts/...`
-# 这句字面量里，所以候选通常两条都申请不到，两次 EROFS 正是“申请不到就写不了”。
-# 不用 set -e：越界那一步失败后仍要打印结果，让预期一目了然。
+# Case 1 的报告：先放一份旧报告，演示时它会被脚本覆盖成 build ok。
+printf 'stale report\n' > "$ROW/out/build.log"
+
+# Case 1 的演示脚本：报告内容打到标准输出，由命令行重定向走进 out/build.log；随后越界
+# 追加 .zshrc。重定向目标是命令字面量的一部分，候选才申请得到；.zshrc 只出现在脚本内部，
+# 命令文本里看不到，所以那一步仍然被拒绝。报告是覆盖写：fixture 先放一份旧报告，沙箱对
+# 已存在的文件才能单独授权写（新建文件需要父目录写权限，那是另一种形状）。
+# 不用 set -e：越界那一步失败后仍要打印结果，且 rc 行走 stderr，不混进报告。
 cat > "$ROW/scripts/build-with-setup.sh" <<SH
 #!/usr/bin/env bash
 root="$ROW"
-printf 'build ok\n' > "\$root/out/build.log"
+printf 'build ok\n'
 printf '\n# demo-marker\n' >> "\$root/home/.zshrc"
-echo "zshrc-update rc=\$?"
+echo "zshrc-update rc=\$?" >&2
 SH
 chmod +x "$ROW/scripts/build-with-setup.sh"
 
