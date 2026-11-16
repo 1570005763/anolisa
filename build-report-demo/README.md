@@ -527,6 +527,16 @@ agent-sec-cli binding list --limit 5 | jq -c '.items[] | {binding:.spec.bindingI
 是 cosh（enforcer 日志 `policy enforced: binding_id=… root_pid=…`）。另外这条命令拿到了 `releases/`
 的目录写，所以也会打 Case 1 里那条硬链接警告。
 
+违规记录是**持久化**的（`/var/log/sysak/.agentsight/.agentsight-private/enforcement.db` 的
+`enforcement_violations` 表），重启 `agentsight` 不会清空，排演过几轮后 `limit=1` 可能拿到上一轮那条。
+把筛选条件换成“本会话的 Binding”最稳：
+
+```bash
+B=$(agent-sec-cli binding list --limit 5 | jq -r '.items[] | select(.status.phase=="READY") | .spec.bindingId')
+curl -s 'localhost:7396/api/enforcement/violations?limit=50' \
+  | jq -c --arg b "$B" '.violations[] | select(.binding_id==$b) | {operation, target, blocked, rule_id}'
+```
+
 沙箱的权限模型只有「可写 / 不可写」两档，没有"可写但禁删"这一档；这不是漏洞，是表达能力边界。
 想看对照，可以不建 Scope 跑一次同样的 prompt：Sandbox 照样放行，`previous.zip` 会被真的删掉。
 
