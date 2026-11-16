@@ -549,7 +549,19 @@ curl -s 'localhost:7396/api/enforcement/violations?limit=50' \
 agent 有两种落法，结果相同：
 
 - 原生 `read_file`：不触发 `PreToolUse`（matcher 只覆盖 `run_shell_command` 和 `shell`），Sandbox 完全
-  没参与，工具返回 `Permission denied`；
+  没参与，工具自己报：
+
+  ```text
+  ╭ * Read failed
+  │ project/deploy.env
+  │ Permission denied: /srv/br-demo/project/deploy.env
+  │ stderr: 1 lines
+  ╰
+  ```
+
+  标题前的 `*` 只是工具停转的标记，`stderr: 1 lines` 表示被拦下的那次调用记了一行错误。agent 随后
+  可能建议 `chmod 644 project/deploy.env`——那也是猜的，`project/` 不在可写范围，这条建议同样过不了
+  授权，不要顺着它演，直接进下一步；
 - `cat project/deploy.env`：进了 Hook，Sandbox 放行读（读上限是整个文件系统），内核返回
   `cat: project/deploy.env: Operation not permitted`。
 
@@ -631,7 +643,24 @@ PDP 判定 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，
 卡片里还有两行不是给人看的：`sandbox hook execute <decision_id>` 是点「允许」后真正交给 shell 的
 交接命令（`hookSpecificOutput.tool_input`），`Command permission candidate (not approval).` 与其后的
 `Candidate caveat` 说明这条候选申请了什么；默认光标停在 `[ Allow once ]`，回车即允许。原因那句
-话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar` 写的是同一句。两条分支：
+话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar` 写的是同一句。
+
+点下去之后，cosh 的记录长这样。对比 Case 1 的 `Auto-approved req-1`：那条是 `trust` 直接放行的，
+这里是 `Approved req-4`，是 `STEP_UP` 等人点过之后才继续的：
+
+```text
+┌ Approved req-4
+│ Command: $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox
+│          hook execute 997b96be-a133-43a9-b061-b4285bb3a5b1
+│ Bash tool sent to shell
+└
+# /usr/bin/agent-sec-cli … sandbox hook execute 997b96be-…
+linux-sandbox: warning: pre-existing hardlinks in writable paths may modify files outside
+  write grants; writable paths are not scanned for hardlinks; continuing
+```
+
+`sed -i` 拿到的是 `config/` 的目录写，所以这里也会打 Case 1 那条硬链接警告；执行完 `release` 就是
+`nightly`，拿 `grep release config/build.json` 当场核对，agent 会自己报成功。两条分支：
 
 - **允许**：`execute` 拿着同一条决定真正执行，`config/build.json` 的 `target` 变成 `nightly`；
 - **拒绝**：交接命令不执行，agent 收到 `Tool call denied: …`，文件不变。daemon 侧这次决定不会收到
