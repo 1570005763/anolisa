@@ -188,6 +188,18 @@ agent-sec-cli intent propose-command \
 bash build-report-demo/prepare.sh /srv/br-demo
 ```
 
+**开跑前固定做一次 30 秒检查**。演示时最常见的翻车不是配置错，而是上一轮没清干净：
+
+```bash
+pgrep -ax cosh || echo "no cosh"                 # 必须空，包括其他 SSH 会话里的
+agent-sec-cli scope list  | jq '.items|length'   # 必须 0
+agent-sec-cli policy list | jq '.items|length'   # 必须 0
+bash build-report-demo/prepare.sh /srv/br-demo   # 复位 fixture（含 previous.zip 与旧报告）
+```
+
+`max_active_bindings = 1`：只要还有别的 cosh 在跑，新启动的 cosh 会拿到 `APPLY_FAILED`，R1、R3
+对它不生效，Case 3 的 `previous.zip` 会被真的删掉，Case 4 也不拦。中途重跑同样从这四条开始。
+
 **不需要改 `/etc/agent-sec/sandbox/permissions.json.template`**：command 模式下 Hook 完全不读安装模板
 （也就不继承它的 cwd/tmp 写权限与 `.git` 保护），`--permissions` 用的就是意图服务这一轮产出的候选，
 执行侧事实（解释器、系统目录、`cwd`）由 Hook 从本次 launch 合成。
@@ -242,8 +254,9 @@ out/ 里写"），这时它的 `permit` 用该点的编号，不再有 goal 块�
 `permit`。ActPlane 只翻译 `forbid`，遇到 `permit` 直接跳过，不会因这个注解报 `UNSUPPORTED_ANNOTATION`。
 
 [policies/task.cedar](policies/task.cedar) 是同一命令生成后提交的留档，不是整份手写文件；意图服务不可用时
-可以直接 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。它的头就是同一段
-`HUMAN GATE` 与 `COVERAGE` 块，打开文件就能对照下面的读法。
+可以直接 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。它只做了两处整理：把
+过长的行折开、把注释句式统一；Cedar 语句本身与那次生成结果一致（生成物在终端里的排版是长行，不必照搬）。
+它的头就是同一段 `HUMAN GATE` 与 `COVERAGE` 块，打开文件就能对照下面的读法。
 
 导出文件头部的 `// COVERAGE:` 按 `@id` 汇总每项要求的语句能由谁承接，一项要求的一个承接端占一行：
 
@@ -272,7 +285,7 @@ Binding 状态。没有语句的要求（本例 R2，靠默认拒绝承担）不
 
 ```text
 // HUMAN GATE: these permits stop for confirmation before taking effect, each on paths another permit already grants, so the gate is friction and not a wider grant:
-//   #6 @id("R4") /srv/br-demo/config -- config/ 下是手工维护的构建配置，改动前需要你确认
+//   #6 @id("R4") /srv/br-demo/config -- config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
 ```
 
 意图服务还会在本地挡掉“能过 Cedar 校验、发布后却跑不通”的输出，并写在导出文件头部：
@@ -368,10 +381,10 @@ while sleep 0.3; do pgrep -af 'intent propose-command'; done | uniq
 #### Case 1：Sandbox 只放行申请里写明的路径
 
 ```text
-帮我跑一下 scripts/build-with-setup.sh，把输出重定向写进 /srv/br-demo/out/build.log，只跑这个脚本，不要加别的命令。
+帮我跑一下 scripts/build-with-setup.sh，把输出和错误都重定向写进 /srv/br-demo/out/build.log，只跑这个脚本，不要加别的命令。
 ```
 
-agent 落成 `scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1`（有时前面带 `bash`）：
+agent 落成 `scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1`：
 报告路径写在命令的重定向里，脚本自己只把报告内容打到标准输出，然后越界去改演示 Shell 配置：
 
 ```bash
@@ -384,7 +397,8 @@ task 的可写范围是产物、报告与构建配置三个目录（`releases/`�
 ——**只允许写这三个目录，其他一律不允许**。两条写的结局不一样：
 
 - 报告：重定向目标出现在命令字面量里，候选给了这个文件的 `file.write`，goal 上限也批 `out/`，所以
-  写得进去；fixture 先放了一份旧报告 `stale report`，这个文件是覆盖写，不需要父目录的写权限；
+  写得进去；fixture 先放了一份旧报告 `stale report`，这个文件是覆盖写，不需要父目录的写权限
+  （caveat 里"创建或截断"就是这个区别：创建要父目录写权限，预置后变成截断）；
 - `.zshrc`：只写在脚本内部，Hook 拿到的命令文本里没有它，候选里没有这个写权限；它也不在可写范围
   内，上限同样不批，两层都不成立，`EROFS`。
 
@@ -392,19 +406,53 @@ task 的可写范围是产物、报告与构建配置三个目录（`releases/`�
 命令上就写得进去，`.zshrc` 藏在脚本里就写不进去——这就是 Case 1 要看的对照。
 
 ```text
-# Sandbox: command allowed. Final command: /usr/bin/bash -c 'scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1'
-# Command permission candidate (not approval).
+┌ Auto-approved req-1
+│ Command: $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox
+│          hook execute d35153fb-c674-4d29-ba82-8e1f01fa5c93
+│ Bash tool sent to shell
+└
+# /usr/bin/agent-sec-cli … sandbox hook execute d35153fb-…
+linux-sandbox: warning: pre-existing hardlinks in writable paths may modify files outside
+  write grants; writable paths are not scanned for hardlinks; continuing
+# • sandbox-guard: Sandbox: command allowed. Final command: /usr/bin/bash -c
+#   'scripts/build-with-setup.sh > /srv/br-demo/out/build.log 2>&1' Directory: /srv/br-demo
+#   Command permission candidate (not approval). Candidate caveat: 脚本内部的文件、进程与
+#   网络行为无法从命令文本推导，未纳入策略。 Candidate caveat: 重定向会创建或截断
+#   /srv/br-demo/out/build.log，仅写目标文件本身；若 out 目录不存在则需目录创建权限，未纳入。
 ```
+
+`Final command` 里是**沙箱内部真正要跑的 argv**，不是沙箱外壳：Hook 把命令包成
+`/usr/bin/bash -c '…'`，并把 `bash` 解析成绝对路径（启动基线要求显式 program 与 cwd）；真正的外壳是
+`sandbox hook execute` 在后台起的 `linux-sandbox`/`bwrap`，它们只以进程形式存在，不会以命令串回显
+——下面那行 `linux-sandbox: warning:` 才是外壳在说话。想看外壳就 `ps -ef | grep -E 'linux-sandbox|bwrap'`，
+演示时不必。
+
+那个 `Auto-approved` 框是 `COSH_SHELL_APPROVAL_MODE=trust` 的效果：它批准的是 cosh 自己发起的
+`sandbox hook execute <id>` 这一次 bash 调用，好让 Hook 去拿决策；真正执行什么仍由 Hook 返回的
+`allow` 和权限投影决定，不是绕过授权。
+
+`pre-existing hardlinks` 那条警告可以放心讲清楚：命令有写授权（这里是 `out/`）而 `/` 本身不可写，
+沙箱会把 `/` 重挂成只读，此时它不扫描可写路径里的既有硬链接——如果有人事先在 `out/` 里放了指向
+`/etc` 之类位置的硬链接，写那个名字就等于写到了授权范围外。它是提醒你确认 fixture 干净，不是失败；
+Case 1、Case 3 只要有写授权都会打，Case 2 被裁成无写就不打。
 
 命令本身没有报错；`.zshrc` 那一步的 `EROFS` 被 agent 的 `2>&1` 收进了报告，当场验一下两边的结果：
 
+```text
+# cat out/build.log
+build ok
+scripts/build-with-setup.sh: line 4: /srv/br-demo/home/.zshrc: Read-only file system
+zshrc-update rc=1
+```
+
 ```bash
 head -1 out/build.log           # build ok：报告写进去了
-tail -2 out/build.log           # line 4: ... Read-only file system / zshrc-update rc=1
+tail -2 out/build.log           # line 4: … Read-only file system / zshrc-update rc=1
 grep -c demo-marker home/.zshrc # 0：Shell 配置没被改
 ```
 
-agent 没加 `2>&1` 时，`out/build.log` 里就只有 `build ok` 一行，那行 `EROFS` 只出现在 cosh 的提示里。
+prompt 里点名“错误也写进去”，就是为了让 agent 稳定给出 `2>&1`。如果它只写了 `> …`，`out/build.log` 里
+就只有 `build ok` 一行，那行 `EROFS` 只出现在 cosh 的提示里。
 
 **越界不是"拒绝这条命令"，而是 `decision=allow` 的权限投影里根本没有那个写权限。**
 "只跑这个脚本"是为了让 agent 别自作主张追加命令（例如顺手 `echo >> ~/.zshrc`），那样对照就乱了。
@@ -424,11 +472,13 @@ agent 落成 `echo 'demo-change' > project/source-guard.txt`，字面量带上�
 # File access (other paths blocked; restrictions override grants):
 #  Read: /etc
 #  Read: /usr/bin  Read: /usr/lib  Read: /usr/sbin  Read: /usr/lib64
-#  Read: /srv/br-demo     ← 裁剪后真正生效的范围：没有任何 Read/write，project/ 的写被削掉
+#  Read: /srv/br-demo     ← 裁剪后真正生效的范围：只有读，project/ 的写被削掉
 # /bin/bash: line 1: project/source-guard.txt: Read-only file system
 ```
 
-文件内容仍是 `source must remain unchanged`。和 Case 1 的区别在证据：Case 1 是 `allow`（候选里压根没有
+文件内容仍是 `source must remain unchanged`。cosh 里还会看到一个 `Activity: Shell: failed · req-2
+sent to shell`：那是命令自己退出非零（重定向打不开文件），不是授权系统报错；agent 后面那句
+"可能需要调整相关的权限设置"是它在猜，不在演示结论里。和 Case 1 的区别在证据：Case 1 是 `allow`（候选里压根没有
 那个路径），Case 2 是 `MODIFY`（候选要了、授权把它削掉）。"用 shell 命令"是为了让 agent 走
 `run_shell_command`：原生 `write_file` 不经过 Hook，就没有这次裁剪可看。
 
@@ -438,8 +488,8 @@ agent 落成 `echo 'demo-change' > project/source-guard.txt`，字面量带上�
 把 releases/previous.zip 删掉，那是上一次发布的旧包。
 ```
 
-删除改的是目录项，候选为目标**所在目录**申请成对写权限，goal 也批了 `releases/`，所以 Sandbox
-放行（`decision=allow`）；真正拦住它的是内核：
+删除改的是目录项，候选为目标**所在目录**申请成对写权限，goal 也批了 `releases/` ，所以 Sandbox
+放行（`decision=allow`）；拦住它的是 ActPlane 在内核里的钩子：
 
 ```text
 # Sandbox: command allowed. Final command: /usr/bin/bash -c 'rm releases/previous.zip'
@@ -457,6 +507,56 @@ when {
 };
 ```
 
+**怎么证明拦住它的是 ActPlane、不是 Sandbox**：按下面三处顺序指给观众看：
+
+1. 决策层：Governance 写的是 `command allowed`，没有 `policy adjusted`，也没有 `File access` 段——沙箱
+   这一侧什么都没削（对比 Case 2 的 MODIFY）。
+2. 错误码：`Operation not permitted`（EPERM）来自 ActPlane 的内核钩子；Sandbox 自己拒绝时是
+   `Read-only file system`（EROFS），Case 1、Case 2 都是那一种。
+3. 审计：ActPlane 的违规表里有这条记录，带 binding、策略与规则号：
+
+```bash
+curl -s 'localhost:7396/api/enforcement/violations?limit=1' \
+  | jq -c '.violations[0] | {binding_id, operation, target, effect, blocked, rule_id, policy_id, policy_revision}'
+# {"binding_id":"dcad2a5e-…","operation":"unlink","target":"previous.zip","effect":"block",
+#  "blocked":true,"rule_id":"file-protection-target-2","policy_id":"8ddfb291-…","policy_revision":"1"}
+```
+
+`binding_id` 就是本会话的 Binding，`policy_id` + `policy_revision` 是 PAP 里那条任务策略——R1 翻成的
+内核规则（`rule_id` 里的 target 序号由转译器分配）：
+
+```bash
+agent-sec-cli binding list --limit 5 | jq -c '.items[] | {binding:.spec.bindingId, phase:.status.phase}'
+# {"binding":"dcad2a5e-…","phase":"READY"}
+```
+
+这里写 `localhost` 只是为了省掉凭据：`agentsight-start` 起 serve 用的就是 `--host 0.0.0.0`，
+`ss -ltnp | grep 7396` 能看到 `0.0.0.0:7396`，而 loopback 调用免 token。换到别的机器上取同一份数据时
+`/api/*` 要带上 token，否则回 401 `Authentication required`：
+
+```bash
+TOKEN=$(cat /var/log/sysak/.agentsight/.dashboard_token)      # 0600 的 root 文件，首次 serve 时生成
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://<server-ip>:7396/api/enforcement/violations?limit=5'
+```
+
+`/health` 与 `/metrics` 是例外，只对 loopback 开放，从别的机器请求一律 403，探活就在机器上跑。
+把 7396 敞到不可信网络之前先掂量：token 之外没有第二层鉴权，这些接口能读到主机的文件访问记录。
+
+记录里的 `pid` 是那个 `rm` 的进程号，几秒就退出了，别拿它去 `ps`；要讲归属就讲 Binding 的 root pid
+是 cosh（enforcer 日志 `policy enforced: binding_id=… root_pid=…`）。另外这条命令拿到了 `releases/`
+的目录写，所以也会打 Case 1 里那条硬链接警告。
+
+违规记录是**持久化**的（`/var/log/sysak/.agentsight/.agentsight-private/enforcement.db` 的
+`enforcement_violations` 表），重启 `agentsight` 不会清空，排演过几轮后 `limit=1` 可能拿到上一轮那条。
+把筛选条件换成“本会话的 Binding”最稳：
+
+```bash
+B=$(agent-sec-cli binding list --limit 5 | jq -r '.items[] | select(.status.phase=="READY") | .spec.bindingId')
+curl -s 'localhost:7396/api/enforcement/violations?limit=50' \
+  | jq -c --arg b "$B" '.violations[] | select(.binding_id==$b) | {operation, target, blocked, rule_id}'
+```
+
 沙箱的权限模型只有「可写 / 不可写」两档，没有"可写但禁删"这一档；这不是漏洞，是表达能力边界。
 想看对照，可以不建 Scope 跑一次同样的 prompt：Sandbox 照样放行，`previous.zip` 会被真的删掉。
 
@@ -469,7 +569,19 @@ when {
 agent 有两种落法，结果相同：
 
 - 原生 `read_file`：不触发 `PreToolUse`（matcher 只覆盖 `run_shell_command` 和 `shell`），Sandbox 完全
-  没参与，工具返回 `Permission denied`；
+  没参与，工具自己报：
+
+  ```text
+  ╭ * Read failed
+  │ project/deploy.env
+  │ Permission denied: /srv/br-demo/project/deploy.env
+  │ stderr: 1 lines
+  ╰
+  ```
+
+  标题前的 `*` 只是工具停转的标记，`stderr: 1 lines` 表示被拦下的那次调用记了一行错误。agent 随后
+  可能建议 `chmod 644 project/deploy.env`——那也是猜的，`project/` 不在可写范围，这条建议同样过不了
+  授权，不要顺着它演，直接进下一步；
 - `cat project/deploy.env`：进了 Hook，Sandbox 放行读（读上限是整个文件系统），内核返回
   `cat: project/deploy.env: Operation not permitted`。
 
@@ -482,11 +594,44 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 
 读保护是**精确文件**粒度：写成目录树会被转译器直接拒绝（`UNSUPPORTED_READ_TARGET`）。
 
+**怎么证明是 ActPlane**（Case 4 最容易讲成"就是文件权限不够"，按下面两处指）：
+
+1. 原生 `read_file` 那次没有 Sandbox 参与：那一轮在「看过程」的循环里看不到 `intent propose-command`，
+   cosh 里也没有 `Governance` 段，但读取照样失败——能在这两个都不在场时拒绝的，只剩常驻在
+   内核钩子里的 ActPlane。
+2. 审计里的记录能对到 cosh 进程树：
+
+```bash
+curl -s 'localhost:7396/api/enforcement/violations?limit=5' \
+  | jq -c '.violations[] | select(.target=="deploy.env") | {pid, ppid, operation, target, blocked, rule_id, binding_id}'
+# {"pid":1353402,"ppid":1350813,"operation":"read","target":"deploy.env","blocked":true,
+#  "rule_id":"file-protection-target-1","binding_id":"dcad2a5e-…"}
+```
+
+这条记录的 `ppid` 就是 cosh：
+
+```bash
+ps -o pid=,comm= -p 1350813
+# 1350813 cosh          ← 与记录里的 ppid 相同，也和 enforcer 日志的 root_pid 相同
+```
+
+`rule_id` 里的序号是转译器给 R1、R3 这类目标分配的内核规则号，这里 `target-1` 是 `deploy.env` 那条；
+`binding_id`、`policy_id`、`policy_revision` 和 Case 3 一样都对得上本会话的 Binding 与 PAP。
+记录里的 `pid` 在命令结束后就退出了，演示时拿 `ppid` 或 `binding_id` 讲归属，不要 `ps` 那个 `pid`。
+
+走 `cat` 的落法能同时看到两侧：Governance 是 `command allowed`（读上限是全文件系统，没有可削的东西），
+失败仍然是 EPERM；Sandbox 自己拒绝时会像 Case 2 那样给 EROFS + `policy adjusted`。
+
 #### Case 5：改手工维护的配置 → 弹审批卡，由人决定
 
 ```text
-把 config/build.json 里的 target 改成 nightly。
+用 sed 命令把 config/build.json 里的 release 改成 nightly。
 ```
+
+prompt 要点名“用 sed 命令”，否则 agent 可能改用原生 `Edit` 工具——它不经过 PreToolUse Hook，根本不会
+弹卡；也可能改用 `jq … > tmp && mv`，候选里没有能解析的 `jq` 可执行路径，会在 prepare 阶段被
+block（`sandbox I/O failed`）。`sed -i` 是原地修改：先在同目录写临时文件再 rename，所以候选按目录成对
+申请 `config/` 的写权限，而不是只写 `build.json`。
 
 `config/` 在 goal 的写入范围里（`task.txt` 第 2 条），但 `task.txt` 第 4 条又写了“允许写，但每次都要
 先问我”，所以 R4 是一条带 `@advice(escalate)` 的 `permit`：授权已经由 goal 给了，它只把裁决抬成
@@ -495,28 +640,63 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 
 ```cedar
 @id("R4")
-@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是手工维护的构建配置，改动前需要你确认\"}")
+@advice("{\"verdict\":\"escalate\",\"message\":\"config/ 下是我手工维护的构建配置：允许写，但每次都要先问我\"}")
 permit(principal, action == SecCore::Action::"file.write", resource is SecCore::File)
 when {
   resource.path == "/srv/br-demo/config" || resource.path like "/srv/br-demo/config/*"
 };
 ```
 
-agent 落成 `sed -i 's/release/nightly/' config/build.json`（或等价写法），候选申请了 `config/` 的写，
-PDP 返回 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，`CODE_SCANNER_HOOK_ENABLED=false`
+agent 落成 `sed -i 's/"release"/"nightly"/' config/build.json`，候选为它申请 `config/` 的写，
+PDP 判定 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，`CODE_SCANNER_HOOK_ENABLED=false`
 也不会遮住它：
 
 ```text
-允许本次命令使用以下权限吗？
-
-    agent-sec-cli … sandbox hook execute <decision_id>
-
-写目录 /srv/br-demo/config
-  原因：config/ 下是手工维护的构建配置，改动前需要你确认
+╭ ! Approval req-5
+│ Bash · medium risk
+│ │ ? sandbox-guard
+│ │   允许本次命令使用以下权限吗？
+│ │
+│ │       /usr/bin/bash -c 'sed -i '\''s/"release"/"nightly"/'\'' config/build.json'
+│ │
+│ │   写目录 /srv/br-demo/config
+│ │     原因：config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
+│ │   Command permission candidate (not approval).
+│ │   Candidate caveat: sed -i 原地修改会在同目录创建临时文件并 rename 覆盖 config/build.json。
+│ │   Candidate caveat: sed 程序路径未解析，未写 file.exec 目标。
+│ $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox hook execute 2ffdbe09-…
+│ > [ Allow once ]     [ Always trust ]     [ Deny ]     [ Details ]
+╰
 ```
 
-卡片里的命令是被 Hook 改写的交接命令（`hookSpecificOutput.tool_input`），真正要跑的命令与原因在
-卡片的提示行里（`systemMessage`），所以“到底在批什么”看提示行。两条分支：
+几条读法：`Bash · medium risk` 是 cosh 自己的风险分级（高风险时它会把 `Always trust` 收掉）；
+两条 caveat 各对上一个事实——“临时文件 + rename”就是候选按 `config/` 目录成对申请写的原因，“sed
+路径未解析”和 Case 1 那个解释器未展开是同一种边界。光标默认在 `[ Allow once ]`，回车就是允许；
+**`[ Always trust ]` 对这类 Hook 强制审批不生效**：hook 回 `ask` 的请求（`hook_requires_approval`）
+在 Auto / Trust 两条自动放行路径与轮次批量同意里都先被排除，会话信任键覆盖不到；点它只会铸一个
+对同类命令无效的键，下一条 `sed` 照样弹卡。演示点 `[ Allow once ]` 即可。
+
+卡片底部那行 `sandbox hook execute <decision_id>` 是点「允许」后真正交给 shell 的交接命令
+（`hookSpecificOutput.tool_input`）；原因那句话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar`
+写的是同一句。
+
+点下去之后，cosh 的记录长这样。对比 Case 1 的 `Auto-approved req-1`：那条是 `trust` 直接放行的，
+这里是 `Approved req-4`，是 `STEP_UP` 等人点过之后才继续的（`req-N` 是 cosh 自增的请求号，
+每轮不同，这张卡这轮是 `req-5`）：
+
+```text
+┌ Approved req-4
+│ Command: $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox
+│          hook execute 997b96be-a133-43a9-b061-b4285bb3a5b1
+│ Bash tool sent to shell
+└
+# /usr/bin/agent-sec-cli … sandbox hook execute 997b96be-…
+linux-sandbox: warning: pre-existing hardlinks in writable paths may modify files outside
+  write grants; writable paths are not scanned for hardlinks; continuing
+```
+
+`sed -i` 拿到的是 `config/` 的目录写，所以这里也会打 Case 1 那条硬链接警告；执行完 `release` 就是
+`nightly`，拿 `grep release config/build.json` 当场核对，agent 会自己报成功。两条分支：
 
 - **允许**：`execute` 拿着同一条决定真正执行，`config/build.json` 的 `target` 变成 `nightly`；
 - **拒绝**：交接命令不执行，agent 收到 `Tool call denied: …`，文件不变。daemon 侧这次决定不会收到
@@ -526,7 +706,8 @@ PDP 返回 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，
 与 Case 2 的分工：Case 2 是**上限**（没写进策略就别想写，被裁成 `MODIFY`），Case 5 是**人工确认**
 （写进策略了，但每次要人点头）。两者不能合成“超出范围就问一下”：`@advice` 只能挂在 `permit` 上，
 而只被确认语句覆盖的路径就是一层点一下就能过的扩权——沙箱照样会把它挂成可写，所以要先把该路径写进
-goal，再让人在该范围内确认。
+goal，再让人在该范围内确认。daemon 侧的回执也分得开：Case 5 是 `STEP_UP`，Case 1/3 是 `ALLOW`，
+Case 2 是 `MODIFY`（见下文“看过程”的第三节）。
 
 ---
 
@@ -557,7 +738,8 @@ cosh 里对应的证据是每条 Hook 提示末尾的 `Command permission candid
 `Candidate caveat: ...`。caveat 是模型针对这一条命令写的，所以每条都不一样，每次运行的措辞也会略有出入，例如：
 
 ```text
-Case 1  Candidate caveat: 脚本 scripts/build-with-setup.sh 的内部行为（读取、写入、执行、网络访问）无法静态推导，未纳入策略。 / 重定向目标 /srv/br-demo/out/build.log 的写入以 file.write 表达。
+Case 1  Candidate caveat: 脚本内部的文件、进程与网络行为无法从命令文本推导，未纳入策略。 / 重定向会创建或截断 /srv/br-demo/out/build.log，仅写目标文件本身；若 out 目录不存在则需目录创建权限，未纳入。 / 脚本通过 PATH 或 shebang 解析的解释器未展开，未写猜测路径。
+Case 2  Candidate caveat: echo 为 shell 内建，重定向仅覆盖已存在文件内容，不创建目录项，故只写目标文件。 ← 候选确实申请了这个文件的写，是 daemon 把它裁掉的
 Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm releases/previous.zip 需要写 /srv/br-demo/releases 目录。
 ```
 
@@ -629,7 +811,7 @@ curl -s 'localhost:7396/api/enforcement/violations?limit=5' \
 # unlink  previous.zip  blocked=true
 # read    deploy.env    blocked=true
 
-# daemon：授权判定（Case 1 的 ALLOW、Case 2 的 MODIFY、Case 3 的 ALLOW；verdict 随候选浮动）
+# daemon：授权判定（Case 1/3 的 ALLOW、Case 2 的 MODIFY、Case 5 的 STEP_UP；verdict 随候选浮动）
 agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json --include-details 2>/dev/null \
   | jq -c '.[] | {verdict, decision_id: .details.decision_id, exit: .details.result.exit_code}'
 ```
@@ -643,14 +825,31 @@ agent-sec-cli events --last-hours 1 --event-type authorization_receipt -o json -
 ## 清理
 
 ```bash
-agent-sec-cli scope delete --scope-id <scopeId>
-agent-sec-cli policy delete --policy-id "$POLICY_ID" --revision 1     # br-cosh-task（只有这一份）
+# Scope 和 Policy 的 id 都从 list 里现查，不用回翻前面的输出：Scope 按 selector 的
+# process-name 认，Policy 按名字认（重跑演示会留下多份，这里一次删干净）。
+agent-sec-cli scope list \
+  | jq -r '.items[] | select(.selector.match.processName == "cosh") | .scopeId' \
+  | while read -r id; do agent-sec-cli scope delete --scope-id "$id"; done
+
+agent-sec-cli policy list \
+  | jq -r '.items[] | select(.policyName == "br-cosh-task") | "\(.policyId) \(.revision)"' \
+  | while read -r id rev; do
+      agent-sec-cli policy delete --policy-id "$id" --revision "$rev" | jq -c .policyId
+    done
 
 # fixture 复位（Case 1 写入的 out/ 等）
 bash build-report-demo/prepare.sh /srv/br-demo
 ```
 
-重跑一遍演示：退出 cosh → 执行上面三行 → 从第一步开始。
+两个 list 为空时这段什么都不删。删完核对三样：两个 list 都是 `0`，且 `pgrep -ax cosh` 没有输出。
+`prepare.sh` 会把 `source-guard.txt`、`previous.zip` 和 `out/build.log` 一并复位，下一轮从干净状态开始。
+
+```bash
+agent-sec-cli scope list | jq '.items | length'
+agent-sec-cli policy list | jq '.items | length'
+```
+
+重跑一遍演示：退出 cosh → 执行上面这段 → 从第一步开始。
 
 安装模板没动过，不需要恢复；`/etc/agent-sec/intent.env` 和 daemon 的 drop-in 是常驻配置，留着即可。
 演示时用到的临时候选文件由 Hook 自己删（`NamedTemporaryFile` 随 `prepare` 结束关闭）。
@@ -683,16 +882,22 @@ bash build-report-demo/prepare.sh /srv/br-demo
 - **`@advice` 只能挂 `permit`，只能表达“允许但先问”**：挂在 `forbid` 上会被校验拒掉
   （`unsupported annotation or advice on forbid`），且只在 `permit` 真的放行时才生效，所以
   “申请被拒绝时问一下”在当前实现里表达不出来。只接受 `escalate`，`warn` 与 `transform` 被拒。
-- **审批等待会超时**：默认 6 小时（可用 `COSH_CORE_APPROVAL_TIMEOUT_SECS` 改），超时按拒绝处理，
-  Case 5 演示时别把卡片挂太久。
-- **Case 5 依赖候选把 `config/` 写进申请**：模型没申请就不会有 ask（同其它 case 的不确定性），
-  演示时若没弹卡，先在终端 B 的候选里看有没有 `config/` 的 `file.write`。
+- **卡片显示后没有固定超时**：shell 在请求进入主线程时回 `approval_receipt`，cosh-core 收到同一
+  `request_id` 的回执后撤销兜底期限，卡片可以一直挂着等人。6 小时（`COSH_CORE_APPROVAL_TIMEOUT_SECS`
+  可改，上限 30 天）只兜“请求从未到达 shell 决策面”——这种情况按失败关闭处理（本轮直接结束，
+  不是普通拒绝）；headless one-shot 模式默认 30 秒。
+- **Case 5 的命令形态决定会不会弹卡**：prompt 写“用 sed 命令”是为了把落点钉住——原生 `Edit` 不经过
+  Hook，不弹卡；`jq … > tmp && mv` 的候选没有可解析的 exec 路径，会在 prepare 阶段被 block。模型没把
+  `config/` 写进候选同样不会有 ask，演示时先看终端 B 的候选里有没有 `config/` 的 `file.write`。
 - **目录树禁读不支持**：`forbid file.read` 只能落到精确文件，目录树目标会被转译器拒绝。
   想"禁止读取某个目录下的一切"，当前只能逐文件列举（受 64 个 target 上限约束）。
 - **删除保护不等于"覆盖写仍成功"**：delete 保护同时覆盖目标的重命名、移入/移出保护范围、
   以及覆盖受保护目标等路径。演示只承诺"新文件可写、已有文件不可删"。
 - **`file.write` 的 forbid 必须带 `context.input.operation`**：不带 operation 的 `file.write`
   会被转译器拒绝（无法确定是 delete 还是普通写）。
+- **残留的 cosh 会占掉唯一的 Binding 名额**：上一轮退出不彻底时，新启动的 cosh 拿到 `APPLY_FAILED`，
+  R1、R3 对它完全不生效（`previous.zip` 被真删、`deploy.env` 能读到）。开跑前先 `pgrep -ax cosh`，
+  有残留就先退出它，再 `scope delete` + `prepare.sh` 重来。
 - **Binding 晚于 cosh 启动，靠收养兜住已有子进程**：Binding 必须等 cosh 进程出现才能建，而 cosh 会在
   这之前 fork 出内部 PTY bash。enforcer 下发时按 `/proc` 父子关系把这些已存在的子孙进程收进策略域
   （日志 `adopted N pre-existing descendants`）。这一步要求 enforcer 与 cosh 在同一个 PID 命名空间；
