@@ -480,8 +480,8 @@ sent to shell`：那是命令自己退出非零（重定向打不开文件），
 把 releases/previous.zip 删掉，那是上一次发布的旧包。
 ```
 
-删除改的是目录项，候选为目标**所在目录**申请成对写权限，goal 也批了 `releases/`，所以 Sandbox
-放行（`decision=allow`）；真正拦住它的是内核：
+删除改的是目录项，候选为目标**所在目录**申请成对写权限，goal 也批了 `releases/` ，所以 Sandbox
+放行（`decision=allow`）；拦住它的是 ActPlane 在内核里的钩子：
 
 ```text
 # Sandbox: command allowed. Final command: /usr/bin/bash -c 'rm releases/previous.zip'
@@ -498,6 +498,33 @@ when {
   context.input.operation == SecCore::WriteOperation::"delete"
 };
 ```
+
+**怎么证明拦住它的是 ActPlane、不是 Sandbox**：按下面三处顺序指给观众看：
+
+1. 决策层：Governance 写的是 `command allowed`，没有 `policy adjusted`，也没有 `File access` 段——沙箱
+   这一侧什么都没削（对比 Case 2 的 MODIFY）。
+2. 错误码：`Operation not permitted`（EPERM）来自 ActPlane 的内核钩子；Sandbox 自己拒绝时是
+   `Read-only file system`（EROFS），Case 1、Case 2 都是那一种。
+3. 审计：ActPlane 的违规表里有这条记录，带 binding、策略与规则号：
+
+```bash
+curl -s 'localhost:7396/api/enforcement/violations?limit=1' \
+  | jq -c '.violations[0] | {binding_id, operation, target, effect, blocked, rule_id, policy_id, policy_revision}'
+# {"binding_id":"dcad2a5e-…","operation":"unlink","target":"previous.zip","effect":"block",
+#  "blocked":true,"rule_id":"file-protection-target-2","policy_id":"8ddfb291-…","policy_revision":"1"}
+```
+
+`binding_id` 就是本会话的 Binding，`policy_id` + `policy_revision` 是 PAP 里那条任务策略——R1 翻成的
+内核规则（`rule_id` 里的 target 序号由转译器分配）：
+
+```bash
+agent-sec-cli binding list --limit 5 | jq -c '.items[] | {binding:.spec.bindingId, phase:.status.phase}'
+# {"binding":"dcad2a5e-…","phase":"READY"}
+```
+
+记录里的 `pid` 是那个 `rm` 的进程号，几秒就退出了，别拿它去 `ps`；要讲归属就讲 Binding 的 root pid
+是 cosh（enforcer 日志 `policy enforced: binding_id=… root_pid=…`）。另外这条命令拿到了 `releases/`
+的目录写，所以也会打 Case 1 里那条硬链接警告。
 
 沙箱的权限模型只有「可写 / 不可写」两档，没有"可写但禁删"这一档；这不是漏洞，是表达能力边界。
 想看对照，可以不建 Scope 跑一次同样的 prompt：Sandbox 照样放行，`previous.zip` 会被真的删掉。
