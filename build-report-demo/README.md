@@ -627,26 +627,40 @@ when {
 };
 ```
 
-agent 落成 `sed -i 's/"release"/"nightly"/g' config/build.json`，候选为它申请 `config/` 的写，
+agent 落成 `sed -i 's/"release"/"nightly"/' config/build.json`，候选为它申请 `config/` 的写，
 PDP 判定 `STEP_UP`，Hook 回 `ask`，cosh 弹卡。`trust` 不会替你点，`CODE_SCANNER_HOOK_ENABLED=false`
 也不会遮住它：
 
 ```text
-允许本次命令使用以下权限吗？
-
-    /usr/bin/bash -c 'sed -i '\''s/"release"/"nightly"/g'\'' config/build.json'
-
-写目录 /srv/br-demo/config
-  原因：config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
+╭ ! Approval req-5
+│ Bash · medium risk
+│ │ ? sandbox-guard
+│ │   允许本次命令使用以下权限吗？
+│ │
+│ │       /usr/bin/bash -c 'sed -i '\''s/"release"/"nightly"/'\'' config/build.json'
+│ │
+│ │   写目录 /srv/br-demo/config
+│ │     原因：config/ 下是我手工维护的构建配置：允许写，但每次都要先问我
+│ │   Command permission candidate (not approval).
+│ │   Candidate caveat: sed -i 原地修改会在同目录创建临时文件并 rename 覆盖 config/build.json。
+│ │   Candidate caveat: sed 程序路径未解析，未写 file.exec 目标。
+│ $ /usr/bin/agent-sec-cli --socket /run/agent-sec-core/daemon.sock sandbox hook execute 2ffdbe09-…
+│ > [ Allow once ]     [ Always trust ]     [ Deny ]     [ Details ]
+╰
 ```
 
-卡片里还有两行不是给人看的：`sandbox hook execute <decision_id>` 是点「允许」后真正交给 shell 的
-交接命令（`hookSpecificOutput.tool_input`），`Command permission candidate (not approval).` 与其后的
-`Candidate caveat` 说明这条候选申请了什么；默认光标停在 `[ Allow once ]`，回车即允许。原因那句
-话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar` 写的是同一句。
+几条读法：`Bash · medium risk` 是 cosh 自己的风险分级（高风险时它会把 `Always trust` 收掉）；
+两条 caveat 各对上一个事实——“临时文件 + rename”就是候选按 `config/` 目录成对申请写的原因，“sed
+路径未解析”和 Case 1 那个解释器未展开是同一种边界。光标默认在 `[ Allow once ]`，回车就是允许；
+**演示时别点 `[ Always trust ]`**，它会在本会话里把这种命令形状记成信任，第二条同类命令就不弹卡了。
+
+卡片底部那行 `sandbox hook execute <decision_id>` 是点「允许」后真正交给 shell 的交接命令
+（`hookSpecificOutput.tool_input`）；原因那句话沿用 `task.txt` 第 4 条的原话，留档 `policies/task.cedar`
+写的是同一句。
 
 点下去之后，cosh 的记录长这样。对比 Case 1 的 `Auto-approved req-1`：那条是 `trust` 直接放行的，
-这里是 `Approved req-4`，是 `STEP_UP` 等人点过之后才继续的：
+这里是 `Approved req-4`，是 `STEP_UP` 等人点过之后才继续的（`req-N` 是 cosh 自增的请求号，
+每轮不同，这张卡这轮是 `req-5`）：
 
 ```text
 ┌ Approved req-4
