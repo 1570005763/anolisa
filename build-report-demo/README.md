@@ -464,11 +464,13 @@ agent 落成 `echo 'demo-change' > project/source-guard.txt`，字面量带上�
 # File access (other paths blocked; restrictions override grants):
 #  Read: /etc
 #  Read: /usr/bin  Read: /usr/lib  Read: /usr/sbin  Read: /usr/lib64
-#  Read: /srv/br-demo     ← 裁剪后真正生效的范围：没有任何 Read/write，project/ 的写被削掉
+#  Read: /srv/br-demo     ← 裁剪后真正生效的范围：只有读，project/ 的写被削掉
 # /bin/bash: line 1: project/source-guard.txt: Read-only file system
 ```
 
-文件内容仍是 `source must remain unchanged`。和 Case 1 的区别在证据：Case 1 是 `allow`（候选里压根没有
+文件内容仍是 `source must remain unchanged`。cosh 里还会看到一个 `Activity: Shell: failed · req-2
+sent to shell`：那是命令自己退出非零（重定向打不开文件），不是授权系统报错；agent 后面那句
+"可能需要调整相关的权限设置"是它在猜，不在演示结论里。和 Case 1 的区别在证据：Case 1 是 `allow`（候选里压根没有
 那个路径），Case 2 是 `MODIFY`（候选要了、授权把它削掉）。"用 shell 命令"是为了让 agent 走
 `run_shell_command`：原生 `write_file` 不经过 Hook，就没有这次裁剪可看。
 
@@ -606,6 +608,7 @@ cosh 里对应的证据是每条 Hook 提示末尾的 `Command permission candid
 
 ```text
 Case 1  Candidate caveat: 脚本内部的文件、进程与网络行为无法从命令文本推导，未纳入策略。 / 重定向会创建或截断 /srv/br-demo/out/build.log，仅写目标文件本身；若 out 目录不存在则需目录创建权限，未纳入。 / 脚本通过 PATH 或 shebang 解析的解释器未展开，未写猜测路径。
+Case 2  Candidate caveat: echo 为 shell 内建，重定向仅覆盖已存在文件内容，不创建目录项，故只写目标文件。 ← 候选确实申请了这个文件的写，是 daemon 把它裁掉的
 Case 3  Candidate caveat: 删除以目标所在目录的写权限表达：rm releases/previous.zip 需要写 /srv/br-demo/releases 目录。
 ```
 
