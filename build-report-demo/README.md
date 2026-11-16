@@ -225,8 +225,8 @@ out/ 里写"），这时它的 `permit` 用该点的编号，不再有 goal 块�
 `@id` 只是要求编号，不决定由哪个执行端承担：哪端取哪条，由各自能表达的形状决定
 （见开头的环境 C 表）。Sandbox、PDP 与 ActPlane 的转译器都接受 `@id`；除 `@id` 以外的注解仍会被拒绝。
 
-[policies/task.cedar](policies/task.cedar) 是同一结构的留档，意图服务不可用时可以直接
-`--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样；它的头部抄了同一段
+[policies/task.cedar](policies/task.cedar) 是同一命令生成后提交的留档，不是手写文件；意图服务不可用时
+可以直接 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。它的头就是同一段
 `COVERAGE` 块，打开文件就能对照下面的读法。
 
 导出文件头部的 `// COVERAGE:` 按 `@id` 汇总每项要求的语句能由谁承接，一项要求的一个承接端占一行：

@@ -168,7 +168,7 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
 ### 7.0 build-report skill 与初版演示（原 `e5b6636f6`）
 
 **改了哪里** `skill/build-report/`（`SKILL.md`、`README.md` 与 `build.sh` / `clean.sh` / `deps.sh` / `report.sh`），
-以及 `task.txt`、`policies/task.cedar`、`prepare.sh`、`run-demo.sh` 的初版。
+以及 `task.txt`、`policies/task.cedar`、`prepare.sh` 的初版。
 
 **为什么改** 提供演示要跑的 skill（构建 `project/` 为 `releases/new.zip`、保留 `previous.zip` 回滚、上报 GitHub Issue），以及意图任务文本、目标策略和 fixture。
 
@@ -182,7 +182,7 @@ CLI 只看到 `intent daemon rejected request: internal`，第一步失败。
   写入范围只照抄 task 写明的位置，成 `goal` 块，因此多次生成结果一致。
 - `policies/task.cedar`：与当前生成物同结构的留档（基础授权、goal、R1–R3；意图服务不可用时可直接 `--file` 发布）。
 - `prepare.sh`：新增 Case 1 脚本 `scripts/build-with-setup.sh`、演示用 `home/.zshrc`、模拟凭据 `project/deploy.env`。
-- `run-demo.sh`：ActPlane 改为绑定统一策略，不再用第二份 `actplane.cedar`。
+- `run-demo.sh` 已删除（本分支后续改动）：它的 pap / sandbox / actplane 三步与 README 的四步手工流程重复，两边容易分叉；手动跑以 README 为准，需要时从 `e5b6636f6` 取回。
 - `README.md`：开头一张架构图（task.txt → 意图服务 → PAP → Sandbox / PDP / ActPlane → cosh）加一张完整流程图，后者覆盖完整链路（task.txt → 意图服务 → task.cedar → PAP 三个消费者 → Scope → cosh/Binding/收养 → 四个 prompt 各自落到哪个 case）；四步流程、四个 prompt 与预期输出、cosh 的 4 个环境变量、确认 `READY` 与收养日志、审计、清理、已知边界。
 
 **为什么改**
