@@ -1,0 +1,89 @@
+name: demo666 test RPMs
+
+on:
+  push:
+    branches: [ci/demo666-rpm-a2ae9b9]
+
+permissions:
+  contents: read
+
+env:
+  DEMO_SOURCE: a2ae9b97e6a052012461acaacb41f6bae50f11eb
+  RUSTUP_TOOLCHAIN: '1.93.1'
+  CARGO_BUILD_JOBS: '4'
+
+jobs:
+  rpm:
+    name: ${{ matrix.component }} RPM (ALinux 4 x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: alibaba-cloud-linux-4-registry.cn-hangzhou.cr.aliyuncs.com/alinux4/alinux4:latest
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [agent-sec-core]
+    steps:
+      - name: Install build dependencies
+        run: |
+          sed -i -e 's/cloud.aliyuncs/aliyun/g' /etc/yum.repos.d/*.repo
+          dnf --setopt=timeout=120 --setopt=retries=3 install -y \
+            tar git gzip findutils which rpm-build systemd-rpm-macros \
+            make gcc gcc-c++ glibc-static clang clang-devel llvm \
+            openssl-devel libseccomp-devel bubblewrap python3-pip \
+            perl-core perl-IPC-Cmd perl-FindBin libbpf-devel \
+            elfutils-libelf-devel zlib-devel pkgconf-pkg-config
+
+      - uses: actions/checkout@v4
+        with:
+          repository: haosanzi/anolisa
+          ref: ${{ env.DEMO_SOURCE }}
+          persist-credentials: false
+
+      - name: Verify source and architecture
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          test "$(git rev-parse HEAD)" = "$DEMO_SOURCE"
+          test "$(uname -m)" = x86_64
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.1'
+          components: rustfmt
+
+      - uses: astral-sh/setup-uv@v8.0.0
+        if: matrix.component == 'agent-sec-core'
+        with:
+          python-version: '3.11.6'
+          enable-cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.2'
+
+      - name: Build and fingerprint RPMs
+        env:
+          COMPONENT: ${{ matrix.component }}
+          OPENSSL_NO_VENDOR: '1'
+        run: |
+          ./scripts/rpm-build.sh "$COMPONENT"
+          test -d scripts/rpmbuild/RPMS/x86_64
+          shopt -s nullglob
+          rpms=(scripts/rpmbuild/RPMS/{x86_64,noarch}/*.rpm)
+          test "${#rpms[@]}" -gt 0
+          mkdir out
+          cp -t out "${rpms[@]}"
+          cd out
+          printf 'source=haosanzi/anolisa\nsha=%s\ncomponent=%s\n' "$DEMO_SOURCE" "$COMPONENT" > build-source.txt
+          rpm -qp --queryformat '%{NAME} %{EPOCHNUM}:%{VERSION}-%{RELEASE} %{ARCH}\n' ./*.rpm > packages.txt
+          sha256sum -- ./*.rpm > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: demo666-${{ matrix.component }}-a2ae9b9-x86_64
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
