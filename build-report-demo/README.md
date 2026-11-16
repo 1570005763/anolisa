@@ -551,6 +551,34 @@ when { resource.path == "/srv/br-demo/project/deploy.env" };
 
 读保护是**精确文件**粒度：写成目录树会被转译器直接拒绝（`UNSUPPORTED_READ_TARGET`）。
 
+**怎么证明是 ActPlane**（Case 4 最容易讲成"就是文件权限不够"，按下面两处指）：
+
+1. 原生 `read_file` 那次没有 Sandbox 参与：那一轮在「看过程」的循环里看不到 `intent propose-command`，
+   cosh 里也没有 `Governance` 段，但读取照样失败——能在这两个都不在场时拒绝的，只剩常驻在
+   内核钩子里的 ActPlane。
+2. 审计里的记录能对到 cosh 进程树：
+
+```bash
+curl -s 'localhost:7396/api/enforcement/violations?limit=5' \
+  | jq -c '.violations[] | select(.target=="deploy.env") | {pid, ppid, operation, target, blocked, rule_id, binding_id}'
+# {"pid":1353402,"ppid":1350813,"operation":"read","target":"deploy.env","blocked":true,
+#  "rule_id":"file-protection-target-1","binding_id":"dcad2a5e-…"}
+```
+
+这条记录的 `ppid` 就是 cosh：
+
+```bash
+ps -o pid=,comm= -p 1350813
+# 1350813 cosh          ← 与记录里的 ppid 相同，也和 enforcer 日志的 root_pid 相同
+```
+
+`rule_id` 里的序号是转译器给 R1、R3 这类目标分配的内核规则号，这里 `target-1` 是 `deploy.env` 那条；
+`binding_id`、`policy_id`、`policy_revision` 和 Case 3 一样都对得上本会话的 Binding 与 PAP。
+记录里的 `pid` 在命令结束后就退出了，演示时拿 `ppid` 或 `binding_id` 讲归属，不要 `ps` 那个 `pid`。
+
+走 `cat` 的落法能同时看到两侧：Governance 是 `command allowed`（读上限是全文件系统，没有可削的东西），
+失败仍然是 EPERM；Sandbox 自己拒绝时会像 Case 2 那样给 EROFS + `policy adjusted`。
+
 #### Case 5：改手工维护的配置 → 弹审批卡，由人决定
 
 ```text
