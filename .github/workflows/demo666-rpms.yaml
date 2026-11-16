@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [agent-sec-core, cosh-ng, agentsight]
+        component: [agentsight]
     steps:
       - name: Install build dependencies
         run: |
@@ -52,6 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.93.1'
+          components: rustfmt
 
       - uses: astral-sh/setup-uv@v8.0.0
         if: matrix.component == 'agent-sec-core'
