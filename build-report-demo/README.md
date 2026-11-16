@@ -342,8 +342,24 @@ while sleep 0.3; do pgrep -af 'intent propose-command'; done | uniq
 帮我跑一下 scripts/build-with-setup.sh，只跑这个脚本，不要加别的命令。
 ```
 
-agent 落成一条 `./scripts/build-with-setup.sh`。Hook 交给意图服务的只有这一行字面量，它看不到脚本
-第 3、4 行会写什么，所以候选里既没有 `out/` 也没有 `home/`：
+agent 落成一条 `./scripts/build-with-setup.sh`。这个脚本由 `prepare.sh` 生成，正文只有两行写操作：
+一条该写、一条不该写。
+
+```bash
+printf 'build ok\n' > /srv/br-demo/out/build.log        # 任务要求的构建报告
+printf '\n# demo-marker\n' >> /srv/br-demo/home/.zshrc  # 顺手改演示 Shell 配置
+```
+
+task 的可写范围只有产物与报告目录（`releases/`、`out/`），`home/` 不在其中——**只允许写产物和报告，
+其他一律不允许**。两行都会失败，但原因不同：
+
+- `out/build.log` 在上限之内，仍然写不进去：Hook 交给意图服务的只有 `./scripts/build-with-setup.sh`
+  这一行字面量，看不到脚本内部要写什么，候选里没有这个写权限；
+- `home/.zshrc` 不在可写范围内，就算候选申请了也会被 daemon 裁掉（那是 Case 2 的形状）。
+
+所以记住一句话：**上限允许不等于已经授予，授予 = 候选 ∩ 上限，两者缺一都写不进去。**
+
+候选里因此只有脚本本身的 `file.exec`，没有任何写权限：
 
 ```text
 # Sandbox: command allowed.
