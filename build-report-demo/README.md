@@ -254,8 +254,9 @@ out/ 里写"），这时它的 `permit` 用该点的编号，不再有 goal 块�
 `permit`。ActPlane 只翻译 `forbid`，遇到 `permit` 直接跳过，不会因这个注解报 `UNSUPPORTED_ANNOTATION`。
 
 [policies/task.cedar](policies/task.cedar) 是同一命令生成后提交的留档，不是整份手写文件；意图服务不可用时
-可以直接 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。它的头就是同一段
-`HUMAN GATE` 与 `COVERAGE` 块，打开文件就能对照下面的读法。
+可以直接 `--file build-report-demo/policies/task.cedar` 发布，后续步骤完全一样。它只做了两处整理：把
+过长的行折开、把注释句式统一；Cedar 语句本身与那次生成结果一致（生成物在终端里的排版是长行，不必照搬）。
+它的头就是同一段 `HUMAN GATE` 与 `COVERAGE` 块，打开文件就能对照下面的读法。
 
 导出文件头部的 `// COVERAGE:` 按 `@id` 汇总每项要求的语句能由谁承接，一项要求的一个承接端占一行：
 
