@@ -45,6 +45,7 @@ jobs:
 
       - name: Verify source and architecture
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           test "$(git rev-parse HEAD)" = "$DEMO_SOURCE"
           test "$(uname -m)" = x86_64
 
