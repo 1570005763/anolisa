@@ -1,0 +1,76 @@
+name: Isolated direct Judge HTTP regression
+on:
+  push:
+    branches: [codex/score-direct-chunk-check-1123-r3]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Bind only the temporary harness on top of the candidate
+        run: |
+          git diff --exit-code HEAD^ HEAD -- src docs distribution
+          test "$(git rev-parse HEAD^)" = 7d1c606220bd9a5d060ccc67b6473da96af69ba7
+          git rev-parse HEAD^
+          uname -sm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.1'
+          components: rustfmt, clippy
+      - name: Install Linux build headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libcap-dev libseccomp-dev libssl-dev clang
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/agent-sec-core/agent-sec-cli/target
+            src/agent-sec-core/v2/target
+            src/agent-sec-core/linux-sandbox/target
+          key: score-ubuntu22-rust1931-${{ hashFiles('src/agent-sec-core/**/Cargo.lock') }}
+          restore-keys: score-ubuntu22-rust1931-
+      - name: Run model and Judge regressions
+        working-directory: src/agent-sec-core/v2
+        run: |
+          cargo clean -p asc-model-client -p asc-skill-score -p asc-cli
+          cargo test --locked -p asc-model-client -p asc-skill-score --lib
+      - name: Exercise the CLI against the loopback model
+        id: cli
+        if: ${{ !cancelled() }}
+        working-directory: src/agent-sec-core/v2
+        run: cargo test --locked -p asc-cli --test skill_score
+      - name: Verify wire framing with the actual CLI
+        if: ${{ !cancelled() && steps.cli.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          sha256sum src/agent-sec-core/v2/target/debug/agent-sec-cli | tee "$RUNNER_TEMP/cli-sha256"
+          python3 .github/score-direct-chunks.py src/agent-sec-core/v2/target/debug/agent-sec-cli "$RUNNER_TEMP/receipts" | tee "$RUNNER_TEMP/summary.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.cli.outcome == 'success' }}
+        with:
+          name: direct-chunk-acceptance
+          retention-days: 5
+          path: |
+            ${{ runner.temp }}/summary.jsonl
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/cli-sha256
+      - name: Check format, clippy, and API docs
+        if: ${{ !cancelled() }}
+        working-directory: src/agent-sec-core/v2
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p asc-model-client -p asc-skill-score -p asc-cli --all-targets -- -D warnings
+          cargo doc --locked -p asc-model-client -p asc-skill-score --no-deps
