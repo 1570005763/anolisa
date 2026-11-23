@@ -1,0 +1,90 @@
+name: Isolated Skill Score diagnostics
+on:
+  push:
+    branches: [codex/score-failure-review-ci-1123]
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Bind only the temporary harness on top of the candidate
+        run: |
+          git diff --exit-code HEAD^ HEAD -- src docs distribution
+          test "$(git rev-parse HEAD^)" = feb7a58085b322f3290f564a52ee39ae9d002d89
+          git rev-parse HEAD^
+          uname -sm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.93.1'
+          components: rustfmt, clippy
+      - name: Install Linux build headers
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libcap-dev libseccomp-dev libssl-dev clang
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/agent-sec-core/agent-sec-cli/target
+            src/agent-sec-core/v2/target
+            src/agent-sec-core/linux-sandbox/target
+          key: score-ubuntu22-rust1931-${{ hashFiles('src/agent-sec-core/**/Cargo.lock') }}
+      - name: Run model and Judge regressions
+        working-directory: src/agent-sec-core/v2
+        run: |
+          cargo test --locked -p asc-model-client -p asc-skill-score --lib
+      - name: Record the final-stage adjudication response failure
+        if: ${{ !cancelled() }}
+        working-directory: src/agent-sec-core/v2
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked -p asc-skill-score --lib judge::tests::final_judge_persists_the_response_diagnostic_without_a_verdict -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/final-missing-usage.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/final-missing-usage.log"
+      - name: Exercise the CLI against the loopback model
+        if: ${{ !cancelled() }}
+        working-directory: src/agent-sec-core/v2
+        run: cargo test --locked -p asc-cli --test skill_score
+      - name: Package the CLI for private loopback integration tests
+        run: |
+          gzip -nc src/agent-sec-core/v2/target/debug/agent-sec-cli > "$RUNNER_TEMP/agent-sec-cli.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: regression-cli-ubuntu22
+          retention-days: 1
+          path: ${{ runner.temp }}/agent-sec-cli.gz
+      - name: Collect synthetic CLI receipts
+        if: ${{ !cancelled() }}
+        run: |
+          sha256sum src/agent-sec-core/v2/target/debug/agent-sec-cli
+          set -o pipefail
+          python3 .github/isolated-cli-replay.py src/agent-sec-core/v2/target/debug/agent-sec-cli "$RUNNER_TEMP/receipts" | tee "$RUNNER_TEMP/summary.jsonl"
+          python3 .github/isolated-early-cli.py src/agent-sec-core/v2/target/debug/agent-sec-cli "$RUNNER_TEMP/receipts" | tee "$RUNNER_TEMP/early.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: judge-loopback-receipts
+          retention-days: 3
+          path: |
+            ${{ runner.temp }}/early.jsonl
+            ${{ runner.temp }}/receipts
+            ${{ runner.temp }}/summary.jsonl
+            ${{ runner.temp }}/final-missing-usage.log
+      - name: Check format, clippy, and API docs
+        if: ${{ !cancelled() }}
+        working-directory: src/agent-sec-core/v2
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked -p asc-model-client -p asc-skill-score -p asc-cli --all-targets -- -D warnings
+          cargo doc --locked -p asc-model-client -p asc-skill-score --no-deps
