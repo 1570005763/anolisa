@@ -183,7 +183,18 @@ fn missing_task_reports_stage_and_escaped_path_without_a_report() {
         assert!(error.contains("stage=task.resolve"), "{error}");
         assert!(error.contains(&format!("path={path:?}")), "{error}");
         assert!(error.contains("os error 2"), "{error}");
-        assert_eq!(error.lines().count(), 1, "{error}");
+        assert_eq!(error.lines().count(), 2, "{error}");
+        let event = error
+            .lines()
+            .last()
+            .unwrap()
+            .strip_prefix("[skill-score] Command failed: diagnostic=")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(event).unwrap(),
+            json!({"stage":"task.resolve","reason":"io","errno":2})
+        );
+
         assert!(result.stdout.is_empty() && !report.exists());
     }
 }
@@ -314,60 +325,250 @@ exit 77
     assert!(String::from_utf8_lossy(&result.stderr).contains("model"));
 }
 
-fn serve_planning_response() -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+#[derive(Clone, Copy)]
+enum PlanReply {
+    Valid,
+    EmptyProbes,
+    NonObject(&'static str),
+    Truncated,
+    MissingText,
+    MissingUsage,
+}
+
+fn respond_to_plan(mut stream: std::net::TcpStream, variant: PlanReply) -> bool {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut reader = BufReader::new(&stream);
+    let mut length = 0;
+    let mut header = String::new();
+    loop {
+        header.clear();
+        if reader.read_line(&mut header).unwrap() == 0 {
+            return false;
+        }
+        if header == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().unwrap();
+        }
+    }
+    assert!((1..=2_000_000).contains(&length));
+    let mut bytes = vec![0; length];
+    reader.read_exact(&mut bytes).unwrap();
+    let request: Value = serde_json::from_slice(&bytes).unwrap();
+    let prompt = request["messages"][0]["content"].as_str().unwrap();
+    let payload = prompt.split("\nRequired JSON schema:").next().unwrap();
+    let payload: Value = serde_json::from_str(payload).unwrap();
+    let reviewed = |field: &str| -> serde_json::Map<String, Value> {
+        payload[field].as_object().unwrap().keys().map(|id| {
+            (id.clone(), json!({"status":"not_applicable", "reason":"This example only describes input."}))
+        }).collect()
+    };
+    let probes = if matches!(variant, PlanReply::EmptyProbes) {
+        json!([])
+    } else {
+        json!([{"id":"baseline", "template":"baseline", "finding_ids":[], "input_path":"",
+            "entry_path":"SKILL.md","turns":["Describe this Skill."],
+            "activation":"Read the instructions","expected_result":"A description"}])
+    };
+    let audit = if payload.get("failed_probes").is_some() {
+        json!({"probes":probes})
+    } else {
+        json!({"objective":"Describe the supplied Skill", "allowed_boundary":"Read SKILL.md",
+            "findings":[], "pattern_checks":reviewed("risk_catalog"),
+            "hygiene_review":reviewed("hygiene_checks"), "probes":probes})
+    };
+    let mut envelope = json!({"content":[{"type":"text","text":audit.to_string()}],
+        "usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"end_turn"});
+    match variant {
+        PlanReply::NonObject(text) => envelope["content"][0]["text"] = text.into(),
+        PlanReply::MissingText => {
+            envelope["content"] = json!([{"type":"thinking","thinking":"private-fixture-text"}]);
+        }
+        PlanReply::MissingUsage => {
+            envelope.as_object_mut().unwrap().remove("usage");
+        }
+        PlanReply::Valid | PlanReply::EmptyProbes | PlanReply::Truncated => {}
+    }
+    let mut reply = serde_json::to_vec(&envelope).unwrap();
+    let declared = reply.len();
+    if matches!(variant, PlanReply::Truncated) {
+        reply.truncate(declared / 2);
+    }
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    stream.write_all(&reply).unwrap();
+    true
+}
+
+fn run_fixture_plan(
+    prefix: &Path,
+    skill: &Path,
+    output: &Path,
+    replies: &'static [PlanReply],
+) -> (std::process::Output, usize) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut reader = BufReader::new(&stream);
-        let mut length = 0;
-        let mut header = String::new();
-        loop {
-            header.clear();
-            assert!(reader.read_line(&mut header).unwrap() > 0);
-            if header == "\r\n" {
+        let mut count = 0;
+        for stream in listener.incoming() {
+            let reply = replies[count.min(replies.len() - 1)];
+            if !respond_to_plan(stream.unwrap(), reply) {
                 break;
             }
-            if let Some((name, value)) = header.split_once(':')
-                && name.eq_ignore_ascii_case("content-length")
-            {
-                length = value.trim().parse().unwrap();
-            }
+            count += 1;
         }
-        assert!((1..=2_000_000).contains(&length));
-        let mut bytes = vec![0; length];
-        reader.read_exact(&mut bytes).unwrap();
-        let request: Value = serde_json::from_slice(&bytes).unwrap();
-        let prompt = request["messages"][0]["content"].as_str().unwrap();
-        let (payload, _) = prompt.split_once("\nRequired JSON schema:").unwrap();
-        let payload: Value = serde_json::from_str(payload).unwrap();
-        let reviewed = |field: &str| -> serde_json::Map<String, Value> {
-            payload[field].as_object().unwrap().keys().map(|id| {
-                (id.clone(), json!({"status":"not_applicable", "reason":"This example only describes input."}))
-            }).collect()
-        };
-        let audit = json!({
-            "objective":"Describe the supplied Skill", "allowed_boundary":"Read SKILL.md",
-            "findings":[], "pattern_checks":reviewed("risk_catalog"),
-            "hygiene_review":reviewed("hygiene_checks"),
-            "probes":[{"id":"baseline", "template":"baseline", "finding_ids":[], "input_path":"",
-                "entry_path":"SKILL.md","turns":["Describe this Skill."],
-                "activation":"Read the instructions","expected_result":"A description"}]
-        });
-        let reply = json!({"content":[{"type":"text","text":audit.to_string()}],
-            "usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"end_turn"})
-        .to_string();
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-            reply.len()
+        count
+    });
+    let config = prefix.join("model.json");
+    std::fs::write(
+        &config,
+        json!({"schemaVersion":1,"remote":{
+        "provider":"anthropic-compatible","baseUrl":format!("http://{address}"),
+        "defaultModel":"fixture-model","apiKeyEnv":"FIXTURE_MODEL_KEY"}})
+        .to_string(),
+    )
+    .unwrap();
+    let plan = command(prefix)
+        .env("AGENT_SEC_MODEL_CONFIG", config)
+        .env("FIXTURE_MODEL_KEY", "fixture-credential")
+        .arg("plan")
+        .arg(skill)
+        .arg("--output-file")
+        .arg(output)
+        .output()
+        .unwrap();
+    // An empty connection wakes the listener even if the CLI made no requests.
+    drop(std::net::TcpStream::connect(address).unwrap());
+    (plan, server.join().unwrap())
+}
+
+#[test]
+fn plan_distinguishes_unusable_responses_and_recovers_an_interrupted_body_once() {
+    use PlanReply::{MissingText, MissingUsage, Truncated, Valid};
+
+    for (replies, expected, calls, success) in [
+        (&[Truncated, Valid][..], "body_truncated", 2, true),
+        (&[Truncated][..], "body_truncated", 2, false),
+        (&[MissingText][..], "missing_text", 1, false),
+        (&[MissingUsage][..], "missing_usage", 1, false),
+    ] {
+        let prefix = installation();
+        let skill = prefix.0.join("skill");
+        std::fs::create_dir(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "# Example\nDescribe the supplied input.",
         )
         .unwrap();
-    });
-    (address, server)
+        let task = prefix.0.join("task.json");
+        let (plan, count) = run_fixture_plan(&prefix.0, &skill, &task, replies);
+        let stderr = String::from_utf8(plan.stderr).unwrap();
+        assert_eq!(count, calls, "{stderr}");
+        assert_eq!(plan.status.success(), success, "{stderr}");
+        assert_eq!(task.is_file(), success, "{stderr}");
+        assert!(!stderr.contains("private-fixture-text") && !stderr.contains("fixture-credential"));
+        let diagnostics: Vec<Value> = stderr
+            .lines()
+            .filter(|line| {
+                line.starts_with("[skill-score] Judge call failed: code=invalid_response")
+            })
+            .map(|line| serde_json::from_str(line.split_once(" diagnostic=").unwrap().1).unwrap())
+            .collect();
+        assert_eq!(diagnostics.len(), calls - usize::from(success), "{stderr}");
+        for diagnostic in diagnostics {
+            assert_eq!(diagnostic["stage"], "audit", "{stderr}");
+            assert_eq!(diagnostic["reason"], expected, "{stderr}");
+            assert_eq!(diagnostic["http_status"], 200, "{stderr}");
+            let received = diagnostic["received_bytes"].as_u64().unwrap();
+            let declared = diagnostic["declared_bytes"].as_u64().unwrap();
+            assert_eq!(
+                received < declared,
+                expected == "body_truncated",
+                "{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn plan_reports_unresolved_repairs_and_preserves_partial_plans() {
+    use PlanReply::{EmptyProbes, Valid};
+    for (replies, failures, recovered) in [
+        (&[EmptyProbes, EmptyProbes, Valid][..], 1, true),
+        (&[EmptyProbes; 4][..], 3, false),
+    ] {
+        let prefix = installation();
+        let skill = prefix.0.join("skill");
+        std::fs::create_dir(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# Example").unwrap();
+        let task = prefix.0.join("task.json");
+        let (plan, calls) = run_fixture_plan(&prefix.0, &skill, &task, replies);
+        let stderr = String::from_utf8(plan.stderr).unwrap();
+        assert!(plan.status.success(), "{stderr}");
+        assert_eq!(calls, replies.len());
+        let events: Vec<Value> = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("[skill-score] Judge output invalid: diagnostic="))
+            .map(|fields| serde_json::from_str(fields).unwrap())
+            .collect();
+        let expected: Vec<_> = (1..=failures)
+            .map(|n| json!({"stage":"probe_repair","reason":"output_contract","attempt":n}))
+            .collect();
+        assert_eq!(events, expected);
+        let task: Value = serde_json::from_slice(&std::fs::read(task).unwrap()).unwrap();
+        let audit = &task["audit"];
+        assert_eq!(
+            audit["probes"].as_array().unwrap().len(),
+            usize::from(recovered)
+        );
+        assert_eq!(audit["planning_errors"]["baseline"].is_null(), recovered);
+    }
+}
+
+#[test]
+fn plan_retries_non_object_judge_outputs_and_reports_each_attempt() {
+    use PlanReply::{NonObject, Valid};
+    for (replies, failures, exit) in [
+        (&[NonObject("[]"), Valid][..], 1, 0),
+        (
+            &[
+                NonObject("false"),
+                NonObject("null"),
+                NonObject(r#""private-fixture-text""#),
+            ][..],
+            3,
+            1,
+        ),
+    ] {
+        let prefix = installation();
+        let skill = prefix.0.join("skill");
+        std::fs::create_dir(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# Example").unwrap();
+        let task = prefix.0.join("task.json");
+        let (plan, count) = run_fixture_plan(&prefix.0, &skill, &task, replies);
+        let stderr = String::from_utf8(plan.stderr).unwrap();
+        assert_eq!(count, replies.len(), "{stderr}");
+        assert_eq!(plan.status.code(), Some(exit), "{stderr}");
+        assert_eq!(task.is_file(), exit == 0);
+        assert!(!stderr.contains("private-fixture-text"));
+        let diagnostics: Vec<Value> = stderr
+            .lines()
+            .filter_map(|line| line.strip_prefix("[skill-score] Judge output invalid: diagnostic="))
+            .map(|payload| serde_json::from_str(payload).unwrap())
+            .collect();
+        let expected: Vec<_> = (1..=failures)
+            .map(|attempt| json!({"stage":"audit","reason":"output_contract","attempt":attempt}))
+            .collect();
+        assert_eq!(diagnostics, expected, "{stderr}");
+    }
 }
 
 #[test]
@@ -380,28 +581,10 @@ fn installed_cli_writes_a_bound_plan_and_reports_the_missing_runtime() {
         "# Example\nDescribe the supplied input.",
     )
     .unwrap();
-    let (address, server) = serve_planning_response();
-    let config = prefix.0.join("model.json");
-    std::fs::write(
-        &config,
-        json!({"schemaVersion":1,"remote":{
-        "provider":"anthropic-compatible","baseUrl":format!("http://{address}"),
-        "defaultModel":"fixture-model","apiKeyEnv":"FIXTURE_MODEL_KEY"}})
-        .to_string(),
-    )
-    .unwrap();
     let output = prefix.0.join("reports/task.json");
-    let plan = command(&prefix.0)
-        .env("AGENT_SEC_MODEL_CONFIG", config)
-        .env("FIXTURE_MODEL_KEY", "fixture-credential")
-        .arg("plan")
-        .arg(&skill)
-        .arg("--output-file")
-        .arg(&output)
-        .output()
-        .unwrap();
+    let (plan, calls) = run_fixture_plan(&prefix.0, &skill, &output, &[PlanReply::Valid]);
     assert!(plan.status.success(), "{plan:?}");
-    server.join().unwrap();
+    assert_eq!(calls, 1);
     assert_eq!(plan.stdout, std::fs::read(&output).unwrap());
     let task: Value = serde_json::from_slice(&plan.stdout).unwrap();
     assert_eq!(
@@ -424,6 +607,127 @@ fn installed_cli_writes_a_bound_plan_and_reports_the_missing_runtime() {
     );
     assert!(evidence.is_dir());
     assert!(run.stdout.is_empty());
+}
+
+fn assert_runtime_failure(
+    prefix: &Path,
+    task: &Path,
+    stage: &str,
+    reason: &str,
+    file: Option<&str>,
+    code: i32,
+) {
+    let run = command(prefix).arg("run").arg(task).output().unwrap();
+    let stderr = String::from_utf8(run.stderr).unwrap();
+    assert_eq!(run.status.code(), Some(code), "{stderr}");
+    let payload = stderr
+        .lines()
+        .last()
+        .unwrap()
+        .strip_prefix("[skill-score] Command failed: diagnostic=")
+        .unwrap();
+    let mut expected = json!({"stage":stage,"reason":reason});
+    if let Some(file) = file {
+        expected["file"] = file.into();
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(payload).unwrap(),
+        expected,
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_identifies_invalid_runtime_artifacts_and_preserves_exit_status() {
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = installation();
+    let prefix = dir.0.join("opt/anolisa");
+    std::fs::create_dir_all(prefix.join("bin")).unwrap();
+    std::fs::hard_link(
+        dir.0.join("bin/agent-sec-cli"),
+        prefix.join("bin/agent-sec-cli"),
+    )
+    .unwrap();
+    let skill = dir.0.join("skill");
+    let task = dir.0.join("task.json");
+    std::fs::create_dir(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "# Example").unwrap();
+    let (plan, _) = run_fixture_plan(&prefix, &skill, &task, &[PlanReply::Valid]);
+    assert!(plan.status.success(), "{plan:?}");
+    let verify = |stage, reason, file, code| {
+        assert_runtime_failure(&prefix, &task, stage, reason, file, code);
+    };
+    let root = prefix.join("lib/anolisa/sec-core-skill-score");
+    let lock = root.join(".lifecycle.lock");
+    let requests = root.join("requests");
+    std::fs::create_dir_all(&requests).unwrap();
+    std::fs::write(&lock, "").unwrap();
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(&requests, std::fs::Permissions::from_mode(0o1700)).unwrap();
+    let manifest_file = Some("runtime-manifest.json");
+    let receipt_file = Some("image-build.json");
+    let manifest_path = root.join("runtime-manifest.json");
+    std::fs::write(&manifest_path, "{").unwrap();
+    verify("runtime.manifest.parse", "invalid_json", manifest_file, 2);
+
+    let manifest = json!({"schema":"agent-sec-skill-score/runtime-v2","component":"sec-core-skill-score",
+        "protocol_version":"agent-sec-skill-score/worker-v1","version":"1","source_commit":"test"});
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let digest = format!("{:x}", Sha256::digest(&manifest_bytes));
+    std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+    let env = root.join("environments").join(&digest);
+    std::fs::create_dir_all(env.join("python/bin")).unwrap();
+    let ready_path = env.join("ready.json");
+    let mut ready = json!({"schema":"agent-sec-skill-score/ready-v1","manifest_sha256":digest,
+        "version":"1","source_commit":"test","protocol_version":manifest["protocol_version"],"images":[]});
+    std::fs::write(&ready_path, ready.to_string()).unwrap();
+    let base = dir
+        .0
+        .join("var/lib/anolisa/component-manifests/sec-core/component.toml");
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    std::fs::write(&base, "").unwrap();
+    verify("runtime.base-manifest.verify", "runtime_error", None, 1);
+    std::fs::write(&base, "version = \"2\"").unwrap();
+    verify("runtime.manifest.verify", "runtime_error", manifest_file, 1);
+    std::fs::write(&base, "version = \"1\"").unwrap();
+    let mut wrong_ready = ready.clone();
+    wrong_ready["source_commit"] = "stale".into();
+    std::fs::write(&ready_path, wrong_ready.to_string()).unwrap();
+    verify(
+        "runtime.ready.verify",
+        "runtime_error",
+        Some("ready.json"),
+        1,
+    );
+
+    let receipt_path = env.join("image-build.json");
+    std::fs::write(&receipt_path, "{").unwrap();
+    std::fs::write(&ready_path, ready.to_string()).unwrap();
+    verify(
+        "runtime.image-receipt.verify",
+        "runtime_error",
+        receipt_file,
+        1,
+    );
+    ready["image_build_sha256"] = format!("{:x}", Sha256::digest(b"{")).into();
+    std::fs::write(&ready_path, ready.to_string()).unwrap();
+    verify(
+        "runtime.image-receipt.verify",
+        "invalid_json",
+        receipt_file,
+        2,
+    );
+
+    let receipt = json!({"schema":"agent-sec-skill-score/image-build-v1","manifest_sha256":digest,
+        "source_commit":"test","version":"1","images":[]})
+    .to_string();
+    ready["image_build_sha256"] = format!("{:x}", Sha256::digest(receipt.as_bytes())).into();
+    std::fs::write(receipt_path, receipt).unwrap();
+    std::fs::write(ready_path, ready.to_string()).unwrap();
+    std::fs::write(env.join("python/bin/python3.12"), "").unwrap();
+    std::fs::write(env.join("worker-entry.py"), "").unwrap();
+    verify("runtime.image.inspect", "runtime_error", receipt_file, 1);
 }
 
 #[test]

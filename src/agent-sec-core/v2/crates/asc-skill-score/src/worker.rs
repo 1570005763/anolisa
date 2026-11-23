@@ -47,59 +47,53 @@ impl Runtime {
         };
         let manifest_path = root.join("runtime-manifest.json");
         let lock_path = root.join(".lifecycle.lock");
-        if !manifest_path.is_file()
-            || !lock_path
-                .try_exists()
-                .map_err(|e| Error::at_path("runtime.lock.inspect", &lock_path, e))?
-        {
-            let missing = if manifest_path.is_file() {
-                &lock_path
-            } else {
-                &manifest_path
-            };
-            return Err(Error::Runtime(format!(
-                "stage=runtime.prepare path={missing:?}: sec-core-skill-score is not prepared; run sudo agent-sec-cli skillsec score install-runtime"
-            )));
+        let hint = "sec-core-skill-score is not prepared; run sudo agent-sec-cli skillsec score install-runtime";
+        let manifest = manifest_path
+            .metadata()
+            .map_err(|e| Error::check("runtime.prepare", &manifest_path, hint, e))?;
+        if !manifest.is_file() {
+            return Err(Error::check(
+                "runtime.prepare",
+                &manifest_path,
+                hint,
+                Error::Runtime("manifest is not a regular file".into()),
+            ));
         }
+        lock_path
+            .metadata()
+            .map_err(|e| Error::check("runtime.prepare", &lock_path, hint, e))?;
         let lease = Lease::acquire(&root)?;
         let bytes = std::fs::read(&manifest_path)
             .map_err(|e| Error::at_path("runtime.manifest.read", &manifest_path, e))?;
+        let manifest_error =
+            |error| Error::check("runtime.manifest.parse", &manifest_path, hint, error);
         if bytes.len() > 1_048_576 {
-            return Err(Error::Runtime("runtime manifest exceeds limit".into()));
+            return Err(manifest_error(Error::Runtime(
+                "runtime manifest exceeds limit".into(),
+            )));
         }
-        let manifest: Value = serde_json::from_slice(&bytes)?;
+        let manifest: Value =
+            serde_json::from_slice(&bytes).map_err(|e| manifest_error(Error::Json(e)))?;
         let digest = format!("{:x}", Sha256::digest(&bytes));
         let environment = root.join("environments").join(&digest);
         let ready_path = environment.join("ready.json");
-        let ready=read_json(&ready_path,1_048_576).map_err(|error|Error::Runtime(format!("stage=runtime.ready.read path={ready_path:?}: {error}; scoring runtime is not ready; use sudo agent-sec-cli skillsec score install-runtime or repair the installed component")))?;
+        let ready = read_json(&ready_path, 1_048_576).map_err(|error| Error::check(
+            "runtime.ready.read", &ready_path, "scoring runtime is not ready; use sudo agent-sec-cli skillsec score install-runtime or repair the installed component", error))?;
         let base_version = base_version(prefix)?;
         if text(&manifest, "schema") != "agent-sec-skill-score/runtime-v2"
             || text(&manifest, "component") != "sec-core-skill-score"
             || text(&manifest, "protocol_version") != PROTOCOL
             || text(&manifest, "version") != base_version
-            || text(&ready, "schema") != "agent-sec-skill-score/ready-v1"
-            || text(&ready, "manifest_sha256") != digest
         {
-            return Err(Error::Runtime("base/optional scoring component mismatch; explicitly install/update matching ASC versions".into()));
-        }
-        for field in [
-            "version",
-            "source_commit",
-            "protocol_version",
-            "worker_version",
-            "harbor_version",
-        ] {
-            if ready[field] != manifest[field] {
-                return Err(Error::Runtime(format!(
-                    "scoring ready state mismatch: {field}; repair sec-core-skill-score"
-                )));
-            }
-        }
-        if ready["python_version"] != manifest["python"]["version"] {
-            return Err(Error::Runtime(
-                "scoring interpreter version mismatch".into(),
+            return Err(Error::check(
+                "runtime.manifest.verify",
+                &manifest_path,
+                "install matching ASC versions",
+                Error::Runtime("base/optional scoring component mismatch".into()),
             ));
         }
+        verify_ready(&manifest, &ready, &digest)
+            .map_err(|e| Error::check("runtime.ready.verify", &ready_path, hint, e))?;
         let mut receipt_bytes = Vec::new();
         let receipt_path = environment.join("image-build.json");
         File::open(&receipt_path)
@@ -107,20 +101,30 @@ impl Runtime {
             .take(1_048_577)
             .read_to_end(&mut receipt_bytes)
             .map_err(|e| Error::at_path("runtime.image-receipt.read", &receipt_path, e))?;
-        let receipt = verify_image_build(&manifest, &ready, &digest, &receipt_bytes)?;
+        let receipt = verify_image_build(&manifest, &ready, &digest, &receipt_bytes)
+            .map_err(|e| Error::check("runtime.image-receipt.verify", &receipt_path, hint, e))?;
         let python = environment.join("python/bin/python3.12");
         let entry = environment.join("worker-entry.py");
-        if !python.is_file() || !entry.is_file() {
-            let missing = if python.is_file() { &entry } else { &python };
-            return Err(Error::Runtime(format!(
-                "stage=runtime.worker.inspect path={missing:?}: installed scoring worker is missing; repair sec-core-skill-score"
-            )));
+        for path in [&python, &entry] {
+            let hint = "installed scoring worker is missing; repair sec-core-skill-score";
+            let meta = path
+                .metadata()
+                .map_err(|e| Error::check("runtime.worker.inspect", path, hint, e))?;
+            if !meta.is_file() {
+                return Err(Error::check(
+                    "runtime.worker.inspect",
+                    path,
+                    hint,
+                    Error::Runtime("not a regular file".into()),
+                ));
+            }
         }
         require_system_docker()?;
         let deadline = Instant::now() + Duration::from_secs(45);
         let image_ids = resolve_image_ids(&receipt, |id| {
             docker_until(&["image".into(), "inspect".into(), id.into()], deadline)
-        })?;
+        })
+        .map_err(|e| Error::check("runtime.image.inspect", &receipt_path, hint, e))?;
         Ok(Self {
             lease,
             python,
@@ -273,6 +277,35 @@ impl Runtime {
     }
 }
 
+fn verify_ready(manifest: &Value, ready: &Value, digest: &str) -> Result<()> {
+    if text(ready, "schema") != "agent-sec-skill-score/ready-v1"
+        || text(ready, "manifest_sha256") != digest
+    {
+        return Err(Error::Runtime(
+            "scoring ready state is incompatible with the installed manifest".into(),
+        ));
+    }
+    for field in [
+        "version",
+        "source_commit",
+        "protocol_version",
+        "worker_version",
+        "harbor_version",
+    ] {
+        if ready[field] != manifest[field] {
+            return Err(Error::Runtime(format!(
+                "scoring ready state mismatch: {field}; repair sec-core-skill-score"
+            )));
+        }
+    }
+    if ready["python_version"] != manifest["python"]["version"] {
+        return Err(Error::Runtime(
+            "scoring interpreter version mismatch".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn base_version(prefix: &Path) -> Result<String> {
     if prefix == Path::new("/usr") {
         return Ok(env!("CARGO_PKG_VERSION").to_owned());
@@ -287,7 +320,14 @@ fn base_version(prefix: &Path) -> Result<String> {
                 .and_then(|s| s.trim_start().strip_prefix('='))
                 .map(|s| s.trim().trim_matches('"').to_owned())
         })
-        .ok_or_else(|| Error::Runtime("installed base component version is missing".into()))
+        .ok_or_else(|| {
+            Error::check(
+                "runtime.base-manifest.verify",
+                &path,
+                "repair the installed base component",
+                Error::Runtime("installed base component version is missing".into()),
+            )
+        })
 }
 
 fn require_system_docker() -> Result<()> {
